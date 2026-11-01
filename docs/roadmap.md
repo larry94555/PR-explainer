@@ -33,7 +33,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | PR | Title | Size | Status |
 |---|---|---|---|
 | 1.1 | Project scaffold and test runner | Small | ✅ Done ([#2](https://github.com/larry94555/PR-explainer/pull/2)) |
-| 1.2 | Manifest V3 and empty extension parts | Small | 🚧 In review |
+| 1.2 | Manifest V3 and empty extension parts | Small | 🚧 In review ([#4](https://github.com/larry94555/PR-explainer/pull/4)) |
 | 1.3 | PR page detection and "active" badge | Small | Not started |
 | 1.4 | Message passing between content script and service worker | Small | Not started |
 | 2.1 | Settings storage | Small | Not started |
@@ -92,7 +92,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   4. Run `npm run build` and confirm a `dist/` folder is created.
 
 ### PR 1.2: Manifest V3 and empty extension parts (Small) 🚧 In review
-- **Status:** In review.
+- **Status:** In review in [#4](https://github.com/larry94555/PR-explainer/pull/4).
 - **Why it's needed:** Chrome needs a manifest and entry points before it will load the extension.
 - **Problem it solves:** Adds `manifest.json` with a service worker, a content script that matches `https://github.com/*/*/pull/*`, an empty options page, and an icon. Permissions are limited to `storage` and host access for `github.com`.
 - **Unit tests added:** `manifest.test.ts` checks that the manifest is valid MV3, that the content script only matches PR URLs, and that no extra permissions are requested.
