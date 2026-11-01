@@ -1,10 +1,19 @@
 // Service worker. Answers requests from the content script (see
 // src/messaging/). All calls to the local LLM run here (see src/llm/).
+import { createExplainHandler } from './explain/explainHandler';
+import { SAMPLE_CONTEXT } from './explain/sampleContext';
 import { createLlmClient } from './llm/createClient';
+import { detectPlatform } from './llm/describeLlmError';
 import { MessageRouter } from './messaging/router';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from './settings';
 
 console.info('[PR Explainer] service worker started');
+
+const explain = createExplainHandler({
+  getSettings,
+  createClient: createLlmClient,
+  platform: detectPlatform(navigator.userAgent),
+});
 
 // Listeners must be added on the first run of the worker, before it goes idle,
 // so Chrome can wake it for later messages.
@@ -13,6 +22,7 @@ new MessageRouter()
     console.info('[PR Explainer] ping received');
     return { receivedAt: Date.now() };
   })
+  .on('explain', explain)
   .listen();
 
 // Dev builds (`npm run dev`) expose the settings module and the LLM client in
@@ -33,6 +43,9 @@ if (import.meta.env.MODE === 'development') {
           maxResponseTokens: settings.maxResponseTokens,
         });
       },
+      // Runs the same code as an `explain` request from a GitHub page.
+      explain: (context: string) => explain({ context }),
+      explainSample: () => explain({ context: SAMPLE_CONTEXT }),
     },
   });
   console.info(
