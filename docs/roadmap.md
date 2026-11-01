@@ -5,6 +5,7 @@ This roadmap breaks the project into **milestones** and **PRs**.
 - A **milestone** ends with something you can demo in an interesting way.
 - A **PR** is a small change. Every PR is either **Small** (under 10 minutes to review) or **Medium** (under 20 minutes to review). If a PR grows past Medium while it is being written, split it before opening it.
 - Every PR lists why it is needed, the problem it solves, the unit tests it adds, and step-by-step instructions for testing it.
+- Every PR that changes something you can see (the popup, a badge, the toolbar icon, the settings page) includes screenshots of it in the PR description, saved under `docs/screenshots/pr-<number>/`, so a reviewer can see what to look for and where to find it.
 
 ## Technical choices
 
@@ -285,9 +286,9 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   1. Run `npm test` and confirm the `toggle` tests pass (and all the others still do).
   2. Make sure Ollama is running (`ollama list` works) and a model is chosen on the settings page.
   3. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)). The manifest changed, so use the reload icon on the extension card, not just a page refresh.
-  4. Click the puzzle-piece **Extensions** icon in Chrome's toolbar and click the pin next to **PR Explainer** so its icon stays in the toolbar. Confirm the icon shows a green **ON** badge, and hovering it says "PR Explainer is on. Click to turn it off."
+  4. Chrome hides new extension icons, so pin it first. Click the puzzle-piece **Extensions** icon at the right end of the address bar, then the **⋮** next to **PR Explainer**, then **Pin to toolbar** (older Chrome versions show a pin icon instead of **⋮**). The PR Explainer icon now sits just left of the puzzle piece. Confirm it shows a green **ON** badge, and hovering it says "PR Explainer is on. Click to turn it off." Screenshots: [the Extensions menu](screenshots/pr-3.6/1-extensions-menu.png), [Pin to toolbar](screenshots/pr-3.6/2-pin-to-toolbar.png), [the pinned icon showing ON](screenshots/pr-3.6/3-icon-on.png).
   5. Open the **Files changed** tab of a PR in **Unified** view, for example `https://github.com/larry94555/PR-explainer/pull/15/files`, and refresh the page. Confirm the blue "PR Explainer active" badge in the bottom right corner, and click a line to confirm a popup still opens.
-  6. Click a line, and while the popup is still loading, click the toolbar icon. Confirm the badge on the icon changes to a grey **OFF**, the popup closes, and the page badge changes to a grey "PR Explainer off" without refreshing the page.
+  6. Click a line, and while the popup is still loading, click the toolbar icon. Confirm the badge on the icon changes to a grey **OFF** ([screenshot](screenshots/pr-3.6/4-icon-off.png)), the popup closes, and the page badge changes to a grey "PR Explainer off" without refreshing the page ([on and off](screenshots/pr-3.6/5-page-badge-on-off.png)).
   7. Click a few diff lines and confirm no popup opens. Drag across some code and confirm it selects and copies (`Ctrl+C`) normally.
   8. Open a second PR in another tab and confirm its page badge also says "PR Explainer off" and clicks open no popup there either.
   9. Close Chrome completely and open it again. Confirm the icon still shows **OFF** and a PR page still shows "PR Explainer off".
