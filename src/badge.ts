@@ -6,6 +6,7 @@ import { parsePrUrl, type PrRef } from './prUrl';
 
 export const BADGE_ID = 'pr-explainer-badge';
 export const BADGE_TEXT = 'PR Explainer active';
+export const BADGE_TEXT_OFF = 'PR Explainer off';
 
 const STYLE = `
   :host { all: initial; }
@@ -21,6 +22,9 @@ const STYLE = `
     font: 600 12px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
     user-select: none;
+  }
+  .badge.off {
+    background: #6e7781;
   }
 `;
 
@@ -46,6 +50,16 @@ export function showBadge(doc: Document, pr: PrRef): HTMLElement {
   host.dataset.pr = `${pr.owner}/${pr.repo}#${pr.number} (${pr.tab})`;
   updateTooltip(host);
   return host;
+}
+
+// Shows whether click-to-explain is on: "PR Explainer active" in blue, or
+// "PR Explainer off" in grey after the toolbar button turned it off.
+// Does nothing if the badge is not on the page.
+export function setBadgeEnabled(doc: Document, enabled: boolean): void {
+  const label = findBadge(doc)?.shadowRoot?.querySelector<HTMLElement>('.badge');
+  if (!label) return;
+  label.textContent = enabled ? BADGE_TEXT : BADGE_TEXT_OFF;
+  label.classList.toggle('off', !enabled);
 }
 
 // Sets the second tooltip line, for example "Service worker: connected".

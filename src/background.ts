@@ -6,6 +6,7 @@ import { createLlmClient } from './llm/createClient';
 import { detectPlatform } from './llm/describeLlmError';
 import { MessageRouter } from './messaging/router';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from './settings';
+import { setupToolbarToggle } from './toolbarToggle';
 
 console.info('[PR Explainer] service worker started');
 
@@ -24,6 +25,12 @@ new MessageRouter()
   })
   .on('explain', explain)
   .listen();
+
+// The toolbar button turns click-to-explain on and off for every tab.
+setupToolbarToggle({ action: chrome.action, storage: chrome.storage.local });
+// Chrome clears the icon badge when the browser restarts. Having a startup
+// listener makes Chrome start this worker then, which redraws the badge above.
+chrome.runtime.onStartup.addListener(() => {});
 
 // Dev builds (`npm run dev`) expose the settings module and the LLM client in
 // the service worker console for manual testing. Production builds leave this

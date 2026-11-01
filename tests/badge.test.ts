@@ -1,8 +1,10 @@
 import {
   BADGE_ID,
   BADGE_TEXT,
+  BADGE_TEXT_OFF,
   findBadge,
   removeBadge,
+  setBadgeEnabled,
   setBadgeStatus,
   showBadge,
   syncBadge,
@@ -78,6 +80,28 @@ describe('badge status', () => {
 
   it('does nothing when there is no badge', () => {
     setBadgeStatus(document, 'Service worker: connected');
+    expect(findBadge(document)).toBeNull();
+  });
+});
+
+describe('badge on/off', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('says "PR Explainer off" in grey when turned off, and "active" again when turned on', () => {
+    syncBadge(document, PR_URL);
+    setBadgeEnabled(document, false);
+    expect(badgeLabel()?.textContent).toBe(BADGE_TEXT_OFF);
+    expect(badgeLabel()?.classList.contains('off')).toBe(true);
+
+    setBadgeEnabled(document, true);
+    expect(badgeLabel()?.textContent).toBe(BADGE_TEXT);
+    expect(badgeLabel()?.classList.contains('off')).toBe(false);
+  });
+
+  it('does nothing when there is no badge', () => {
+    setBadgeEnabled(document, false);
     expect(findBadge(document)).toBeNull();
   });
 });

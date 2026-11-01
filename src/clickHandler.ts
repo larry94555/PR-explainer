@@ -5,7 +5,8 @@
 // and fills the popup in with the result. Clicks on GitHub's own controls
 // (the comment "+" button, links, menus, form fields), clicks that finish a
 // text selection, and modified clicks (Shift, Ctrl, Alt, Cmd) are left alone
-// so GitHub keeps working as before.
+// so GitHub keeps working as before. Nothing happens at all while the toolbar
+// button has click-to-explain turned off.
 //
 // The parts that talk to Chrome and draw the popup are passed in, so the
 // tests can use fakes.
@@ -18,6 +19,11 @@ import type { Popup } from './popup/popup';
 export interface ClickHandlerDeps {
   /** Sends the formatted context to the service worker. */
   explain(context: string): Promise<ExplainResult>;
+  /**
+   * False while the user has turned click-to-explain off with the toolbar
+   * button (PR 3.6). Clicks are then left alone. Leaving it out means on.
+   */
+  isEnabled?(): boolean;
   /** Opens a popup next to the clicked row, closing any other popup. */
   openPopup(anchor: Element): Popup;
   /** Called with each context block sent to the model (dev logging). */
@@ -89,6 +95,7 @@ export function describeRequestError(error: unknown): { message: string; fix: st
 
 export function createClickHandler(deps: ClickHandlerDeps): (event: MouseEvent) => void {
   return (event) => {
+    if (deps.isEnabled?.() === false) return;
     if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) {
       return;
     }

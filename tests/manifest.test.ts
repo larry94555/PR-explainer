@@ -94,6 +94,15 @@ describe('manifest.json', () => {
     }
   });
 
+  it('has a toolbar button with no popup, so a click turns click-to-explain on or off', () => {
+    expect(manifest.action).toEqual({
+      default_title: 'PR Explainer',
+      default_icon: manifest.icons,
+    });
+    // chrome.action.onClicked only fires when the button has no popup page.
+    expect(manifest.action).not.toHaveProperty('default_popup');
+  });
+
   it('opens the options page in a tab', () => {
     expect(manifest.options_ui).toEqual({ page: 'options.html', open_in_tab: true });
   });
