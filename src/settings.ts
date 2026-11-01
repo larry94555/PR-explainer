@@ -1,7 +1,14 @@
 // User settings: where the local LLM runs, which model to use, and how it
-// should answer. Stored in chrome.storage.sync under one key. Only values the
-// user has saved are stored; defaults live here in code, so changing a default
-// in a later version reaches users who never touched that setting.
+// should answer. Stored in chrome.storage.sync with one key per field (see
+// storageKey). Only values the user has saved are stored; defaults live here
+// in code, so changing a default in a later version reaches users who never
+// touched that setting.
+//
+// One key per field is what makes concurrent saves safe: a save writes only
+// the keys it changes, and chrome.storage applies each set atomically, so two
+// contexts (say the options page and the service worker) saving different
+// fields at the same time cannot overwrite each other. Validation is per
+// field, so a save never needs to rewrite fields it did not change.
 //
 // The service worker and (from PR 2.3) the options page read settings through
 // this module. The content script never imports it.
@@ -26,7 +33,10 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   maxResponseTokens: 1024,
 });
 
-export const SETTINGS_KEY = 'settings';
+/** The chrome.storage key that holds one field, for example "settings.model". */
+export function storageKey(field: SettingsField): string {
+  return `settings.${field}`;
+}
 
 export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
 export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
@@ -49,7 +59,7 @@ export class SettingsValidationError extends Error {
 // The part of chrome.storage.StorageArea this module uses. Passing it in lets
 // the tests use an in-memory fake.
 export interface StorageAreaLike {
-  get(key: string): Promise<Record<string, unknown>>;
+  get(keys: string[]): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
 }
 
@@ -131,17 +141,16 @@ function normalize(settings: Settings): Settings {
   return result;
 }
 
-// Reads what is stored, keeping only known fields with valid values.
+// Reads what is stored, keeping only fields with valid values.
 async function readStored(storage: StorageAreaLike): Promise<Partial<Settings>> {
-  const raw = (await storage.get(SETTINGS_KEY))[SETTINGS_KEY];
+  const raw = await storage.get(FIELDS.map(storageKey));
   const stored: Partial<Settings> = {};
-  if (typeof raw !== 'object' || raw === null) return stored;
   for (const field of FIELDS) {
-    if (!Object.hasOwn(raw, field)) continue;
-    const value = (raw as Record<string, unknown>)[field];
+    const key = storageKey(field);
+    if (!Object.hasOwn(raw, key)) continue;
     // A bad stored value (hand-edited, or from an older version) falls back to
     // the default instead of breaking the extension.
-    if (checkField(field, value) === null) Object.assign(stored, { [field]: value });
+    if (checkField(field, raw[key]) === null) Object.assign(stored, { [field]: raw[key] });
   }
   return stored;
 }
@@ -152,32 +161,31 @@ export async function getSettings(storage: StorageAreaLike = defaultStorage()): 
 }
 
 /**
- * Merges `update` into the saved settings, validates the result, and stores
- * it. Fields left out (or set to undefined) keep their current value. Throws
- * SettingsValidationError, and stores nothing, if any value is invalid.
+ * Validates the fields in `update` and stores them, leaving every other field
+ * as it is. Fields left out (or set to undefined) keep their current value.
+ * Throws SettingsValidationError, and stores nothing, if any value is invalid.
  * Returns the full settings after the save.
  */
 export async function saveSettings(
   update: Partial<Settings>,
   storage: StorageAreaLike = defaultStorage(),
 ): Promise<Settings> {
-  const stored = await readStored(storage);
   const changes: Partial<Settings> = {};
   for (const field of FIELDS) {
     if (Object.hasOwn(update, field) && update[field] !== undefined) {
       Object.assign(changes, { [field]: update[field] });
     }
   }
-  const merged = normalize({ ...DEFAULT_SETTINGS, ...stored, ...changes } as Settings);
-  const issues = validateSettings(merged);
+  // Fill the rest with defaults only so validateSettings sees a full object;
+  // those fields are not checked against storage and are not written.
+  const normalized = normalize({ ...DEFAULT_SETTINGS, ...changes } as Settings);
+  const issues = validateSettings(normalized).filter((i) => Object.hasOwn(changes, i.field));
   if (issues.length > 0) throw new SettingsValidationError(issues);
 
-  const toStore: Partial<Settings> = {};
-  for (const field of FIELDS) {
-    if (Object.hasOwn(stored, field) || Object.hasOwn(changes, field)) {
-      Object.assign(toStore, { [field]: merged[field] });
-    }
+  const items: Record<string, unknown> = {};
+  for (const field of Object.keys(changes) as SettingsField[]) {
+    items[storageKey(field)] = normalized[field];
   }
-  await storage.set({ [SETTINGS_KEY]: toStore });
-  return merged;
+  if (Object.keys(items).length > 0) await storage.set(items);
+  return getSettings(storage);
 }

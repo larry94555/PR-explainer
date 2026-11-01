@@ -2,7 +2,7 @@ import {
   DEFAULT_SETTINGS,
   getSettings,
   saveSettings,
-  SETTINGS_KEY,
+  storageKey,
   SettingsValidationError,
   validateSettings,
   type Settings,
@@ -15,7 +15,9 @@ function fakeStorage(initial: Record<string, unknown> = {}) {
   const data = structuredClone(initial);
   const storage: StorageAreaLike & { data: Record<string, unknown> } = {
     data,
-    get: vi.fn(async (key: string) => (key in data ? { [key]: structuredClone(data[key]) } : {})),
+    get: vi.fn(async (keys: string[]) =>
+      Object.fromEntries(keys.filter((k) => k in data).map((k) => [k, structuredClone(data[k])])),
+    ),
     set: vi.fn(async (items: Record<string, unknown>) => {
       Object.assign(data, structuredClone(items));
     }),
@@ -76,10 +78,11 @@ describe('settings', () => {
       await expect(getSettings(storage)).resolves.toEqual(update);
     });
 
-    it('stores only the fields the user saved, under one key', async () => {
+    it('stores only the fields the user saved, one key per field', async () => {
       const storage = fakeStorage();
       await saveSettings({ model: 'llama3.1' }, storage);
-      expect(storage.data).toEqual({ [SETTINGS_KEY]: { model: 'llama3.1' } });
+      expect(storage.data).toEqual({ 'settings.model': 'llama3.1' });
+      expect(storage.set).toHaveBeenCalledWith({ 'settings.model': 'llama3.1' });
     });
 
     it('merges partial updates with what is already saved', async () => {
@@ -88,7 +91,27 @@ describe('settings', () => {
       const result = await saveSettings({ temperature: 0.5 }, storage);
 
       expect(result).toEqual({ ...DEFAULT_SETTINGS, model: 'llama3.1', temperature: 0.5 });
-      expect(storage.data[SETTINGS_KEY]).toEqual({ model: 'llama3.1', temperature: 0.5 });
+      expect(storage.data).toEqual({ 'settings.model': 'llama3.1', 'settings.temperature': 0.5 });
+    });
+
+    it('keeps both updates when two saves of different fields overlap', async () => {
+      // Hold every read until both saves have started, the way two extension
+      // contexts can interleave. Neither save may undo the other.
+      const storage = fakeStorage();
+      const realGet = storage.get;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      storage.get = vi.fn(async (keys: string[]) => {
+        await gate;
+        return realGet(keys);
+      });
+
+      const a = saveSettings({ model: 'A' }, storage);
+      const b = saveSettings({ temperature: 1 }, storage);
+      release();
+      await Promise.all([a, b]);
+
+      await expect(getSettings(storage)).resolves.toMatchObject({ model: 'A', temperature: 1 });
     });
 
     it('treats undefined fields as "keep the current value"', async () => {
@@ -104,7 +127,7 @@ describe('settings', () => {
     it('ignores unknown fields', async () => {
       const storage = fakeStorage();
       await saveSettings({ model: 'm', apiKey: 'x' } as Partial<Settings>, storage);
-      expect(storage.data[SETTINGS_KEY]).toEqual({ model: 'm' });
+      expect(storage.data).toEqual({ 'settings.model': 'm' });
     });
 
     it('trims the model name and drops a trailing slash from the URL', async () => {
@@ -171,17 +194,15 @@ describe('settings', () => {
       const storage = fakeStorage();
       await saveSettings({ model: 'llama3.1' }, storage);
       await expect(saveSettings({ model: 'other', temperature: 9 }, storage)).rejects.toThrow();
-      expect(storage.data[SETTINGS_KEY]).toEqual({ model: 'llama3.1' });
+      expect(storage.data).toEqual({ 'settings.model': 'llama3.1' });
     });
 
     it('falls back to the default for bad or unknown stored values', async () => {
       const storage = fakeStorage({
-        [SETTINGS_KEY]: {
-          llmUrl: 'http://evil.example.com',
-          model: 'llama3.1',
-          temperature: 'hot',
-          extra: true,
-        },
+        'settings.llmUrl': 'http://evil.example.com',
+        'settings.model': 'llama3.1',
+        'settings.temperature': 'hot',
+        'settings.extra': true,
       });
       await expect(getSettings(storage)).resolves.toEqual({
         ...DEFAULT_SETTINGS,
@@ -189,9 +210,10 @@ describe('settings', () => {
       });
     });
 
-    it('ignores a stored value that is not an object', async () => {
-      const storage = fakeStorage({ [SETTINGS_KEY]: 'garbage' });
+    it('ignores storage keys that are not settings', async () => {
+      const storage = fakeStorage({ model: 'not ours', settings: { model: 'old' } });
       await expect(getSettings(storage)).resolves.toEqual(DEFAULT_SETTINGS);
+      expect(storageKey('model')).toBe('settings.model');
     });
   });
 });
