@@ -20,6 +20,8 @@ This roadmap breaks the project into **milestones** and **PRs**.
 All calls to the LLM go through the extension's **service worker**, not the content script. That keeps the LLM address out of the GitHub page and avoids most CORS problems.
 
 ### Setup used by every "How to test" section
+See [InstallingExtension.md](InstallingExtension.md) for a step-by-step version of steps 1, 3 and 4, including how to check out a PR's branch and how to confirm the extension loaded.
+
 1. Install Node 22.22.2+ (or 24.15+) and run `npm install`.
 2. Install Ollama and pull a model, for example `ollama pull qwen2.5-coder:7b`.
 3. Run `npm run build` (or `npm run dev` for watch mode).
@@ -108,7 +110,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 - **Problem it solves:** Adds `parsePrUrl(url)`, which returns `{owner, repo, number, tab}` or `null`, and shows a small badge (in a Shadow DOM) in the bottom right corner on PR pages. The badge is re-checked after GitHub's in-page (Turbo) navigations, so it disappears when you leave the PR without a reload.
 - **Unit tests added:** `parsePrUrl.test.ts` covers the conversation, commits, checks, and files tabs, URLs with query strings and hashes, issue URLs (returns `null`), and non-GitHub URLs (returns `null`). `badge.test.ts` checks that the badge is added once, lives in a shadow root, and is removed on non-PR pages.
 - **How to test:**
-  1. Build and reload the extension.
+  1. Build and reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
   2. Open any public PR, for example `https://github.com/microsoft/vscode/pulls`, and pick one.
   3. Confirm the "PR Explainer active" badge appears.
   4. Open an issue page in the same repo and confirm no badge appears.
