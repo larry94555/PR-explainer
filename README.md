@@ -1,6 +1,6 @@
 # PR-explainer
 Chrome extension that explains code in GitHub pull requests using a local LLM.
-See [features.md](features.md) and [roadmap.md](roadmap.md).
+See [docs/features.md](docs/features.md) and [docs/roadmap.md](docs/roadmap.md).
 
 ## Development
 
