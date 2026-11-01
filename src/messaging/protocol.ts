@@ -8,10 +8,9 @@
 import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
 
 // Each request type maps to the payload it takes and the result it returns.
-// Later PRs add entries here.
+// Later PRs add entries here. Explanations stream over a port instead (below).
 export interface RequestMap {
   ping: { payload: undefined; result: { receivedAt: number } };
-  explain: { payload: ExplainPayload; result: ExplainResult };
 }
 
 export type RequestType = keyof RequestMap;
@@ -51,4 +50,39 @@ export interface ExtensionRuntime {
   id: string;
   sendMessage(message: unknown): Promise<unknown>;
   onMessage: { addListener(listener: MessageListener): void };
+}
+
+// Explanations stream over a long-lived port (chrome.runtime.connect), so the
+// reply can be shown as it arrives and stopped midway. The content script
+// opens the port and sends one `start` message. The service worker answers
+// with any number of `chunk` messages, then one `result` (or `error` if the
+// handler threw). Disconnecting the port, from the Stop button or by closing
+// the popup, aborts the request. Each side keeps its own copy of the port name
+// (they cannot share runtime code); this type makes TypeScript check they match.
+export type ExplainPortName = 'pr-explainer:explain';
+
+export type ExplainPortRequest = { type: 'start' } & ExplainPayload;
+
+export type ExplainPortMessage =
+  | { type: 'chunk'; text: string }
+  | { type: 'result'; result: ExplainResult }
+  | { type: 'error'; error: SerializedError };
+
+// The parts of a chrome.runtime.Port this layer uses.
+export interface PortLike {
+  name: string;
+  sender?: MessageSenderLike;
+  postMessage(message: unknown): void;
+  disconnect(): void;
+  onMessage: { addListener(listener: (message: unknown) => void): void };
+  onDisconnect: { addListener(listener: () => void): void };
+}
+
+// The parts of chrome.runtime the port layer uses. `lastError` says why a
+// port closed, when Chrome closed it.
+export interface PortRuntime {
+  id: string;
+  connect(info: { name: string }): PortLike;
+  onConnect: { addListener(listener: (port: PortLike) => void): void };
+  lastError?: { message?: string };
 }

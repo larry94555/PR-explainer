@@ -2,12 +2,16 @@
 // Shadow DOM root so GitHub's CSS cannot restyle it and its CSS cannot leak
 // into GitHub (same approach as the badge in src/badge.ts).
 //
-// The popup has three states: loading (spinner), done (the three sections),
-// and failed (a message and a fix from describeLlmError). It closes with the
-// close button, the Esc key, or a click anywhere outside it.
+// The popup's states: loading (spinner), streaming (the reply so far, as
+// markdown, while the model writes it), done (the three sections), failed (a
+// message and a fix from describeLlmError), and stopped (the Stop button was
+// pressed; the text so far stays). It closes with the close button, the Esc
+// key, or a click anywhere outside it. Once stopped or closed it ignores
+// further updates, so a late answer changes nothing.
 //
 // The header shows how long the request has taken: a live timer while
-// loading, then "Answered in …" or "Failed after …", so the local model's
+// loading and streaming, then "Answered in …", "Failed after …", or
+// "Stopped after …", so the local model's
 // latency is always visible. Only one popup
 // is open at a time: opening a new one closes the old one.
 //
@@ -36,6 +40,8 @@ export interface AnchorRect {
 export interface PopupOptions {
   /** Called once when the popup closes, however it was closed. */
   onClose?: () => void;
+  /** Called when the Stop button is pressed, to cancel the request. */
+  onStop?: () => void;
   /** Clock in milliseconds, for the elapsed time. Tests pass a fake one. */
   now?: () => number;
 }
@@ -51,7 +57,10 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, '0')} s`;
 }
 
-export type PopupState = 'loading' | 'done' | 'failed' | 'closed';
+export type PopupState = 'loading' | 'streaming' | 'done' | 'failed' | 'stopped' | 'closed';
+
+/** Shown in place of the reply when Stop is pressed before any text arrived. */
+export const STOPPED_EMPTY = 'Stopped before the model wrote anything.';
 
 export interface Popup {
   readonly host: HTMLElement;
@@ -59,6 +68,8 @@ export interface Popup {
   /** Time since the popup opened, frozen when the answer or error arrives. */
   readonly elapsedMs: number;
   showLoading(model?: string): void;
+  /** Shows the reply so far (markdown) while the model is still writing. */
+  showPartial(markdown: string): void;
   showExplanation(explanation: Explanation, model?: string): void;
   showError(message: string, fix: string): void;
   close(): void;
@@ -139,7 +150,13 @@ export function openPopup(
   closeButton.type = 'button';
   closeButton.setAttribute('aria-label', 'Close');
   closeButton.textContent = '×';
-  header.append(title, modelLabel, elapsedLabel, closeButton);
+  // Shown only while loading or streaming (see popupStyle.ts).
+  const stopButton = doc.createElement('button');
+  stopButton.className = 'stop';
+  stopButton.type = 'button';
+  stopButton.textContent = 'Stop';
+  stopButton.title = 'Stop the model';
+  header.append(title, modelLabel, elapsedLabel, stopButton, closeButton);
 
   const body = doc.createElement('div');
   body.className = 'body';
@@ -211,6 +228,24 @@ export function openPopup(
   doc.addEventListener('keydown', onKeyDown, true);
   doc.addEventListener('mousedown', onMouseDown, true);
   closeButton.addEventListener('click', () => popup.close());
+  stopButton.addEventListener('click', () => {
+    if (state !== 'loading' && state !== 'streaming') return;
+    stopTicking('Stopped after ');
+    if (state === 'loading') {
+      const note = doc.createElement('p');
+      note.className = 'stopped-note';
+      note.textContent = STOPPED_EMPTY;
+      setBody('stopped', note);
+    } else {
+      state = 'stopped';
+      panel.dataset.state = 'stopped';
+    }
+    options.onStop?.();
+  });
+
+  // Keeps the newest text in view while it streams in, unless the user has
+  // scrolled up to read something.
+  const nearBottom = () => panel.scrollHeight - panel.scrollTop - panel.clientHeight < 24;
 
   const popup: Popup = {
     host,
@@ -234,8 +269,17 @@ export function openPopup(
       loading.append(spinner, text);
       setBody('loading', loading);
     },
+    showPartial(markdown) {
+      if (state !== 'loading' && state !== 'streaming') return;
+      const follow = state === 'loading' || nearBottom();
+      const partial = doc.createElement('div');
+      partial.className = 'partial';
+      partial.append(renderMarkdown(doc, markdown));
+      setBody('streaming', partial);
+      if (follow) panel.scrollTop = panel.scrollHeight;
+    },
     showExplanation(explanation, model) {
-      if (state === 'closed') return;
+      if (state === 'closed' || state === 'stopped') return;
       setModel(model);
       stopTicking('Answered in ');
       const sections = (Object.keys(SECTION_TITLES) as SectionKey[]).map((key) => {
@@ -252,7 +296,7 @@ export function openPopup(
       setBody('done', ...sections);
     },
     showError(message, fix) {
-      if (state === 'closed') return;
+      if (state === 'closed' || state === 'stopped') return;
       stopTicking('Failed after ');
       const error = doc.createElement('div');
       error.className = 'error';

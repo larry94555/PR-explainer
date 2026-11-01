@@ -34,11 +34,17 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-/** A popup that records what it was asked to show. */
-function fakePopup(anchor: Element) {
+type PopupHooks = Parameters<ClickHandlerDeps['openPopup']>[1];
+
+/**
+ * A popup that records what it was asked to show. Like the real one, it
+ * ignores updates once stopped or closed. `pressStop` acts like its Stop button.
+ */
+function fakePopup(anchor: Element, hooks: PopupHooks) {
   const calls: string[] = [];
   let state: Popup['state'] = 'loading';
-  const popup: Popup & { anchor: Element; calls: string[] } = {
+  const finished = () => state === 'closed' || state === 'stopped';
+  const popup: Popup & { anchor: Element; calls: string[]; pressStop(): void } = {
     anchor,
     calls,
     host: document.createElement('div'),
@@ -47,39 +53,53 @@ function fakePopup(anchor: Element) {
       return state;
     },
     showLoading: () => calls.push('loading'),
+    showPartial: (markdown) => {
+      if (state !== 'loading' && state !== 'streaming') return;
+      state = 'streaming';
+      calls.push(`partial:${markdown}`);
+    },
     showExplanation: (explanation, model) => {
-      if (state === 'closed') return;
+      if (finished()) return;
       state = 'done';
       calls.push(`done:${model}:${explanation.what}`);
     },
     showError: (message, fix) => {
-      if (state === 'closed') return;
+      if (finished()) return;
       state = 'failed';
       calls.push(`failed:${message}|${fix}`);
     },
     close: () => {
+      if (state === 'closed') return;
       state = 'closed';
+      hooks.onClose();
+    },
+    pressStop: () => {
+      state = 'stopped';
+      hooks.onStop();
     },
   };
   return popup;
 }
 
-function setup(
-  answer: () => Promise<ExplainResult> = () => Promise.resolve(DONE),
-  isEnabled?: () => boolean,
-) {
+/** What a test's `explain` gets: the chunk callback, to stream text into the popup. */
+type Answer = (onChunk: (text: string) => void) => Promise<ExplainResult>;
+
+function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => boolean) {
   const contexts: string[] = [];
   const timings: ExplainTiming[] = [];
   const popups: ReturnType<typeof fakePopup>[] = [];
+  const stops: Array<ReturnType<typeof vi.fn>> = [];
   const deps: ClickHandlerDeps = {
     isEnabled,
-    explain: vi.fn((context: string) => {
+    explain: vi.fn((context: string, onChunk: (text: string) => void) => {
       contexts.push(context);
-      return answer();
+      const stop = vi.fn();
+      stops.push(stop);
+      return { result: answer(onChunk), stop };
     }),
-    openPopup: (anchor) => {
+    openPopup: (anchor, hooks) => {
       popups.at(-1)?.close();
-      const popup = fakePopup(anchor);
+      const popup = fakePopup(anchor, hooks);
       popups.push(popup);
       return popup;
     },
@@ -91,6 +111,7 @@ function setup(
     deps,
     contexts,
     popups,
+    stops,
     timings,
     cleanup: () => document.removeEventListener('click', handler),
   };
@@ -241,6 +262,64 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(env.popups[1]!.calls).toEqual(['done:qwen2.5-coder:7b:Marks 2.4 as done.']);
     // Only the answer that was shown is timed.
     expect(env.timings).toHaveLength(1);
+    // Replacing the popup stopped the first request only.
+    expect(env.stops[0]).toHaveBeenCalled();
+    expect(env.stops[1]).not.toHaveBeenCalled();
+  });
+
+  it('shows the reply growing as it streams, then the sections', async () => {
+    const answer = deferred<ExplainResult>();
+    let send!: (text: string) => void;
+    env = setup((onChunk) => {
+      send = onChunk;
+      return answer.promise;
+    });
+    click(code('R44'));
+    send('## What it');
+    send(' does\nMarks');
+    answer.resolve(DONE);
+    await flush();
+    expect(env.popups[0]!.calls).toEqual([
+      'partial:## What it',
+      'partial:## What it does\nMarks',
+      `done:${DONE.model}:${DONE.explanation.what}`,
+    ]);
+    expect(env.timings).toEqual([
+      { elapsedMs: 1234, status: 'done', model: DONE.model, firstChunkMs: 1234 },
+    ]);
+  });
+
+  it('Stop stops the request, keeps the text so far, and ignores what arrives later', async () => {
+    const answer = deferred<ExplainResult>();
+    let send!: (text: string) => void;
+    env = setup((onChunk) => {
+      send = onChunk;
+      return answer.promise;
+    });
+    click(code('R44'));
+    send('Marks 2.4');
+    env.popups[0]!.pressStop();
+    expect(env.stops[0]).toHaveBeenCalledOnce();
+    expect(env.timings).toEqual([{ elapsedMs: 1234, status: 'stopped', firstChunkMs: 1234 }]);
+
+    send(' as done.');
+    answer.resolve(DONE);
+    await flush();
+    expect(env.popups[0]!.calls).toEqual(['partial:Marks 2.4']);
+    expect(env.popups[0]!.state).toBe('stopped');
+    expect(env.timings).toHaveLength(1);
+  });
+
+  it('closing the popup stops the request', async () => {
+    const answer = deferred<ExplainResult>();
+    env = setup(() => answer.promise);
+    click(code('R44'));
+    env.popups[0]!.close();
+    expect(env.stops[0]).toHaveBeenCalledOnce();
+    answer.resolve(DONE);
+    await flush();
+    expect(env.popups[0]!.calls).toEqual([]);
+    expect(env.timings).toEqual([]);
   });
 });
 
@@ -256,8 +335,15 @@ describe('click handler with the real popup', () => {
   it('shows loading, then the three sections, and the popup itself is not a diff line', async () => {
     document.body.innerHTML = fixture('github-diff-classic.html');
     const answer = deferred<ExplainResult>();
-    const explain = vi.fn(() => answer.promise);
-    const handler = createClickHandler({ explain, openPopup: (anchor) => openPopup(anchor) });
+    let send!: (text: string) => void;
+    const explain = vi.fn((_context: string, onChunk: (text: string) => void) => {
+      send = onChunk;
+      return { result: answer.promise, stop: vi.fn() };
+    });
+    const handler = createClickHandler({
+      explain,
+      openPopup: (anchor, options) => openPopup(anchor, options),
+    });
     document.addEventListener('click', handler);
     cleanup = () => document.removeEventListener('click', handler);
 
@@ -268,6 +354,10 @@ describe('click handler with the real popup', () => {
     click(line);
     const root = document.getElementById(POPUP_ID)!.shadowRoot!;
     expect(root.querySelector('.loading')).not.toBeNull();
+
+    send('Marks **2.4**');
+    expect(currentPopup()!.state).toBe('streaming');
+    expect(root.querySelector('.partial strong')!.textContent).toBe('2.4');
 
     answer.resolve(DONE);
     await flush();

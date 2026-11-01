@@ -9,10 +9,8 @@
 import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
 import { createClickHandler } from './clickHandler';
 import { trackEnabled } from './enabledState';
-import { sendRequest } from './messaging/client';
+import { openExplainStream, sendRequest } from './messaging/client';
 import { currentPopup, openPopup } from './popup/popup';
-
-const EXPLAIN_TIMEOUT_MS = 120_000;
 
 let workerStatus = 'Service worker: checking…';
 // The toolbar button turns click-to-explain on and off for every tab (see
@@ -52,15 +50,15 @@ document.addEventListener('turbo:load', update);
 document.addEventListener('turbo:render', update);
 window.addEventListener('popstate', update);
 
-// Click a diff line to explain it: a popup opens next to the line and fills
-// in with the model's answer (see src/clickHandler.ts). Models can take a
-// while on a laptop, so the timeout is longer than the default.
+// Click a diff line to explain it: a popup opens next to the line and the
+// model's answer streams into it (see src/clickHandler.ts). There is no
+// timeout: the popup's Stop button ends a request that takes too long.
 document.addEventListener(
   'click',
   createClickHandler({
     isEnabled: () => enabled.current() === true,
-    explain: (context) => sendRequest('explain', { context }, { timeoutMs: EXPLAIN_TIMEOUT_MS }),
-    openPopup: (anchor) => openPopup(anchor),
+    explain: (context, onChunk) => openExplainStream(context, onChunk),
+    openPopup: (anchor, options) => openPopup(anchor, options),
     // Dev builds also log the context block sent to the model.
     onContext:
       import.meta.env.MODE === 'development'
@@ -68,10 +66,16 @@ document.addEventListener(
         : undefined,
     // Every build logs how long each explanation took, to track the local
     // model's latency.
-    onTiming: ({ elapsedMs, status, model }) =>
+    onTiming: ({ elapsedMs, status, model, firstChunkMs }) => {
+      const verb = { done: 'explained', failed: 'failed', stopped: 'stopped' }[status];
+      const details = [
+        model,
+        firstChunkMs === undefined ? '' : `first text after ${(firstChunkMs / 1000).toFixed(1)} s`,
+      ].filter(Boolean);
       console.info(
-        `[PR Explainer] ${status === 'done' ? 'explained' : 'failed'} in ${(elapsedMs / 1000).toFixed(1)} s` +
-          (model ? ` (${model})` : ''),
-      ),
+        `[PR Explainer] ${verb} in ${(elapsedMs / 1000).toFixed(1)} s` +
+          (details.length ? ` (${details.join(', ')})` : ''),
+      );
+    },
   }),
 );

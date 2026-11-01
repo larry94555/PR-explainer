@@ -7,6 +7,7 @@ import {
   GAP,
   openPopup,
   POPUP_ID,
+  STOPPED_EMPTY,
   type AnchorRect,
 } from '../src/popup/popup';
 
@@ -150,6 +151,75 @@ describe('popup', () => {
     expect(popup.host.style.left).toBe('30px');
   });
 
+  describe('streaming', () => {
+    const stopButton = () => shadow().querySelector<HTMLButtonElement>('button.stop')!;
+
+    it('renders the reply so far as markdown, replacing it with each update', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showPartial('## What it does\nAdds a `retry`');
+      expect(popup.state).toBe('streaming');
+      expect(shadow().querySelector('.spinner')).toBeNull();
+      popup.showPartial('## What it does\nAdds a `retry` loop.\n\n- tries **three**');
+      const partial = shadow().querySelector('.partial')!;
+      expect(shadow().querySelectorAll('.partial')).toHaveLength(1);
+      expect(partial.querySelector('strong')!.textContent).toBe('What it does');
+      expect(partial.querySelector('code')!.textContent).toBe('retry');
+      expect(partial.querySelector('li')!.textContent).toBe('tries three');
+      expect(shadow().querySelector('[data-state]')!.getAttribute('data-state')).toBe('streaming');
+    });
+
+    it('swaps the streamed text for the three sections at the end', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showPartial('## What it does\nAdds');
+      popup.showExplanation(SAMPLE, 'llama3');
+      expect(shadow().querySelector('.partial')).toBeNull();
+      expect(shadow().querySelectorAll('section')).toHaveLength(3);
+      popup.showPartial('late');
+      expect(shadow().querySelector('.partial')).toBeNull();
+    });
+
+    it('shows HTML in streamed text as plain text', () => {
+      openPopup(ANCHOR).showPartial('<img src=x onerror="window.__pwned = 6"> <script>x</script>');
+      expect(shadow().querySelectorAll('img, script')).toHaveLength(0);
+      expect(shadow().querySelector('.partial')!.textContent).toContain('<img');
+    });
+
+    it('Stop keeps the text so far, calls onStop once, and ignores later updates', () => {
+      const onStop = vi.fn();
+      const popup = openPopup(ANCHOR, { onStop });
+      popup.showPartial('Adds a loop');
+      stopButton().click();
+      stopButton().click();
+      expect(onStop).toHaveBeenCalledOnce();
+      expect(popup.state).toBe('stopped');
+      popup.showPartial('Adds a loop that retries');
+      popup.showExplanation(SAMPLE);
+      popup.showError('late', 'late');
+      expect(popup.state).toBe('stopped');
+      expect(shadow().querySelector('.partial')!.textContent).toBe('Adds a loop');
+      expect(shadow().querySelector('section, .error')).toBeNull();
+    });
+
+    it('Stop while still loading says nothing was written', () => {
+      const onStop = vi.fn();
+      const popup = openPopup(ANCHOR, { onStop });
+      stopButton().click();
+      expect(onStop).toHaveBeenCalledOnce();
+      expect(popup.state).toBe('stopped');
+      expect(shadow().querySelector('.spinner')).toBeNull();
+      expect(shadow().querySelector('.stopped-note')!.textContent).toBe(STOPPED_EMPTY);
+    });
+
+    it('does nothing when Stop is clicked after the answer arrived', () => {
+      const onStop = vi.fn();
+      const popup = openPopup(ANCHOR, { onStop });
+      popup.showExplanation(SAMPLE);
+      stopButton().click();
+      expect(onStop).not.toHaveBeenCalled();
+      expect(popup.state).toBe('done');
+    });
+  });
+
   describe('does not run code from the model', () => {
     const UNSAFE: Explanation = {
       what: 'Look: <img src=x onerror="window.__pwned = 1"> <script>window.__pwned = 2</script>',
@@ -263,6 +333,33 @@ describe('elapsed time', () => {
     vi.advanceTimersByTime(TICK_MS * 10);
     expect(elapsedText()).toBe('Answered in 12.4 s');
     expect(popup.elapsedMs).toBe(12_400);
+  });
+
+  it('keeps counting while the reply streams in', () => {
+    const popup = openPopup(ANCHOR, { now });
+    clock += 1500;
+    popup.showPartial('Adds');
+    vi.advanceTimersByTime(TICK_MS);
+    expect(elapsedText()).toBe('1.5 s');
+    clock += 2000;
+    vi.advanceTimersByTime(TICK_MS);
+    expect(elapsedText()).toBe('3.5 s');
+    popup.showExplanation(SAMPLE);
+    expect(elapsedText()).toBe('Answered in 3.5 s');
+  });
+
+  it('says when it was stopped and stops its timer', () => {
+    const popup = openPopup(ANCHOR, { now });
+    clock += 4200;
+    popup.showPartial('Adds');
+    document
+      .getElementById(POPUP_ID)!
+      .shadowRoot!.querySelector<HTMLButtonElement>('button.stop')!
+      .click();
+    expect(elapsedText()).toBe('Stopped after 4.2 s');
+    expect(vi.getTimerCount()).toBe(0);
+    clock += 3000;
+    expect(popup.elapsedMs).toBe(4200);
   });
 
   it('says how long it took to fail', () => {
