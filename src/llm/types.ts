@@ -28,6 +28,14 @@ export interface ChatReply {
   model: string;
 }
 
+/** What chatStream returns once the reply is complete. */
+export interface ChatStreamEnd {
+  /** The model that answered, as the server names it. */
+  model: string;
+  /** Why the model stopped, when the server says: "stop" (finished) or "length" (hit the limit). */
+  doneReason?: string;
+}
+
 export interface ModelInfo {
   /** The name to pass as ChatOptions.model, for example "qwen2.5-coder:7b". */
   name: string;
@@ -38,6 +46,15 @@ export interface ModelInfo {
 export interface LlmClient {
   listModels(options?: { signal?: AbortSignal }): Promise<ModelInfo[]>;
   chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatReply>;
+  /**
+   * Like chat(), but yields the reply in pieces as the model writes them.
+   * Aborting `options.signal`, or leaving a `for await` loop early, ends the
+   * request. Failures throw the same LlmError kinds as chat().
+   */
+  chatStream(
+    messages: ChatMessage[],
+    options: ChatOptions,
+  ): AsyncGenerator<string, ChatStreamEnd, undefined>;
 }
 
 /**
