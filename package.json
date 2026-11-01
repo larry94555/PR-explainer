@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "dev": "vite build --watch --mode development",
+    "demo:popup": "vite --config vite.demo.config.ts --open /popup.html",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint . && prettier --check .",
