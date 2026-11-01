@@ -119,12 +119,13 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   // Each refresh gets a number so a slow, older reply cannot overwrite a newer one.
   let refreshCount = 0;
   async function refreshModels(): Promise<void> {
+    // Counted before validating, so a bad URL also makes a pending load stale.
+    const thisRefresh = ++refreshCount;
     const values = validForm(['llmUrl']);
     if (!values) {
       modelsStatus.textContent = 'Fix the URL to load models.';
       return;
     }
-    const thisRefresh = ++refreshCount;
     modelsStatus.textContent = `Loading models from ${values.llmUrl}…`;
     try {
       const models = await deps.createClient(values).listModels();

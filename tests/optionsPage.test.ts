@@ -148,6 +148,25 @@ describe('options page', () => {
     expect(modelOptions().map(([value]) => value)).not.toContain('stale:1b');
   });
 
+  it('ignores a pending model list once the URL is changed to an invalid one', async () => {
+    let finishSlow: (models: ModelInfo[]) => void = () => {};
+    const slow = new Promise<ModelInfo[]>((r) => (finishSlow = r));
+    const listModels = vi
+      .fn<() => Promise<ModelInfo[]>>()
+      .mockResolvedValueOnce(MODELS)
+      .mockReturnValueOnce(slow);
+    const page = await initOptionsPage(document, fakeDeps(fakeClient({ listModels })));
+
+    const pending = page.refreshModels();
+    $<HTMLInputElement>('llmUrl').value = 'http://example.com';
+    await page.refreshModels();
+    finishSlow([{ name: 'stale:1b' }]);
+    await pending;
+
+    expect(text('models-status')).toBe('Fix the URL to load models.');
+    expect(modelOptions().map(([value]) => value)).not.toContain('stale:1b');
+  });
+
   it('shows a validation error for a bad URL and does not load models', async () => {
     const deps = fakeDeps(fakeClient());
     const page = await initOptionsPage(document, deps);
