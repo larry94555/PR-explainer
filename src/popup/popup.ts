@@ -58,16 +58,22 @@ export interface Viewport {
 /**
  * Where to put the popup's top-left corner, in page coordinates (so it
  * scrolls with the page). Below the line when it fits, otherwise above it
- * when that fits, otherwise below. Kept inside the window horizontally.
+ * when that fits. When neither fits, it is moved up as far as needed to keep
+ * its bottom inside the window (but never above the window's top), so the
+ * whole panel can be seen without scrolling the page. Kept inside the window
+ * horizontally too.
  */
 export function computePosition(
   anchor: AnchorRect,
   size: { width: number; height: number },
   viewport: Viewport,
 ): { top: number; left: number } {
-  const fitsBelow = anchor.bottom + GAP + size.height <= viewport.height;
-  const fitsAbove = anchor.top - GAP - size.height >= 0;
-  const top = !fitsBelow && fitsAbove ? anchor.top - GAP - size.height : anchor.bottom + GAP;
+  const below = anchor.bottom + GAP;
+  const above = anchor.top - GAP - size.height;
+  let top: number;
+  if (below + size.height <= viewport.height) top = below;
+  else if (above >= 0) top = above;
+  else top = Math.max(GAP, Math.min(below, viewport.height - size.height - GAP));
   const maxLeft = viewport.width - size.width - GAP;
   const left = Math.max(GAP, Math.min(anchor.left, maxLeft));
   return { top: top + viewport.scrollY, left: left + viewport.scrollX };

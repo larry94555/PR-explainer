@@ -192,9 +192,27 @@ describe('computePosition', () => {
     expect(computePosition(anchor, size, viewport).top).toBe(700 - GAP - 300);
   });
 
-  it('stays below when there is no room above either', () => {
+  it('keeps the whole popup inside the window when neither side has room', () => {
+    // A 480px popup next to a line in the middle of an 800px window: below
+    // would end at 858, above would start at -138.
+    const anchor = { top: 350, bottom: 370, left: 40 };
+    const { top } = computePosition(anchor, { width: 400, height: 480 }, viewport);
+    expect(top).toBe(800 - 480 - GAP);
+    expect(top + 480).toBeLessThanOrEqual(800);
+    expect(top).toBeGreaterThanOrEqual(0);
+  });
+
+  it('pins to the top of the window when the popup is taller than the window', () => {
     const anchor = { top: 200, bottom: 220, left: 40 };
-    expect(computePosition(anchor, { width: 400, height: 700 }, viewport).top).toBe(220 + GAP);
+    expect(computePosition(anchor, { width: 400, height: 900 }, viewport).top).toBe(GAP);
+  });
+
+  it('adds the page scroll when clamping, too', () => {
+    const anchor = { top: 350, bottom: 370, left: 40 };
+    const scrolled = { ...viewport, scrollY: 1000 };
+    expect(computePosition(anchor, { width: 400, height: 480 }, scrolled).top).toBe(
+      1000 + 800 - 480 - GAP,
+    );
   });
 
   it('stays inside the window horizontally', () => {
