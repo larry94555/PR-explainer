@@ -44,7 +44,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 2.4 | Friendly LLM error messages | Small | ✅ Done ([#10](https://github.com/larry94555/PR-explainer/pull/10)) |
 | 3.1 | Diff line locator | Medium | ✅ Done ([#11](https://github.com/larry94555/PR-explainer/pull/11)) |
 | 3.2 | Hunk context extractor | Medium | ✅ Done ([#12](https://github.com/larry94555/PR-explainer/pull/12)) |
-| 3.3 | Explanation prompt and response parser | Medium | Not started |
+| 3.3 | Explanation prompt and response parser | Medium | ✅ Done ([#13](https://github.com/larry94555/PR-explainer/pull/13)) |
 | 3.4 | Popup component | Medium | Not started |
 | 3.5 | Wire clicks to explanations | Small | Not started |
 | 3.6 | Toolbar on/off toggle | Small | Not started |
@@ -220,13 +220,18 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   5. Click the first line under a `@@` header and confirm no lines from the hunk above appear.
   6. Click a hunk header or the PR title and confirm nothing is logged.
 
-### PR 3.3: Explanation prompt and response parser (Medium)
+### PR 3.3: Explanation prompt and response parser (Medium) ✅ Done
+- **Status:** Done ([#13](https://github.com/larry94555/PR-explainer/pull/13)).
 - **Why it's needed:** The model must return the three sections in a predictable shape so the popup can show them.
-- **Problem it solves:** Adds `buildExplainPrompt(context)`, a system prompt plus user message asking for markdown with exactly the headings "What it does", "Why it's needed", and "Concerns". Adds `parseExplanation(text)`, which splits the reply into the three sections and copes with small format mistakes (missing headings, extra text, different heading levels). Adds an `explain` message handler in the service worker that ties the client, prompt, and parser together.
-- **Unit tests added:** `explainPrompt.test.ts` snapshot-tests the prompt for a sample context. `parseExplanation.test.ts` covers a well-formed reply, missing "Concerns" (becomes "None found"), headings with different levels or bold text, and a reply with no headings (all text goes under "What it does").
-- **How to test:**
-  1. Run `npm test`.
-  2. In the service worker console, run the dev hook `await self.debugLlm.explainSample()` and confirm it returns an object with `what`, `why`, and `concerns`.
+- **Problem it solves:** Adds `buildExplainPrompt(contextText)` (`src/explain/explainPrompt.ts`), a system prompt plus a user message that wraps the `formatContext` block and asks for markdown with exactly the headings "What it does", "Why it's needed", and "Concerns". It takes the formatted text, not a `LineContext`, so the service worker never imports content-script code. Adds `parseExplanation(text)` (`src/explain/parseExplanation.ts`), which splits the reply into `{what, why, concerns}` and copes with format mistakes: other heading levels, bold, numbered or colon headings, text on the heading line, filler before the first heading, `<think>` blocks from reasoning models, missing sections, and no headings at all. Adds an `explain` request that the service worker answers with the parsed sections, or with `describeLlmError`'s message and fix when the LLM call fails (the messaging layer only carries an error's name and message, and the popup needs the fix). Dev builds add `debugLlm.explain(text)` and `debugLlm.explainSample()` in the service worker console, and log an explanation for each clicked diff line in the page console (PRs 3.4 and 3.5 replace that log with the popup).
+- **Unit tests added:** `explainPrompt.test.ts` snapshot-tests the prompt for a sample context and checks the headings and the code block. `parseExplanation.test.ts` covers a well-formed reply, missing or empty "Concerns" (becomes "None found."), missing "Why it's needed", heading levels 1 and 3, bold, bold with a colon, numbered and mixed-case headings, Windows line endings, text on the heading line, a sentence that only starts like a heading, filler and `<think>` blocks, a reply with no headings (all text goes under "What it does"), and an empty reply. `explainHandler.test.ts` checks that the saved model, temperature and length are used, that LLM errors come back as a message and fix, and that an empty context is rejected without calling the model.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test` and confirm the `explainPrompt`, `parseExplanation`, and `explainHandler` tests pass.
+  2. Make sure Ollama is running (`ollama list` works), `OLLAMA_ORIGINS` is set (`setx OLLAMA_ORIGINS "chrome-extension://*"`, then quit Ollama from the system tray and open it again), and a model is chosen on the settings page.
+  3. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
+  4. On `chrome://extensions`, click the **service worker** link on the PR Explainer card and open the **Console** tab. Run `await debugLlm.explainSample()` and confirm it returns `status: "done"` and an `explanation` with `what`, `why`, and `concerns`.
+  5. Open the **Files changed** tab of a PR in **Unified** view, press `F12`, open the **Console** tab, and click an added line. Confirm `[PR Explainer] asking the model…` is logged, then (after a few seconds to a minute) `[PR Explainer] explanation` with the three sections.
+  6. Quit Ollama from the system tray, click a line again, and confirm the explanation has `status: "failed"` with a message saying Ollama is not running and a fix. Open Ollama again afterwards.
 
 ### PR 3.4: Popup component (Medium)
 - **Why it's needed:** Users need to see the explanation next to the code they clicked.
