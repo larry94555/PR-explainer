@@ -5,10 +5,13 @@
 // is erased at build time, so it never becomes a shared chunk (content scripts
 // cannot load chunks; see src/content.ts).
 
+import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
+
 // Each request type maps to the payload it takes and the result it returns.
-// Later PRs add entries here, for example `explain` in PR 3.3.
+// Later PRs add entries here.
 export interface RequestMap {
   ping: { payload: undefined; result: { receivedAt: number } };
+  explain: { payload: ExplainPayload; result: ExplainResult };
 }
 
 export type RequestType = keyof RequestMap;

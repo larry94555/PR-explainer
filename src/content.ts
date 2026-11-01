@@ -10,6 +10,8 @@ import { setBadgeStatus, syncBadge } from './badge';
 import { extractContext, formatContext } from './lineContext';
 import { sendRequest } from './messaging/client';
 
+const EXPLAIN_TIMEOUT_MS = 120_000;
+
 let workerStatus = 'Service worker: checking…';
 
 function update(): void {
@@ -44,5 +46,17 @@ document.addEventListener('click', (event) => {
   const context = extractContext(event.target);
   if (!context) return;
   console.log('[PR Explainer] clicked line', context.line);
-  console.log(`[PR Explainer] context for the model:\n${formatContext(context)}`);
+  const text = formatContext(context);
+  console.log(`[PR Explainer] context for the model:\n${text}`);
+  // Dev builds also ask the local model to explain the line and log the
+  // answer, so the prompt and parser can be tried on real PRs before the
+  // popup arrives (PR 3.4 and 3.5 replace this). Models can take a while on a
+  // laptop, so the timeout is longer than the default.
+  if (import.meta.env.MODE === 'development') {
+    console.log('[PR Explainer] asking the model…');
+    sendRequest('explain', { context: text }, { timeoutMs: EXPLAIN_TIMEOUT_MS }).then(
+      (result) => console.log('[PR Explainer] explanation', result),
+      (error: Error) => console.warn('[PR Explainer] explain failed', error),
+    );
+  }
 });
