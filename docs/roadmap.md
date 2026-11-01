@@ -46,7 +46,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 3.2 | Hunk context extractor | Medium | ✅ Done ([#12](https://github.com/larry94555/PR-explainer/pull/12)) |
 | 3.3 | Explanation prompt and response parser | Medium | ✅ Done ([#13](https://github.com/larry94555/PR-explainer/pull/13)) |
 | 3.4 | Popup component | Medium | ✅ Done ([#14](https://github.com/larry94555/PR-explainer/pull/14)) |
-| 3.5 | Wire clicks to explanations | Small | ✅ Done ([#NN](https://github.com/larry94555/PR-explainer/pull/NN)) |
+| 3.5 | Wire clicks to explanations | Small | ✅ Done ([#15](https://github.com/larry94555/PR-explainer/pull/15)) |
 | 3.6 | Toolbar on/off toggle | Small | Not started |
 | 4.1 | Streaming in the Ollama client | Medium | Not started |
 | 4.2 | Stream to the popup with a Stop button | Medium | Not started |
@@ -250,7 +250,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   9. Run `npm run build` and confirm it still succeeds (the demo is not part of `dist/`).
 
 ### PR 3.5: Wire clicks to explanations (Small) ✅ Done
-- **Status:** Done ([#NN](https://github.com/larry94555/PR-explainer/pull/NN)).
+- **Status:** Done ([#15](https://github.com/larry94555/PR-explainer/pull/15)).
 - **Why it's needed:** This joins the locator, context, service worker, and popup into the full feature.
 - **Problem it solves:** Adds `createClickHandler` (`src/clickHandler.ts`), which the content script attaches to the page. A click on a diff code line opens the popup in the loading state next to the line's row (found by the new `locateRow` in `src/diffDom.ts`), sends an `explain` request with the line's context, and fills in the three sections or the error's message and fix. If the service worker cannot answer at all (timeout, or "Extension context invalidated" after a reload), the popup shows a friendly message and fix too. Clicks are left alone when they land on GitHub's own controls (the comment "+" button, links, buttons, menus, form fields), when they finish a text selection, or when Shift, Ctrl, Alt, or Cmd is held, so selecting and copying code still works. Clicking another line while a request is pending replaces the popup, and the late answer is dropped. Dev builds still log the context block sent to the model; the old "explanation" console log is gone.
 - **Unit tests added:** `clickHandler.test.ts` runs on both saved fixtures and checks that a click on a code line sends one request with the right context and anchors the popup to the line's row, that done, failed, and unreachable-service-worker results reach the popup, that hunk headers, clicks outside a diff, the comment button (and the icon inside it), links, menu items, modified clicks, and clicks that end a text selection send nothing, and that a second click while the first request is pending replaces the popup and drops the late answer. One test uses the real popup to check the loading state, the three sections, and that clicks inside the popup send nothing.
