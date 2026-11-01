@@ -26,6 +26,42 @@ All calls to the LLM go through the extension's **service worker**, not the cont
 4. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose the `dist/` folder. After rebuilding, click the reload icon on the extension card.
 5. Run `npm test` to run the unit tests.
 
+## PR status
+
+Update this table (and the PR's heading) when a roadmap PR merges.
+
+| PR | Title | Size | Status |
+|---|---|---|---|
+| 1.1 | Project scaffold and test runner | Small | ✅ Done ([#2](https://github.com/larry94555/PR-explainer/pull/2)) |
+| 1.2 | Manifest V3 and empty extension parts | Small | Not started |
+| 1.3 | PR page detection and "active" badge | Small | Not started |
+| 1.4 | Message passing between content script and service worker | Small | Not started |
+| 2.1 | Settings storage | Small | Not started |
+| 2.2 | Ollama client: list models and non-streaming chat | Medium | Not started |
+| 2.3 | Settings page UI | Medium | Not started |
+| 2.4 | Friendly LLM error messages | Small | Not started |
+| 3.1 | Diff line locator | Medium | Not started |
+| 3.2 | Hunk context extractor | Small | Not started |
+| 3.3 | Explanation prompt and response parser | Medium | Not started |
+| 3.4 | Popup component | Medium | Not started |
+| 3.5 | Wire clicks to explanations | Small | Not started |
+| 3.6 | Toolbar on/off toggle | Small | Not started |
+| 4.1 | Streaming in the Ollama client | Medium | Not started |
+| 4.2 | Stream to the popup with a Stop button | Medium | Not started |
+| 4.3 | Explanation cache and Regenerate | Small | Not started |
+| 4.4 | Multi-line selection | Medium | Not started |
+| 5.1 | Chat session model | Small | Not started |
+| 5.2 | Chat panel UI | Medium | Not started |
+| 5.3 | Connect chat to the LLM with streaming | Medium | Not started |
+| 5.4 | Chat about a new line from the same panel | Small | Not started |
+| 6.1 | Include PR title and description | Small | Not started |
+| 6.2 | Token budget and context trimming | Medium | Not started |
+| 6.3 | Expanded file context | Medium | Not started |
+| 7.1 | Handle GitHub's in-page navigation | Small | Not started |
+| 7.2 | Split view and lazy-loaded diffs | Medium | Not started |
+| 7.3 | Theme support and accessibility | Small | Not started |
+| 7.4 | Privacy check and packaging | Small | Not started |
+
 ## Milestone overview
 
 | # | Milestone | Demo at the end |
@@ -44,7 +80,8 @@ All calls to the LLM go through the extension's **service worker**, not the cont
 
 **Demo:** Load the unpacked extension, open any GitHub pull request, and see a small "PR Explainer active" badge in the corner. Open a GitHub issue page and see no badge.
 
-### PR 1.1: Project scaffold and test runner (Small)
+### PR 1.1: Project scaffold and test runner (Small) ✅ Done
+- **Status:** Done, merged in [#2](https://github.com/larry94555/PR-explainer/pull/2).
 - **Why it's needed:** Every later PR needs a build, a linter, and a test runner.
 - **Problem it solves:** There is no code yet. This sets up TypeScript, Vite, Vitest, ESLint, Prettier, and `npm` scripts (`build`, `dev`, `test`, `lint`), plus a CI workflow that runs lint and tests on each PR.
 - **Unit tests added:** One trivial test (`sanity.test.ts`) that proves Vitest runs.
