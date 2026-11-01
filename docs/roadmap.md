@@ -167,7 +167,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   1. Run `npm test` and confirm the `optionsPage` tests pass.
   2. Make sure Ollama is running and allows the extension (see step 2 of PR 2.2: `OLLAMA_ORIGINS` set to `chrome-extension://*`, then restart Ollama).
   3. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
-  4. On `chrome://extensions`, click **Details** on the PR Explainer card, then **Extension options**. The settings page opens in a tab.
+  4. Open the settings page. Either copy the **ID** from the PR Explainer card on `chrome://extensions` and open `chrome-extension://<ID>/options.html` in a new tab, or click **Details** on the card and scroll to the very bottom (below **Site access** and **Allow in Incognito**) to the **Extension options** link.
   5. Confirm the dropdown lists the models from `ollama list` and the status says how many were found.
   6. Pick a model, click **Save**, reload the page, and confirm the choice was kept.
   7. Click **Test connection** and confirm a reply such as "OK" and a time in milliseconds.
