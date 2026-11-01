@@ -38,4 +38,7 @@ if (import.meta.env.MODE === 'development') {
   console.info(
     '[PR Explainer] dev build: debugSettings and debugLlm are available in this console',
   );
+} else {
+  // Says why the helpers are missing if someone tries them on a production build.
+  console.info('[PR Explainer] production build: debug helpers are off (use `npm run dev`)');
 }

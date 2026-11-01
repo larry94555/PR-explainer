@@ -152,10 +152,11 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 - **How to test:**
   1. Run `npm test` and confirm the `ollamaClient` tests pass.
   2. Make sure Ollama is running (`ollama list` works) and note one model name.
-  3. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
-  4. On `chrome://extensions`, click the **service worker** link on the PR Explainer card and use the **Console** tab of the DevTools window that opens.
-  5. Run `await debugLlm.listModels()` and confirm your models are listed.
-  6. Run `await debugSettings.save({ model: '<a model from step 2>' })`, then `await debugLlm.chat('Reply with OK')` and confirm the reply.
+  3. Run `npm run dev` (not `npm run build`, which leaves the debug helpers out), wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
+  4. On `chrome://extensions`, click the **service worker** link on the PR Explainer card and use the **Console** tab of the DevTools window that opens (not the PR page's console).
+  5. Run `typeof debugLlm` and confirm it says `'object'`. If it says `'undefined'`, `dist/` is a production build: run `npm run dev` and reload the extension again.
+  6. Run `await debugLlm.listModels()` and confirm your models are listed.
+  7. Run `await debugSettings.save({ model: '<a model from step 2>' })`, then `await debugLlm.chat('Reply with OK')` and confirm the reply.
 
 ### PR 2.3: Settings page UI (Medium)
 - **Why it's needed:** Users need a way to point the extension at their LLM and choose a model without editing code.
