@@ -5,6 +5,7 @@ This roadmap breaks the project into **milestones** and **PRs**.
 - A **milestone** ends with something you can demo in an interesting way.
 - A **PR** is a small change. Every PR is either **Small** (under 10 minutes to review) or **Medium** (under 20 minutes to review). If a PR grows past Medium while it is being written, split it before opening it.
 - Every PR lists why it is needed, the problem it solves, the unit tests it adds, and step-by-step instructions for testing it.
+- Every PR that changes something you can see (the popup, a badge, the toolbar icon, the settings page) includes screenshots of it in the PR description, saved under `docs/screenshots/pr-<number>/`, so a reviewer can see what to look for and where to find it.
 
 ## Technical choices
 
@@ -47,7 +48,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 3.3 | Explanation prompt and response parser | Medium | ✅ Done ([#13](https://github.com/larry94555/PR-explainer/pull/13)) |
 | 3.4 | Popup component | Medium | ✅ Done ([#14](https://github.com/larry94555/PR-explainer/pull/14)) |
 | 3.5 | Wire clicks to explanations | Small | ✅ Done ([#15](https://github.com/larry94555/PR-explainer/pull/15)) |
-| 3.6 | Toolbar on/off toggle | Small | Not started |
+| 3.6 | Toolbar on/off toggle | Small | ✅ Done ([#16](https://github.com/larry94555/PR-explainer/pull/16)) |
 | 4.1 | Streaming in the Ollama client | Medium | Not started |
 | 4.2 | Stream to the popup with a Stop button | Medium | Not started |
 | 4.3 | Explanation cache and Regenerate | Small | Not started |
@@ -276,14 +277,22 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   10. Quit Ollama from the system tray, click a line, and confirm the popup shows the red "Ollama is not running" message, a fix, and "Failed after" with a short time in the header. Open Ollama again afterwards.
   11. On `chrome://extensions`, click the extension's reload icon, go back to the PR tab **without** refreshing it, and click a line. Confirm the popup says "PR Explainer did not get an answer. Could not reach the service worker: Extension context invalidated." and suggests reloading the page. Refresh the page and confirm clicks work again.
 
-### PR 3.6: Toolbar on/off toggle (Small)
+### PR 3.6: Toolbar on/off toggle (Small) ✅ Done
+- **Status:** Done ([#16](https://github.com/larry94555/PR-explainer/pull/16)).
 - **Why it's needed:** Users sometimes want to click and select code on GitHub without triggering popups.
-- **Problem it solves:** Adds a toolbar action that toggles click-to-explain for all tabs, saves the state, and shows "ON" or "OFF" on the icon badge. The page badge from PR 1.3 reflects the state too.
-- **Unit tests added:** `toggle.test.ts` checks that the state flips and persists and that the click handler does nothing when off.
-- **How to test:**
-  1. Click the toolbar icon and confirm the badge says "OFF".
-  2. Click a diff line and confirm no popup appears.
-  3. Click the icon again, confirm "ON", and confirm popups work again.
+- **Problem it solves:** Clicking the PR Explainer icon in Chrome's toolbar now turns click-to-explain off or on for every tab at once. The icon shows a green "ON" or grey "OFF" badge, and its tooltip says what a click will do. The choice is saved in `chrome.storage.local` (not synced, so turning it off on one laptop leaves another alone) and survives browser restarts. While it is off, clicks on diff lines do nothing, and turning it off also closes an open popup. The page badge from PR 1.3 changes from blue "PR Explainer active" to grey "PR Explainer off", and back. The service worker side is `setupToolbarToggle` (`src/toolbarToggle.ts`), which handles quick clicks one at a time so two clicks always end where they started. The content script side is `trackEnabled` (`src/enabledState.ts`), which reads the state and hears about changes through `chrome.storage.onChanged`. Clicks are ignored until the saved state is known, and a change that arrives while the first read is pending wins over that read's older answer. The content script cannot share code with the service worker, so each file keeps its own copy of the storage key, and a test checks that they match. The manifest gains an `action` entry (toolbar button with no popup page) and no new permissions.
+- **Unit tests added:** `toggle.test.ts` checks that the state is on by default, flips and persists on each toggle, and ignores stored values that are not true or false; that the content script hears changes to its key only (not other keys or `sync` storage); that the icon shows the saved state when the service worker starts, shows "ON" and "OFF" with the right tooltip after each click, handles three quick clicks in order, and keeps working after a storage error; that `trackEnabled` is unknown until the read finishes, ignores a pending read overtaken by an OFF change, and falls back to on when the read fails; and that both files use the same key and default. `clickHandler.test.ts` checks, on both saved diff layouts, that a click sends nothing and opens no popup while off and works again once on. `badge.test.ts` checks the "PR Explainer off" text and grey style and switching back. `manifest.test.ts` checks the toolbar button and that it has no popup page.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test` and confirm the `toggle` tests pass (and all the others still do).
+  2. Make sure Ollama is running (`ollama list` works) and a model is chosen on the settings page.
+  3. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)). The manifest changed, so use the reload icon on the extension card, not just a page refresh.
+  4. Chrome hides new extension icons, so pin it first. Click the puzzle-piece **Extensions** icon at the right end of the address bar, then the **⋮** next to **PR Explainer**, then **Pin to toolbar** (older Chrome versions show a pin icon instead of **⋮**). The PR Explainer icon now sits just left of the puzzle piece. Confirm it shows a green **ON** badge, and hovering it says "PR Explainer is on. Click to turn it off." Screenshots: [the Extensions menu](screenshots/pr-3.6/1-extensions-menu.png), [Pin to toolbar](screenshots/pr-3.6/2-pin-to-toolbar.png), [the pinned icon showing ON](screenshots/pr-3.6/3-icon-on.png).
+  5. Open the **Files changed** tab of a PR in **Unified** view, for example `https://github.com/larry94555/PR-explainer/pull/15/files`, and refresh the page. Confirm the blue "PR Explainer active" badge in the bottom right corner, and click a line to confirm a popup still opens.
+  6. Click a line, and while the popup is still loading, click the toolbar icon. Confirm the badge on the icon changes to a grey **OFF** ([screenshot](screenshots/pr-3.6/4-icon-off.png)), the popup closes, and the page badge changes to a grey "PR Explainer off" without refreshing the page ([on and off](screenshots/pr-3.6/5-page-badge-on-off.png)).
+  7. Click a few diff lines and confirm no popup opens. Drag across some code and confirm it selects and copies (`Ctrl+C`) normally.
+  8. Open a second PR in another tab and confirm its page badge also says "PR Explainer off" and clicks open no popup there either.
+  9. Close Chrome completely and open it again. Confirm the icon still shows **OFF** and a PR page still shows "PR Explainer off".
+  10. Click the icon again. Confirm it shows **ON**, both tabs' page badges go back to blue "PR Explainer active", and clicking a line opens a popup with an explanation.
 
 ---
 

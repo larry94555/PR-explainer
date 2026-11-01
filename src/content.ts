@@ -6,17 +6,29 @@
 // entry must not share imports with other entries: Vite would move shared
 // code into a chunk loaded with `import`, which fails in a content script.
 // Type-only imports (such as src/messaging/protocol.ts) are fine.
-import { setBadgeStatus, syncBadge } from './badge';
+import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
 import { createClickHandler } from './clickHandler';
+import { trackEnabled } from './enabledState';
 import { sendRequest } from './messaging/client';
-import { openPopup } from './popup/popup';
+import { currentPopup, openPopup } from './popup/popup';
 
 const EXPLAIN_TIMEOUT_MS = 120_000;
 
 let workerStatus = 'Service worker: checking…';
+// The toolbar button turns click-to-explain on and off for every tab (see
+// src/toolbarToggle.ts). Until the saved state is read, clicks are ignored
+// and the badge keeps its default look.
+const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (value) => {
+  // Turning it off also closes an open popup; a late answer is then ignored.
+  if (!value) currentPopup()?.close();
+  update();
+});
 
 function update(): void {
-  if (syncBadge(document, location.href)) setBadgeStatus(document, workerStatus);
+  if (!syncBadge(document, location.href)) return;
+  setBadgeStatus(document, workerStatus);
+  const value = enabled.current();
+  if (value !== null) setBadgeEnabled(document, value);
 }
 
 update();
@@ -46,6 +58,7 @@ window.addEventListener('popstate', update);
 document.addEventListener(
   'click',
   createClickHandler({
+    isEnabled: () => enabled.current() === true,
     explain: (context) => sendRequest('explain', { context }, { timeoutMs: EXPLAIN_TIMEOUT_MS }),
     openPopup: (anchor) => openPopup(anchor),
     // Dev builds also log the context block sent to the model.

@@ -64,11 +64,15 @@ function fakePopup(anchor: Element) {
   return popup;
 }
 
-function setup(answer: () => Promise<ExplainResult> = () => Promise.resolve(DONE)) {
+function setup(
+  answer: () => Promise<ExplainResult> = () => Promise.resolve(DONE),
+  isEnabled?: () => boolean,
+) {
   const contexts: string[] = [];
   const timings: ExplainTiming[] = [];
   const popups: ReturnType<typeof fakePopup>[] = [];
   const deps: ClickHandlerDeps = {
+    isEnabled,
     explain: vi.fn((context: string) => {
       contexts.push(context);
       return answer();
@@ -127,6 +131,20 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     env?.cleanup();
     document.getSelection()?.removeAllRanges();
     document.body.innerHTML = '';
+  });
+
+  it('does nothing while click-to-explain is off, and works again once it is on', async () => {
+    let enabled = false;
+    env = setup(undefined, () => enabled);
+    click(code('R44'));
+    expect(env.deps.explain).not.toHaveBeenCalled();
+    expect(env.popups).toHaveLength(0);
+
+    enabled = true;
+    click(code('R44'));
+    await flush();
+    expect(env.deps.explain).toHaveBeenCalledTimes(1);
+    expect(env.popups[0]!.calls).toEqual([`done:${DONE.model}:${DONE.explanation.what}`]);
   });
 
   it('opens a popup next to the clicked row and shows the explanation', async () => {
