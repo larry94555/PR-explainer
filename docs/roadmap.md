@@ -39,7 +39,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 1.3 | PR page detection and "active" badge | Small | ✅ Done ([#5](https://github.com/larry94555/PR-explainer/pull/5)) |
 | 1.4 | Message passing between content script and service worker | Small | ✅ Done ([#6](https://github.com/larry94555/PR-explainer/pull/6)) |
 | 2.1 | Settings storage | Small | ✅ Done ([#7](https://github.com/larry94555/PR-explainer/pull/7)) |
-| 2.2 | Ollama client: list models and non-streaming chat | Medium | Not started |
+| 2.2 | Ollama client: list models and non-streaming chat | Medium | ✅ Done ([#8](https://github.com/larry94555/PR-explainer/pull/8)) |
 | 2.3 | Settings page UI | Medium | Not started |
 | 2.4 | Friendly LLM error messages | Small | Not started |
 | 3.1 | Diff line locator | Medium | Not started |
@@ -144,15 +144,19 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   4. Run `await chrome.storage.sync.get(null)` and confirm it is `{}` (defaults live in code).
   5. Run `await debugSettings.get()` and confirm the defaults, then `await debugSettings.save({ model: 'qwen2.5-coder:7b' })` and `await debugSettings.save({ llmUrl: 'http://example.com' })` (the second is rejected).
 
-### PR 2.2: Ollama client: list models and non-streaming chat (Medium)
+### PR 2.2: Ollama client: list models and non-streaming chat (Medium) ✅ Done
+- **Status:** Done, merged in [#8](https://github.com/larry94555/PR-explainer/pull/8).
 - **Why it's needed:** The extension needs one place that knows how to talk to the local LLM.
-- **Problem it solves:** Adds an `LlmClient` interface and an `OllamaClient` with `listModels()` (calls `/api/tags`) and `chat(messages)` (calls `/api/chat` with `stream: false`). Adds the `host_permissions` for localhost. Keeping it behind an interface makes it possible to add other local servers (such as LM Studio) later.
-- **Unit tests added:** `ollamaClient.test.ts` with mocked `fetch` covers parsing the model list, building the chat request body, parsing the reply, and raising typed errors for connection refused, HTTP 404 (model missing), HTTP 403 (CORS or origin blocked), and bad JSON.
+- **Problem it solves:** Adds an `LlmClient` interface (`src/llm/types.ts`) and an `OllamaClient` (`src/llm/ollamaClient.ts`) with `listModels()` (calls `/api/tags`) and `chat(messages, options)` (calls `/api/chat` with `stream: false`, passing temperature and max response length as Ollama's `temperature` and `num_predict`). Every failure becomes an `LlmError` with a `kind`: `connection`, `model-not-found`, `origin-blocked`, `no-model`, `bad-response`, `http`, or `aborted`, which PR 2.4 turns into friendly messages. `createLlmClient(settings)` builds the client from the saved URL. Adds `host_permissions` for `localhost`, `127.0.0.1` and `[::1]` (any port), the same hosts the settings accept. Keeping it behind an interface makes it possible to add other local servers (such as LM Studio) later. Dev builds expose `debugLlm` in the service worker console.
+- **Unit tests added:** `ollamaClient.test.ts` with a mocked `fetch` covers parsing the model list, building the chat request body, parsing the reply, and raising typed errors for connection refused, HTTP 404 (model missing), HTTP 403 (CORS or origin blocked), other HTTP errors, bad JSON, a missing model name, and a cancelled request. `manifest.test.ts` checks the new host permissions.
 - **How to test:**
-  1. Run `npm test`.
-  2. Make sure Ollama is running (`ollama list` works).
-  3. Build and reload the extension.
-  4. In the service worker console, run `await self.debugLlm.listModels()` (a debug hook available only in dev builds) and confirm your models are listed.
+  1. Run `npm test` and confirm the `ollamaClient` tests pass.
+  2. Make sure Ollama is running (`ollama list` works) and note one model name. Ollama refuses chat requests from extensions unless `OLLAMA_ORIGINS` allows them, so set it to `chrome-extension://*` and restart Ollama (on macOS: `launchctl setenv OLLAMA_ORIGINS "chrome-extension://*"`; on Windows, in Command Prompt: `setx OLLAMA_ORIGINS "chrome-extension://*"`; then quit Ollama and open it again).
+  3. Run `npm run dev` (not `npm run build`, which leaves the debug helpers out), wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
+  4. On `chrome://extensions`, click the **service worker** link on the PR Explainer card and use the **Console** tab of the DevTools window that opens (not the PR page's console).
+  5. Run `typeof debugLlm` and confirm it says `'object'`. If it says `'undefined'`, `dist/` is a production build: run `npm run dev` and reload the extension again.
+  6. Run `await debugLlm.listModels()` and confirm your models are listed.
+  7. Run `await debugSettings.save({ model: '<a model from step 2>' })`, then `await debugLlm.chat('Reply with OK')` and confirm the reply.
 
 ### PR 2.3: Settings page UI (Medium)
 - **Why it's needed:** Users need a way to point the extension at their LLM and choose a model without editing code.
