@@ -43,7 +43,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 2.3 | Settings page UI | Medium | ✅ Done ([#9](https://github.com/larry94555/PR-explainer/pull/9)) |
 | 2.4 | Friendly LLM error messages | Small | ✅ Done ([#10](https://github.com/larry94555/PR-explainer/pull/10)) |
 | 3.1 | Diff line locator | Medium | ✅ Done ([#11](https://github.com/larry94555/PR-explainer/pull/11)) |
-| 3.2 | Hunk context extractor | Small | Not started |
+| 3.2 | Hunk context extractor | Medium | ✅ Done ([#12](https://github.com/larry94555/PR-explainer/pull/12)) |
 | 3.3 | Explanation prompt and response parser | Medium | Not started |
 | 3.4 | Popup component | Medium | Not started |
 | 3.5 | Wire clicks to explanations | Small | Not started |
@@ -207,13 +207,18 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   6. Click a line number instead of the code and confirm the same line is logged.
   7. Click the PR title, a file name, or a `@@ ... @@` hunk header and confirm nothing is logged.
 
-### PR 3.2: Hunk context extractor (Small)
+### PR 3.2: Hunk context extractor (Medium) ✅ Done
+- **Status:** Done ([#12](https://github.com/larry94555/PR-explainer/pull/12)). Grew from Small to Medium because `diffDom.ts` was reshaped so both layouts can walk neighbouring rows.
 - **Why it's needed:** One line alone is rarely enough for the model to explain it well.
-- **Problem it solves:** Adds `extractContext(line, {before, after})`, which collects the surrounding lines from the same hunk with `+`, `-`, or space markers, plus the hunk header (`@@ ... @@`) and the file's language from its extension.
-- **Unit tests added:** `extractContext.test.ts` covers a line in the middle of a hunk, lines near the start and end of a hunk (no crossing into other hunks), mixed added and removed lines, and language detection for common extensions.
-- **How to test:**
-  1. Run `npm test`.
-  2. On a PR files page, click a line and confirm the console shows the context block that will be sent to the model.
+- **Problem it solves:** Adds `locateHunk(target)` to `src/diffDom.ts`, which returns every code line of the clicked line's hunk plus its `@@ ... @@` header, never crossing into another hunk and skipping inline comment rows. Adds `extractContext(target, {before, after})` (`src/lineContext.ts`, default 10 lines each way), which returns the clicked line, the surrounding lines with `+`, `-`, or space markers, the hunk header, and the file's language from its extension or name, and `formatContext(context)`, the plain-text block that PR 3.3 will send to the model. The content script logs that block on each click.
+- **Unit tests added:** `extractContext.test.ts` runs on both saved fixtures and covers a line in the middle of a hunk, lines at the start and end of a hunk, a second hunk header inserted mid-hunk (no crossing), mixed added and removed lines, skipped comment rows, `null` for hunk headers and outside a diff, the default window, the formatted block, and language detection for common extensions, special file names, dotfiles, and unknown extensions.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test` and confirm the `extractContext` and `diffDom` tests pass.
+  2. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
+  3. Open the **Files changed** tab of a PR in **Unified** view, for example `https://github.com/larry94555/PR-explainer/pull/11/files`, press `F12`, and open the **Console** tab.
+  4. Click a line in the middle of a hunk. Confirm `[PR Explainer] context for the model:` is logged with the file name and language, the clicked line, the `@@ ... @@` header, and up to 10 lines before and after, each starting with `+`, `-`, or a space.
+  5. Click the first line under a `@@` header and confirm no lines from the hunk above appear.
+  6. Click a hunk header or the PR title and confirm nothing is logged.
 
 ### PR 3.3: Explanation prompt and response parser (Medium)
 - **Why it's needed:** The model must return the three sections in a predictable shape so the popup can show them.
