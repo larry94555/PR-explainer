@@ -151,7 +151,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 - **Unit tests added:** `ollamaClient.test.ts` with a mocked `fetch` covers parsing the model list, building the chat request body, parsing the reply, and raising typed errors for connection refused, HTTP 404 (model missing), HTTP 403 (CORS or origin blocked), other HTTP errors, bad JSON, a missing model name, and a cancelled request. `manifest.test.ts` checks the new host permissions.
 - **How to test:**
   1. Run `npm test` and confirm the `ollamaClient` tests pass.
-  2. Make sure Ollama is running (`ollama list` works) and note one model name.
+  2. Make sure Ollama is running (`ollama list` works) and note one model name. Ollama refuses chat requests from extensions unless `OLLAMA_ORIGINS` allows them, so set it to `chrome-extension://*` and restart Ollama (on macOS: `launchctl setenv OLLAMA_ORIGINS "chrome-extension://*"`, then quit and reopen the app).
   3. Run `npm run dev` (not `npm run build`, which leaves the debug helpers out), wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
   4. On `chrome://extensions`, click the **service worker** link on the PR Explainer card and use the **Console** tab of the DevTools window that opens (not the PR page's console).
   5. Run `typeof debugLlm` and confirm it says `'object'`. If it says `'undefined'`, `dist/` is a production build: run `npm run dev` and reload the extension again.
