@@ -77,11 +77,11 @@ On `chrome://extensions`, check the **PR Explainer** card:
 Then check that it runs on GitHub (needs the code from roadmap PR 1.3 or later):
 
 1. Open any pull request on github.com, for example one from `https://github.com/microsoft/vscode/pulls`.
-2. A small blue **"PR Explainer active"** badge appears in the bottom right corner of the page.
+2. A small blue **"PR Explainer active"** badge appears in the bottom right corner of the GitHub page. (This is on the PR page, not on `chrome://extensions`. There, hovering the extension's icon shows Chrome's own "Unpacked extension" tooltip, which is unrelated.)
 3. Hover over it. The tooltip shows the PR, for example `microsoft/vscode#12345 (conversation)`. With roadmap PR 1.4 or later, a second line says `Service worker: connected`.
 4. Open an issue page instead (for example from the repo's **Issues** tab). The badge does not appear there.
 
-If you want more proof (roadmap PR 1.4 or later), open the service worker's console: on `chrome://extensions`, click the blue **service worker** link on the PR Explainer card. A DevTools window opens. Its **Console** tab shows `[PR Explainer] service worker started` and, after each PR page load, `[PR Explainer] ping received`.
+If you want more proof (roadmap PR 1.4 or later), open the service worker's console: on `chrome://extensions`, click the blue **service worker** link on the PR Explainer card. A DevTools window opens. Its **Console** tab shows `[PR Explainer] service worker started`. The console only shows messages from the moment it opens, so keep it open and reload the PR tab: `[PR Explainer] ping received` then appears.
 
 ## Trying a different PR, or new commits on the same PR
 

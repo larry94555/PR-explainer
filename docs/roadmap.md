@@ -124,7 +124,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   1. Build and reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
   2. Open a PR page.
   3. Hover the badge and confirm its tooltip says "Service worker: connected" (it sends `ping` on load).
-  4. In `chrome://extensions`, click **service worker** under the extension to open its console and confirm a `ping received` log line.
+  4. In `chrome://extensions`, click **service worker** under the extension to open its console, reload the PR tab, and confirm a `ping received` log line.
 
 ---
 
