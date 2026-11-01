@@ -49,7 +49,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 3.4 | Popup component | Medium | ✅ Done ([#14](https://github.com/larry94555/PR-explainer/pull/14)) |
 | 3.5 | Wire clicks to explanations | Small | ✅ Done ([#15](https://github.com/larry94555/PR-explainer/pull/15)) |
 | 3.6 | Toolbar on/off toggle | Small | ✅ Done ([#16](https://github.com/larry94555/PR-explainer/pull/16)) |
-| 4.1 | Streaming in the Ollama client | Medium | ✅ Done |
+| 4.1 | Streaming in the Ollama client | Medium | ✅ Done ([#17](https://github.com/larry94555/PR-explainer/pull/17)) |
 | 4.2 | Stream to the popup with a Stop button | Medium | Not started |
 | 4.3 | Explanation cache and Regenerate | Small | Not started |
 | 4.4 | Multi-line selection | Medium | Not started |
@@ -301,7 +301,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 **Demo:** Click a line and watch the explanation type itself out live. Press **Stop** midway. Click the same line again and it appears instantly from the cache. Drag across five lines and get one explanation of the whole block.
 
 ### PR 4.1: Streaming in the Ollama client (Medium) ✅ Done
-- **Status:** Done.
+- **Status:** Done ([#17](https://github.com/larry94555/PR-explainer/pull/17)).
 - **Why it's needed:** Local models can take 10 to 30 seconds to finish. Watching text appear feels much faster than staring at a spinner.
 - **Problem it solves:** Adds `chatStream(messages, options)` to `LlmClient` and `OllamaClient` (`src/llm/ollamaClient.ts`). It calls `/api/chat` with `stream: true`, reads Ollama's newline-delimited JSON as it arrives, and yields each piece of text, then returns the model name and why it stopped (`stop`, or `length` when it hit the response limit). It joins JSON lines and multi-byte characters that are split across network chunks. It takes the same options as `chat()` (model, temperature, max length, and an `AbortSignal`), and raises the same `LlmError` kinds: `aborted` when the signal fires, `connection` when the stream breaks or ends before Ollama's final `done` line, `http` when Ollama sends an `{"error": ...}` line mid-reply, and `bad-response` for a line that is not valid. Aborting, or leaving a `for await` loop early, cancels the HTTP request so Ollama stops generating. `chat()` and `chatStream()` now share the code that sends a request and turns failures into errors. Nothing on the page changes yet; PR 4.2 shows the stream in the popup. Dev builds add `debugLlm.streamSample()`, which streams the sample explanation in the service worker console.
 - **Unit tests added:** `chatStream.test.ts` uses fake `ReadableStream` bodies to check the request body (`stream: true` and the model options), text pieces in order and the return value, JSON lines split across chunks, several lines in one chunk and a character split between chunks, a last line with no newline and blank lines, text on the `done` line and the `length` reason, ignoring anything after `done`, aborting mid-stream (the read in progress ends and the body is cancelled), an already-aborted signal, leaving the loop early (the body is cancelled), a stream that errors halfway, a stream that ends before `done`, an error line from Ollama, invalid lines, the HTTP and connection errors from before the stream starts, and a missing model.
