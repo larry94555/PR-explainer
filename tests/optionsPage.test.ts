@@ -109,9 +109,10 @@ describe('options page', () => {
     };
     await initOptionsPage(document, fakeDeps(fakeClient({ listModels })));
 
-    expect(text('models-status')).toBe(
-      'Could not load models: Could not connect to http://localhost:11434.',
+    expect(text('models-status')).toContain(
+      'Could not load models. Ollama is not running at http://localhost:11434.',
     );
+    expect($('models-status').querySelector('.fix code')?.textContent).toBe('ollama serve');
     expect(modelOptions()).toEqual([['qwen2.5-coder:7b', 'qwen2.5-coder:7b']]);
   });
 
@@ -239,7 +240,7 @@ describe('options page', () => {
     expect($<HTMLButtonElement>('test-connection').disabled).toBe(false);
   });
 
-  it('shows the error text when the test fails', async () => {
+  it('shows a friendly message and fix when the test fails', async () => {
     const chat = async () => {
       throw new LlmError('model-not-found', 'Model "qwen2.5-coder:7b" is not installed.');
     };
@@ -247,7 +248,28 @@ describe('options page', () => {
 
     await page.testConnection();
 
-    expect(text('test-status')).toBe('Test failed: Model "qwen2.5-coder:7b" is not installed.');
+    expect(text('test-status')).toBe(
+      'Test failed. The model "qwen2.5-coder:7b" is not installed. ' +
+        'Run ollama pull qwen2.5-coder:7b, then click Refresh.',
+    );
+    expect($('test-status').querySelector('.fix code')?.textContent).toBe(
+      'ollama pull qwen2.5-coder:7b',
+    );
+  });
+
+  it('uses the platform for the OLLAMA_ORIGINS fix', async () => {
+    const chat = async () => {
+      throw new LlmError('origin-blocked', 'The server refused this extension (Forbidden).');
+    };
+    const deps = { ...fakeDeps(fakeClient({ chat })), platform: 'windows' as const };
+    const page = await initOptionsPage(document, deps);
+
+    await page.testConnection();
+
+    expect(text('test-status')).toContain('Ollama blocked the request from this extension.');
+    expect($('test-status').querySelector('.fix code')?.textContent).toBe(
+      'setx OLLAMA_ORIGINS "chrome-extension://*"',
+    );
   });
 
   it('asks for a model before testing', async () => {

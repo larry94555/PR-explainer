@@ -60,3 +60,16 @@ button {
 .hint:empty {
   display: none;
 }
+
+.fix {
+  display: block;
+  margin-top: 0.15rem;
+}
+
+code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.95em;
+  padding: 0 0.2em;
+  border-radius: 3px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}

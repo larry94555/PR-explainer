@@ -41,7 +41,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 2.1 | Settings storage | Small | ✅ Done ([#7](https://github.com/larry94555/PR-explainer/pull/7)) |
 | 2.2 | Ollama client: list models and non-streaming chat | Medium | ✅ Done ([#8](https://github.com/larry94555/PR-explainer/pull/8)) |
 | 2.3 | Settings page UI | Medium | ✅ Done ([#9](https://github.com/larry94555/PR-explainer/pull/9)) |
-| 2.4 | Friendly LLM error messages | Small | Not started |
+| 2.4 | Friendly LLM error messages | Small | ✅ Done ([#10](https://github.com/larry94555/PR-explainer/pull/10)) |
 | 3.1 | Diff line locator | Medium | Not started |
 | 3.2 | Hunk context extractor | Small | Not started |
 | 3.3 | Explanation prompt and response parser | Medium | Not started |
@@ -173,14 +173,19 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   7. Click **Test connection** and confirm a reply such as "OK" and a time in milliseconds.
   8. Change the URL to `http://example.com` and click **Save**: confirm the URL error appears and, after reloading, the old URL is still there.
 
-### PR 2.4: Friendly LLM error messages (Small)
+### PR 2.4: Friendly LLM error messages (Small) ✅ Done
+- **Status:** Done ([#10](https://github.com/larry94555/PR-explainer/pull/10)).
 - **Why it's needed:** The most common first-run problems are "Ollama isn't running", "model not pulled", and "origin blocked". Users need to know how to fix them.
-- **Problem it solves:** Adds `describeLlmError(error)`, which turns each typed error into a short message and a fix, for example "Start Ollama with `ollama serve`", "Run `ollama pull <model>`", or "Set `OLLAMA_ORIGINS=chrome-extension://*` and restart Ollama". Uses it on the settings page.
-- **Unit tests added:** `describeLlmError.test.ts` checks the message and fix for each error type and a generic fallback for unknown errors.
-- **How to test:**
-  1. Stop Ollama, click **Test connection**, and confirm the "not running" message.
-  2. Start Ollama, type a model name that is not installed, and confirm the "run `ollama pull`" message.
-  3. Pick a real model and confirm the test succeeds.
+- **Problem it solves:** Adds `describeLlmError(error, context)` (`src/llm/describeLlmError.ts`), which turns each `LlmError` kind into a short message and a fix, for example "Start Ollama (open the Ollama app, or run `ollama serve`)", "Run `ollama pull <model>`, then click Refresh", or the `OLLAMA_ORIGINS` command for the user's system (`setx` on Windows, `launchctl setenv` on macOS, a generic hint elsewhere, picked from the browser's user agent). Unknown errors get a generic fallback. The settings page uses it for **Refresh** and **Test connection** failures, showing the fix on its own line with commands as code.
+- **Unit tests added:** `describeLlmError.test.ts` checks the message and fix for each error kind (with and without a known URL or model), the `OLLAMA_ORIGINS` command for each platform, the generic fallback for unknown errors, and platform detection from user agents. `optionsPage.test.ts` now checks the friendly text for a failed model load, a failed test, and a blocked origin on Windows.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test` and confirm the `describeLlmError` and `optionsPage` tests pass.
+  2. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)) and open the settings page (see step 4 of PR 2.3).
+  3. Stop Ollama: right-click the Ollama icon in the system tray and choose **Quit Ollama** (or run `taskkill /F /IM "ollama app.exe"` and `taskkill /F /IM ollama.exe`). Click **Refresh** and confirm "Could not load models. Ollama is not running at http://localhost:11434." with a "Start Ollama" fix below it. Click **Test connection** and confirm the same message after "Test failed."
+  4. Start Ollama from the Start menu, click **Refresh**, and confirm the models load.
+  5. Make the saved model one that is not installed: on `chrome://extensions`, open the PR Explainer **service worker** console and run `await debugSettings.save({ model: 'not-a-model:1b' })`. Reload the settings page, confirm the dropdown shows "not-a-model:1b (not installed)", click **Test connection**, and confirm the message says to run `ollama pull not-a-model:1b`.
+  6. Pick a real model, click **Test connection**, and confirm the reply.
+  7. Optional, origin blocked: run `setx OLLAMA_ORIGINS ""`, quit and reopen Ollama, click **Test connection**, and confirm the fix shows `setx OLLAMA_ORIGINS "chrome-extension://*"`. Run that command, quit and reopen Ollama, and confirm the test succeeds again. (Newer Ollama versions may already allow extensions, in which case this step cannot fail.)
 
 ---
 

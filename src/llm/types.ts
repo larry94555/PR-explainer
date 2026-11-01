@@ -41,8 +41,8 @@ export interface LlmClient {
 }
 
 /**
- * Why a call to the LLM failed. PR 2.4 turns each kind into a message with a
- * fix for the user.
+ * Why a call to the LLM failed. describeLlmError (describeLlmError.ts) turns
+ * each kind into a message with a fix for the user.
  * - connection: nothing answered at the URL (server not running, wrong port).
  * - model-not-found: the server does not have the requested model.
  * - origin-blocked: the server refused the extension's origin (HTTP 403).
