@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PR Explainer: popup demo</title>
+    <style>
+      body {
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+        margin: 24px;
+        color: #1f2328;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      .controls button {
+        padding: 4px 10px;
+      }
+      table.diff {
+        border-collapse: collapse;
+        font:
+          12px/20px ui-monospace,
+          Consolas,
+          monospace;
+        width: 100%;
+        max-width: 900px;
+      }
+      .diff td {
+        padding: 0 8px;
+        white-space: pre;
+        cursor: pointer;
+      }
+      .diff .num {
+        color: #59636e;
+        text-align: right;
+        width: 40px;
+      }
+      .diff tr.added {
+        background: #dafbe1;
+      }
+      .diff tr.removed {
+        background: #ffebe9;
+      }
+      .diff tr:hover td {
+        outline: 1px solid #0969da33;
+      }
+      .spacer {
+        height: 70vh;
+      }
+      .hint {
+        color: #59636e;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Popup demo</h1>
+    <p class="hint">
+      Pick a state, then click any line of the fake diff. Press Esc or click outside to close. Lines
+      near the bottom of the window open the popup above the line.
+    </p>
+    <div class="controls" role="radiogroup" aria-label="Popup state">
+      <label><input type="radio" name="state" value="loading" /> Loading</label>
+      <label><input type="radio" name="state" value="done" checked /> Explanation</label>
+      <label><input type="radio" name="state" value="slow" /> Loading, then explanation</label>
+      <label><input type="radio" name="state" value="failed" /> Error</label>
+      <label><input type="radio" name="state" value="unsafe" /> Unsafe model output</label>
+    </div>
+    <p id="status" class="hint">Last event: none</p>
+    <table class="diff" id="diff"></table>
+    <div class="spacer"></div>
+    <table class="diff" id="diff-bottom"></table>
+    <script type="module" src="./popupDemo.ts"></script>
+  </body>
+</html>

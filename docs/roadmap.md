@@ -45,7 +45,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 3.1 | Diff line locator | Medium | ✅ Done ([#11](https://github.com/larry94555/PR-explainer/pull/11)) |
 | 3.2 | Hunk context extractor | Medium | ✅ Done ([#12](https://github.com/larry94555/PR-explainer/pull/12)) |
 | 3.3 | Explanation prompt and response parser | Medium | ✅ Done ([#13](https://github.com/larry94555/PR-explainer/pull/13)) |
-| 3.4 | Popup component | Medium | Not started |
+| 3.4 | Popup component | Medium | ✅ Done ([#14](https://github.com/larry94555/PR-explainer/pull/14)) |
 | 3.5 | Wire clicks to explanations | Small | Not started |
 | 3.6 | Toolbar on/off toggle | Small | Not started |
 | 4.1 | Streaming in the Ollama client | Medium | Not started |
@@ -233,13 +233,21 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   5. Open the **Files changed** tab of a PR in **Unified** view, press `F12`, open the **Console** tab, and click an added line. Confirm `[PR Explainer] asking the model…` is logged, then (after a few seconds to a minute) `[PR Explainer] explanation` with the three sections.
   6. Quit Ollama from the system tray, click a line again, and confirm the explanation has `status: "failed"` with a message saying Ollama is not running and a fix. Open Ollama again afterwards.
 
-### PR 3.4: Popup component (Medium)
+### PR 3.4: Popup component (Medium) ✅ Done
+- **Status:** Done ([#14](https://github.com/larry94555/PR-explainer/pull/14)).
 - **Why it's needed:** Users need to see the explanation next to the code they clicked.
-- **Problem it solves:** Adds a popup rendered in a Shadow DOM root: positioned next to the clicked line, three titled sections, loading spinner, error state (using `describeLlmError`), close button, and closing on **Esc** or a click outside. Markdown in the answer is rendered safely (sanitized, no raw HTML).
-- **Unit tests added:** `popup.test.ts` (jsdom) covers the loading, success, and error states, closing on **Esc** and outside click, that styles stay inside the shadow root, and that `<script>` or `onerror` in model output is not executed.
-- **How to test:**
-  1. Run `npm test`.
-  2. Run `npm run demo:popup` (a static demo page with fake data, added in this PR) and check each state looks right.
+- **Problem it solves:** Adds `openPopup(anchor)` (`src/popup/popup.ts`), a popup rendered in a Shadow DOM root with a loading state (spinner and model name), a done state (the three titled sections), and an error state (the message and fix from `describeLlmError`, with commands shown as code). It sits below the clicked line, or above it when there is no room below, and when neither fits it moves up just enough to stay fully inside the window. It stays inside the window horizontally too, and scrolls with the page. It closes with its close button, **Esc**, or a click outside, and opening a new popup closes the old one. Model output is untrusted, so `renderMarkdown` (`src/popup/renderMarkdown.ts`) builds DOM nodes for a small markdown subset (paragraphs, lists, code blocks, inline code, bold, italic) and never parses HTML: tags show as text and links show as their text only. Adds `npm run demo:popup`, a static demo page with fake data (`demo/`, not part of the extension build). Nothing on GitHub changes yet; PR 3.5 opens the popup on clicks.
+- **Unit tests added:** `popup.test.ts` (jsdom) covers the loading, done, and error states, closing with the button, **Esc**, and an outside click (but not an inside click), that listeners are removed after closing, one popup at a time, ignoring updates after closing, that styles stay inside the shadow root, positioning next to an element, that `<script>`, `onerror`, and `javascript:` links in model output or errors create no elements and do not run, and `computePosition` (below, above, no room either way for a line mid-window, a popup taller than the window, window edges, page scroll). `renderMarkdown.test.ts` covers paragraphs, inline code, bold, italic, lists with continuation lines, code blocks, headings, links, and escaped HTML.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test` and confirm the `popup` and `renderMarkdown` tests pass.
+  2. Run `npm run demo:popup`. Your browser opens the demo page (if it does not, open the `Local:` address it prints, adding `/popup.html`). Press `Ctrl+C` in Command Prompt to stop it when you are done.
+  3. With **Explanation** selected, click a line of the fake diff. Confirm a popup appears just below the line with **What it does**, **Why it's needed**, and **Concerns**, a bullet list, inline code, and a code block, and the model name in the header.
+  4. Select **Loading, then explanation** and click a line. Confirm a spinner and "Asking qwen2.5-coder:7b…" show for two seconds, then the three sections replace them.
+  5. Select **Error** and click a line. Confirm a red "Ollama is not running at http://localhost:11434." and a fix with `ollama serve` shown as code.
+  6. Select **Unsafe model output** and click a line. Confirm the `<img>`, `<script>`, `<b>`, and `<iframe>` tags appear as plain text, no alert box opens, and "A link that goes nowhere" is not a link.
+  7. Press **Esc** and confirm the popup closes and "Last event: closed" shows. Open it again, click inside the popup (it stays open), then click on the page outside it (it closes). Open it again and click the **×** button (it closes).
+  8. Scroll down to the second fake diff, scroll so its lines sit near the bottom of the window, and click one. Confirm the popup opens above the line. Scroll the page and confirm the popup moves with the line.
+  9. Run `npm run build` and confirm it still succeeds (the demo is not part of `dist/`).
 
 ### PR 3.5: Wire clicks to explanations (Small)
 - **Why it's needed:** This joins the locator, context, service worker, and popup into the full feature.
