@@ -20,7 +20,7 @@ This roadmap breaks the project into **milestones** and **PRs**.
 All calls to the LLM go through the extension's **service worker**, not the content script. That keeps the LLM address out of the GitHub page and avoids most CORS problems.
 
 ### Setup used by every "How to test" section
-1. Install Node 22+ and run `npm install`.
+1. Install Node 22.22.2+ (or 24.15+) and run `npm install`.
 2. Install Ollama and pull a model, for example `ollama pull qwen2.5-coder:7b`.
 3. Run `npm run build` (or `npm run dev` for watch mode).
 4. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose the `dist/` folder. After rebuilding, click the reload icon on the extension card.

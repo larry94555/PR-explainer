@@ -4,7 +4,7 @@ See [features.md](features.md) and [roadmap.md](roadmap.md).
 
 ## Development
 
-Requires Node 22.22 or newer (current test tooling needs it).
+Requires Node 22.22.2 or newer on the 22 line, or Node 24.15.0 or newer (jsdom and Vitest need these). CI tests both 22.22.2 and the latest 24.
 
 | Command | What it does |
 |---|---|
