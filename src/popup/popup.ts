@@ -7,8 +7,8 @@
 // close button, the Esc key, or a click anywhere outside it. Only one popup
 // is open at a time: opening a new one closes the old one.
 //
-// PR 3.5 opens it from the content script's click handler. Until then it is
-// only used by the demo page (`npm run demo:popup`).
+// The content script opens it from its click handler (src/clickHandler.ts),
+// and the demo page (`npm run demo:popup`) shows it with fake data.
 
 import type { Explanation, SectionKey } from '../explain/parseExplanation';
 import { appendInline, renderMarkdown } from './renderMarkdown';
@@ -162,7 +162,7 @@ export function openPopup(
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') popup.close();
   };
-  // mousedown, not click: the click that opens a popup (PR 3.5) has already
+  // mousedown, not click: the click that opens a popup (src/clickHandler.ts) has already
   // finished its mousedown, so it cannot close the popup it just opened.
   const onMouseDown = (event: MouseEvent) => {
     if (!event.composedPath().includes(host)) popup.close();

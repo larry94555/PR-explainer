@@ -46,7 +46,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 3.2 | Hunk context extractor | Medium | ✅ Done ([#12](https://github.com/larry94555/PR-explainer/pull/12)) |
 | 3.3 | Explanation prompt and response parser | Medium | ✅ Done ([#13](https://github.com/larry94555/PR-explainer/pull/13)) |
 | 3.4 | Popup component | Medium | ✅ Done ([#14](https://github.com/larry94555/PR-explainer/pull/14)) |
-| 3.5 | Wire clicks to explanations | Small | Not started |
+| 3.5 | Wire clicks to explanations | Small | ✅ Done ([#NN](https://github.com/larry94555/PR-explainer/pull/NN)) |
 | 3.6 | Toolbar on/off toggle | Small | Not started |
 | 4.1 | Streaming in the Ollama client | Medium | Not started |
 | 4.2 | Stream to the popup with a Stop button | Medium | Not started |
@@ -249,15 +249,23 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   8. Scroll down to the second fake diff, scroll so its lines sit near the bottom of the window, and click one. Confirm the popup opens above the line. Scroll the page and confirm the popup moves with the line.
   9. Run `npm run build` and confirm it still succeeds (the demo is not part of `dist/`).
 
-### PR 3.5: Wire clicks to explanations (Small)
+### PR 3.5: Wire clicks to explanations (Small) ✅ Done
+- **Status:** Done ([#NN](https://github.com/larry94555/PR-explainer/pull/NN)).
 - **Why it's needed:** This joins the locator, context, service worker, and popup into the full feature.
-- **Problem it solves:** Adds a click listener on the diff that ignores clicks on GitHub's own buttons (comment "+" button, links, menus), shows the popup in the loading state, sends an `explain` request, and fills in the result.
-- **Unit tests added:** `clickHandler.test.ts` checks that clicks on code lines trigger a request, that clicks on the comment button or links do not, and that a second click while a request is pending replaces the first popup.
-- **How to test:**
-  1. Build, reload, and open a PR's **Files changed** tab.
-  2. Click an added line and confirm a popup with a spinner appears and is replaced by the three sections.
-  3. Click GitHub's blue "+" comment button and confirm GitHub's comment box opens and no popup appears.
-  4. Stop Ollama, click a line, and confirm the friendly error appears in the popup.
+- **Problem it solves:** Adds `createClickHandler` (`src/clickHandler.ts`), which the content script attaches to the page. A click on a diff code line opens the popup in the loading state next to the line's row (found by the new `locateRow` in `src/diffDom.ts`), sends an `explain` request with the line's context, and fills in the three sections or the error's message and fix. If the service worker cannot answer at all (timeout, or "Extension context invalidated" after a reload), the popup shows a friendly message and fix too. Clicks are left alone when they land on GitHub's own controls (the comment "+" button, links, buttons, menus, form fields), when they finish a text selection, or when Shift, Ctrl, Alt, or Cmd is held, so selecting and copying code still works. Clicking another line while a request is pending replaces the popup, and the late answer is dropped. Dev builds still log the context block sent to the model; the old "explanation" console log is gone.
+- **Unit tests added:** `clickHandler.test.ts` runs on both saved fixtures and checks that a click on a code line sends one request with the right context and anchors the popup to the line's row, that done, failed, and unreachable-service-worker results reach the popup, that hunk headers, clicks outside a diff, the comment button (and the icon inside it), links, menu items, modified clicks, and clicks that end a text selection send nothing, and that a second click while the first request is pending replaces the popup and drops the late answer. One test uses the real popup to check the loading state, the three sections, and that clicks inside the popup send nothing.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test` and confirm the `clickHandler` tests pass (and all the others still do).
+  2. Make sure Ollama is running (`ollama list` works), `OLLAMA_ORIGINS` is set (see PR 3.3), and a model is chosen on the settings page.
+  3. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
+  4. Open the **Files changed** tab of a PR in **Unified** view, for example `https://github.com/larry94555/PR-explainer/pull/14/files`, and refresh the page so the new content script loads.
+  5. Click the code of a green (added) line. Confirm a popup opens just below the line with a spinner and "Asking the model…", then (after a few seconds to a minute) **What it does**, **Why it's needed**, and **Concerns**, with the model name in the header.
+  6. Click a different line before the first answer arrives. Confirm the first popup closes, a new one opens next to the new line, and only the new line's explanation appears.
+  7. Hover a line and click GitHub's blue **+** comment button. Confirm GitHub's comment box opens and no popup appears. Also click a file name link and confirm no popup appears.
+  8. Drag across some code to select it, then release. Confirm no popup opens and the text stays selected (`Ctrl+C` copies it). `Ctrl`+click a line and confirm no popup opens either.
+  9. Press **Esc**, or click outside the popup, and confirm it closes.
+  10. Quit Ollama from the system tray, click a line, and confirm the popup shows the red "Ollama is not running" message and a fix. Open Ollama again afterwards.
+  11. On `chrome://extensions`, click the extension's reload icon, go back to the PR tab **without** refreshing it, and click a line. Confirm the popup says "PR Explainer did not get an answer. Could not reach the service worker: Extension context invalidated." and suggests reloading the page. Refresh the page and confirm clicks work again.
 
 ### PR 3.6: Toolbar on/off toggle (Small)
 - **Why it's needed:** Users sometimes want to click and select code on GitHub without triggering popups.
