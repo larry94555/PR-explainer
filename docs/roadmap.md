@@ -38,7 +38,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 1.2 | Manifest V3 and empty extension parts | Small | ✅ Done ([#4](https://github.com/larry94555/PR-explainer/pull/4)) |
 | 1.3 | PR page detection and "active" badge | Small | ✅ Done ([#5](https://github.com/larry94555/PR-explainer/pull/5)) |
 | 1.4 | Message passing between content script and service worker | Small | ✅ Done ([#6](https://github.com/larry94555/PR-explainer/pull/6)) |
-| 2.1 | Settings storage | Small | ✅ Done |
+| 2.1 | Settings storage | Small | ✅ Done ([#7](https://github.com/larry94555/PR-explainer/pull/7)) |
 | 2.2 | Ollama client: list models and non-streaming chat | Medium | Not started |
 | 2.3 | Settings page UI | Medium | Not started |
 | 2.4 | Friendly LLM error messages | Small | Not started |
@@ -133,7 +133,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 **Demo:** Open the extension's settings page. It shows the Ollama URL, a dropdown filled with your installed models, and a **Test** button. Click it and see a short reply from your local model. Stop Ollama and click **Test** again to see a clear "Ollama is not running" message with a fix.
 
 ### PR 2.1: Settings storage (Small) ✅ Done
-- **Status:** Done.
+- **Status:** Done, merged in [#7](https://github.com/larry94555/PR-explainer/pull/7).
 - **Why it's needed:** The LLM URL, model name, and options must persist and be read from several places.
 - **Problem it solves:** Adds `src/settings.ts` with a typed `Settings` schema, defaults (`http://localhost:11434`, no model, temperature 0.2, max response length 1024 tokens), `getSettings()`, `saveSettings(partialUpdate)`, and `validateSettings()`. The URL must be `http://` or `https://` on `localhost`, `127.0.0.1` or `[::1]`, with no path. Only values the user saved are stored (in `chrome.storage.sync` under one `settings` key), and a bad stored value falls back to its default. Dev builds expose `debugSettings` in the service worker console for manual testing.
 - **Unit tests added:** `settings.test.ts` with a fake `chrome.storage` covers defaults on first run, saving and reloading, merging partial updates, storing only saved fields, trimming input, rejecting invalid URLs (remote, LAN, lookalike hosts, paths, other schemes) and out-of-range temperatures and response lengths, storing nothing when a save is rejected, and falling back to defaults for bad stored values.
