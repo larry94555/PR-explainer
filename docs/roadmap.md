@@ -42,7 +42,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 2.2 | Ollama client: list models and non-streaming chat | Medium | ✅ Done ([#8](https://github.com/larry94555/PR-explainer/pull/8)) |
 | 2.3 | Settings page UI | Medium | ✅ Done ([#9](https://github.com/larry94555/PR-explainer/pull/9)) |
 | 2.4 | Friendly LLM error messages | Small | ✅ Done ([#10](https://github.com/larry94555/PR-explainer/pull/10)) |
-| 3.1 | Diff line locator | Medium | Not started |
+| 3.1 | Diff line locator | Medium | ✅ Done ([#11](https://github.com/larry94555/PR-explainer/pull/11)) |
 | 3.2 | Hunk context extractor | Small | Not started |
 | 3.3 | Explanation prompt and response parser | Medium | Not started |
 | 3.4 | Popup component | Medium | Not started |
@@ -193,15 +193,19 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 
 **Demo:** Open the **Files changed** tab of a real PR. Click any added line. A popup appears next to the line with three sections, **What it does**, **Why it's needed**, and **Concerns**, written by your local model.
 
-### PR 3.1: Diff line locator (Medium)
+### PR 3.1: Diff line locator (Medium) ✅ Done
+- **Status:** Done ([#11](https://github.com/larry94555/PR-explainer/pull/11)).
 - **Why it's needed:** Before we can explain a click, we must turn it into "which file, which line, which side of the diff".
-- **Problem it solves:** Adds a `DiffDom` adapter with `locateLine(element)`, which returns `{filePath, lineNumber, side: 'added' | 'removed' | 'context', text}`. All GitHub-specific CSS selectors live in this one file so GitHub markup changes only need a fix here.
-- **Unit tests added:** `diffDom.test.ts` runs against saved HTML fixtures of GitHub's unified diff. It covers added, removed, and context lines, clicks on the line number versus the code, and clicks outside a diff (returns `null`).
-- **How to test:**
-  1. Run `npm test`.
-  2. Build, reload, and open a PR's **Files changed** tab.
-  3. Click several lines and confirm the console logs the right file path, line number, and side for each.
-  4. Click the PR title and confirm nothing is logged.
+- **Problem it solves:** Adds `locateLine(target)` (`src/diffDom.ts`), which returns `{filePath, lineNumber, side: 'added' | 'removed' | 'context', text}` for a click anywhere on a diff line (code, line number, or `+`/`-` marker), or `null` for hunk headers, expand rows, comments, and anything outside a diff. Removed lines use the old file's line number; added and context lines use the new file's. All GitHub-specific CSS selectors live in this one file so GitHub markup changes only need a fix here. GitHub serves two diff layouts, the classic one and the newer React one (used by the new "Files changed" experience), and both are supported in unified view; split view comes in PR 7.2. The content script logs each located click to the page console.
+- **Unit tests added:** `diffDom.test.ts` runs against two saved HTML fixtures (`tests/fixtures/github-diff-classic.html` and `github-diff-new.html`, trimmed from real GitHub pages). For each layout it covers added, removed, and context lines, clicks on the line number or marker versus the code, nested highlight spans and text nodes, hunk headers and expand rows (return `null`), clicks outside a diff (return `null`), and where the file path comes from.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test` and confirm the `diffDom` tests pass.
+  2. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
+  3. Open the **Files changed** tab of a PR, for example `https://github.com/larry94555/PR-explainer/pull/10/files`, make sure the diff is in **Unified** view (the gear or "Diff view" setting at the top), then press `F12` and open the **Console** tab.
+  4. Click the code of a green (added) line. Confirm the console logs `[PR Explainer] clicked line` with the right `filePath`, the `lineNumber` shown in the right-hand number column, `side: "added"`, and the line's text.
+  5. Click a red (removed) line and confirm `side: "removed"` with the left-hand line number, then a plain (context) line and confirm `side: "context"` with the right-hand number.
+  6. Click a line number instead of the code and confirm the same line is logged.
+  7. Click the PR title, a file name, or a `@@ ... @@` hunk header and confirm nothing is logged.
 
 ### PR 3.2: Hunk context extractor (Small)
 - **Why it's needed:** One line alone is rarely enough for the model to explain it well.
