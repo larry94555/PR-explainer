@@ -176,9 +176,20 @@ describe('OllamaClient.chatStream', () => {
   it('raises aborted without calling the server when the signal already fired', async () => {
     const controller = new AbortController();
     controller.abort();
-    const fetch = vi.fn<FetchLike>(async (_url, init) => {
-      if (init?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      return streamResponse([DONE]);
+    // This fetch ignores the signal and would happily answer.
+    const { client: c, fetch } = client(streamResponse([line('a'), DONE]));
+    await expectLlmError(
+      collect(c.chatStream(MESSAGES, { model: MODEL, signal: controller.signal })),
+      'aborted',
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('raises aborted when fetch rejects an aborted request with an error not named AbortError', async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn<FetchLike>(async () => {
+      controller.abort();
+      throw new TypeError('Failed to fetch');
     });
     const c = new OllamaClient({ baseUrl: BASE, fetch });
     await expectLlmError(

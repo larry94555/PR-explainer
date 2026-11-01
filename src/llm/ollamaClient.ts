@@ -71,6 +71,8 @@ export class OllamaClient implements LlmClient {
     const model = requireModel(options);
     const { signal } = options;
     const body = { ...buildChatBody(messages, { ...options, model }), stream: true };
+    // Checked here too, because an injected fetch may ignore the signal.
+    throwIfAborted(signal);
     const response = await this.send('/api/chat', chatInit(body, signal), model);
     if (!response.body) throw badResponse('/api/chat', 'no response body');
 
@@ -150,7 +152,8 @@ export class OllamaClient implements LlmClient {
     try {
       response = await this.fetch(`${this.baseUrl}${path}`, init);
     } catch (cause) {
-      if (isAbort(cause)) throw abortedError(cause);
+      // Some fetches reject an aborted request with an error not named AbortError.
+      if (isAbort(cause) || init.signal?.aborted) throw abortedError(cause);
       // fetch rejects with a TypeError ("Failed to fetch") when nothing listens.
       throw new LlmError('connection', `Could not connect to ${this.baseUrl}.`, { cause });
     }
