@@ -1,6 +1,7 @@
 // Service worker. Answers requests from the content script (see
 // src/messaging/). All calls to the local LLM run here (see src/llm/).
 import { createExplainHandler } from './explain/explainHandler';
+import { buildExplainPrompt } from './explain/explainPrompt';
 import { SAMPLE_CONTEXT } from './explain/sampleContext';
 import { createLlmClient } from './llm/createClient';
 import { detectPlatform } from './llm/describeLlmError';
@@ -48,6 +49,18 @@ if (import.meta.env.MODE === 'development') {
           model: settings.model,
           temperature: settings.temperature,
           maxResponseTokens: settings.maxResponseTokens,
+        });
+      },
+      // Streams the sample explanation, piece by piece:
+      //   for await (const c of debugLlm.streamSample()) console.log(c)
+      // Pass an AbortSignal to stop it early.
+      streamSample: async function* (signal?: AbortSignal) {
+        const settings = await getSettings();
+        return yield* createLlmClient(settings).chatStream(buildExplainPrompt(SAMPLE_CONTEXT), {
+          model: settings.model,
+          temperature: settings.temperature,
+          maxResponseTokens: settings.maxResponseTokens,
+          signal,
         });
       },
       // Runs the same code as an `explain` request from a GitHub page.

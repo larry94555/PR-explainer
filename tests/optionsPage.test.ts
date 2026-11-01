@@ -24,6 +24,7 @@ function fakeClient(overrides: Partial<LlmClient> = {}): LlmClient {
   return {
     listModels: vi.fn(async () => MODELS),
     chat: vi.fn(async (_messages, options) => ({ content: 'OK', model: options.model })),
+    chatStream: vi.fn(),
     ...overrides,
   };
 }

@@ -1,6 +1,7 @@
 // LlmClient for Ollama's HTTP API (https://github.com/ollama/ollama/blob/main/docs/api.md):
-// GET /api/tags lists installed models, POST /api/chat answers a conversation.
-// Streaming arrives in PR 4.1; for now every chat waits for the full reply.
+// GET /api/tags lists installed models, POST /api/chat answers a conversation,
+// either all at once (chat) or as a stream of newline-delimited JSON objects
+// (chatStream).
 //
 // Runs in the service worker. The manifest's localhost host_permissions let
 // the worker reach Ollama without CORS, but Chrome still sends an Origin
@@ -11,6 +12,7 @@ import {
   type ChatMessage,
   type ChatOptions,
   type ChatReply,
+  type ChatStreamEnd,
   type LlmClient,
   type ModelInfo,
 } from './types';
@@ -46,16 +48,10 @@ export class OllamaClient implements LlmClient {
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatReply> {
-    const model = options.model.trim();
-    if (!model) throw new LlmError('no-model', 'No model selected. Pick one in the settings.');
+    const model = requireModel(options);
     const body = await this.request(
       '/api/chat',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildChatBody(messages, { ...options, model })),
-        signal: options.signal,
-      },
+      chatInit(buildChatBody(messages, { ...options, model }), options.signal),
       model,
     );
     const { message, model: replyModel } = body as {
@@ -68,28 +64,78 @@ export class OllamaClient implements LlmClient {
     return { content: message.content, model: typeof replyModel === 'string' ? replyModel : model };
   }
 
+  async *chatStream(
+    messages: ChatMessage[],
+    options: ChatOptions,
+  ): AsyncGenerator<string, ChatStreamEnd, undefined> {
+    const model = requireModel(options);
+    const { signal } = options;
+    const body = { ...buildChatBody(messages, { ...options, model }), stream: true };
+    // Checked here too, because an injected fetch may ignore the signal.
+    throwIfAborted(signal);
+    const response = await this.send('/api/chat', chatInit(body, signal), model);
+    if (!response.body) throw badResponse('/api/chat', 'no response body');
+
+    // Cancelling the reader on abort makes a pending read() finish, even when
+    // the stream itself ignores the signal, so the loop below always notices.
+    const reader = response.body.getReader();
+    const onAbort = () => void reader.cancel().catch(() => {});
+    signal?.addEventListener('abort', onAbort);
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finished = false;
+    try {
+      while (!finished) {
+        throwIfAborted(signal);
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch (cause) {
+          throw this.readError(cause, signal);
+        }
+        throwIfAborted(signal);
+        // At the end of the stream, flush the decoder and add a newline so a
+        // last line without one is still handled.
+        buffer += chunk.done
+          ? decoder.decode() + '\n'
+          : decoder.decode(chunk.value, { stream: true });
+
+        let newline: number;
+        while (!finished && (newline = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, newline).trim();
+          buffer = buffer.slice(newline + 1);
+          if (!line) continue;
+          const part = parseStreamLine(line);
+          if (part.content) yield part.content;
+          if (part.done) {
+            finished = true;
+            return {
+              model: part.model ?? model,
+              ...(part.doneReason && { doneReason: part.doneReason }),
+            };
+          }
+        }
+        if (chunk.done) break;
+      }
+      throw new LlmError('connection', `The connection to ${this.baseUrl} closed mid-reply.`);
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+      // Ends the HTTP request when the caller stops early or something threw,
+      // so Ollama stops generating.
+      if (!finished) await reader.cancel().catch(() => {});
+    }
+  }
+
   // Sends one request and returns the parsed JSON body, turning every failure
   // into an LlmError. `model` is set for requests where a 404 means the model
   // is missing.
   private async request(path: string, init: RequestInit, model?: string): Promise<unknown> {
-    const url = `${this.baseUrl}${path}`;
-    let response: Response;
-    try {
-      response = await this.fetch(url, init);
-    } catch (cause) {
-      if (isAbort(cause)) throw new LlmError('aborted', 'The request was cancelled.', { cause });
-      // fetch rejects with a TypeError ("Failed to fetch") when nothing listens.
-      throw new LlmError('connection', `Could not connect to ${this.baseUrl}.`, { cause });
-    }
-
-    if (!response.ok) throw await httpError(response, path, model);
-
+    const response = await this.send(path, init, model);
     let text: string;
     try {
       text = await response.text();
     } catch (cause) {
-      if (isAbort(cause)) throw new LlmError('aborted', 'The request was cancelled.', { cause });
-      throw new LlmError('connection', `The connection to ${this.baseUrl} was lost.`, { cause });
+      throw this.readError(cause);
     }
     try {
       const parsed: unknown = JSON.parse(text);
@@ -99,6 +145,95 @@ export class OllamaClient implements LlmClient {
       throw new LlmError('bad-response', `${path} did not return a JSON object.`, { cause });
     }
   }
+
+  // Sends one request and returns the response once its status is OK.
+  private async send(path: string, init: RequestInit, model?: string): Promise<Response> {
+    let response: Response;
+    try {
+      response = await this.fetch(`${this.baseUrl}${path}`, init);
+    } catch (cause) {
+      // Some fetches reject an aborted request with an error not named AbortError.
+      if (isAbort(cause) || init.signal?.aborted) throw abortedError(cause);
+      // fetch rejects with a TypeError ("Failed to fetch") when nothing listens.
+      throw new LlmError('connection', `Could not connect to ${this.baseUrl}.`, { cause });
+    }
+    if (!response.ok) throw await httpError(response, path, model);
+    return response;
+  }
+
+  // The error for a body that failed while it was being read.
+  private readError(cause: unknown, signal?: AbortSignal): LlmError {
+    if (isAbort(cause) || signal?.aborted) return abortedError(cause);
+    return new LlmError('connection', `The connection to ${this.baseUrl} was lost.`, { cause });
+  }
+}
+
+function requireModel(options: ChatOptions): string {
+  const model = options.model.trim();
+  if (!model) throw new LlmError('no-model', 'No model selected. Pick one in the settings.');
+  return model;
+}
+
+function chatInit(body: object, signal: AbortSignal | undefined): RequestInit {
+  return {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  };
+}
+
+interface StreamPart {
+  content: string;
+  done: boolean;
+  model?: string;
+  doneReason?: string;
+}
+
+// One line of Ollama's stream: {"model": ..., "message": {"content": "..."},
+// "done": false}, ending with "done": true (and "done_reason"). If the model
+// fails mid-reply, Ollama sends {"error": "..."} instead.
+function parseStreamLine(line: string): StreamPart {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch (cause) {
+    throw new LlmError('bad-response', '/api/chat sent a line that is not JSON.', { cause });
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw badResponse('/api/chat', 'a stream line is not an object');
+  }
+  const { error, message, done, model, done_reason } = parsed as {
+    error?: unknown;
+    message?: { content?: unknown };
+    done?: unknown;
+    model?: unknown;
+    done_reason?: unknown;
+  };
+  if (typeof error === 'string') {
+    throw new LlmError('http', `Ollama stopped mid-reply (${error}).`);
+  }
+  const content = message?.content;
+  if (content !== undefined && typeof content !== 'string') {
+    throw badResponse('/api/chat', '"message.content" is not text');
+  }
+  if (content === undefined && done !== true) {
+    throw badResponse('/api/chat', 'a stream line has no "message.content"');
+  }
+  return {
+    content: content ?? '',
+    done: done === true,
+    ...(typeof model === 'string' && { model }),
+    ...(typeof done_reason === 'string' && { doneReason: done_reason }),
+  };
+}
+
+function abortedError(cause?: unknown): LlmError {
+  return new LlmError('aborted', 'The request was cancelled.', { cause });
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw abortedError(signal.reason);
 }
 
 /** The JSON body for POST /api/chat. Exported for tests. */

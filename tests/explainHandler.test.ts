@@ -7,7 +7,7 @@ import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 const SETTINGS: Settings = { ...DEFAULT_SETTINGS, model: 'qwen2.5-coder:7b' };
 
 function setup(chat: LlmClient['chat']) {
-  const client: LlmClient = { listModels: vi.fn(), chat: vi.fn(chat) };
+  const client: LlmClient = { listModels: vi.fn(), chat: vi.fn(chat), chatStream: vi.fn() };
   const createClient = vi.fn(() => client);
   const handler = createExplainHandler({
     getSettings: async () => SETTINGS,
