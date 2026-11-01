@@ -7,9 +7,11 @@
 //
 // The page talks to the LLM directly instead of through the service worker.
 // It is an extension page, so it has the same host permissions as the worker,
-// and calling the client here keeps the typed LlmError (its `kind`) that PR 2.4
-// turns into friendly messages. Content scripts still never call the LLM.
+// and calling the client here keeps the typed LlmError (its `kind`), which
+// describeLlmError turns into a message and a fix. Content scripts still never
+// call the LLM.
 
+import { describeLlmError, type ErrorContext, type Platform } from '../llm/describeLlmError';
 import type { LlmClient } from '../llm/types';
 import {
   DEFAULT_SETTINGS,
@@ -26,6 +28,8 @@ export interface OptionsPageDeps {
   createClient(settings: Pick<Settings, 'llmUrl'>): LlmClient;
   /** Milliseconds, for timing the test reply. Defaults to performance.now. */
   now?: () => number;
+  /** Picks the right commands in error fixes. Defaults to "other". */
+  platform?: Platform;
 }
 
 export const TEST_PROMPT = 'Reply with OK';
@@ -114,6 +118,21 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     modelSelect.value = selected;
   }
 
+  // Shows "<prefix> <message>" and, on its own line, the fix, with `commands`
+  // as code so they are easy to spot and copy.
+  function showLlmError(
+    target: HTMLElement,
+    prefix: string,
+    error: unknown,
+    context: ErrorContext,
+  ): void {
+    const { message, fix } = describeLlmError(error, { ...context, platform: deps.platform });
+    const fixLine = doc.createElement('span');
+    fixLine.className = 'fix';
+    fixLine.append(...withCode(doc, fix));
+    target.replaceChildren(`${prefix} ${message} `, fixLine);
+  }
+
   // --- Actions ---
 
   // Each refresh gets a number so a slow, older reply cannot overwrite a newer one.
@@ -141,7 +160,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
           : `${models.length} model${models.length === 1 ? '' : 's'} found.`;
     } catch (error) {
       if (thisRefresh !== refreshCount) return;
-      modelsStatus.textContent = `Could not load models: ${errorMessage(error)}`;
+      showLlmError(modelsStatus, 'Could not load models.', error, { url: values.llmUrl });
     }
   }
 
@@ -188,7 +207,10 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       const ms = Math.round(now() - started);
       testStatus.textContent = `Reply from ${reply.model} in ${ms} ms: "${shorten(reply.content)}"`;
     } catch (error) {
-      testStatus.textContent = `Test failed: ${errorMessage(error)}`;
+      showLlmError(testStatus, 'Test failed.', error, {
+        url: values.llmUrl,
+        model: values.model,
+      });
     } finally {
       testButton.disabled = false;
     }
@@ -222,6 +244,16 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Splits text on backticks: odd pieces become <code>, the rest stays text.
+function withCode(doc: Document, text: string): (string | HTMLElement)[] {
+  return text.split('`').map((piece, i) => {
+    if (i % 2 === 0) return piece;
+    const code = doc.createElement('code');
+    code.textContent = piece;
+    return code;
+  });
 }
 
 function shorten(text: string): string {
