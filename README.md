@@ -4,7 +4,7 @@ See [features.md](features.md) and [roadmap.md](roadmap.md).
 
 ## Development
 
-Requires Node 20+.
+Requires Node 22.22 or newer (current test tooling needs it).
 
 | Command | What it does |
 |---|---|

@@ -5,7 +5,7 @@
   "description": "Chrome extension that explains GitHub PR code using a local LLM",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.22"
   },
   "scripts": {
     "build": "tsc --noEmit && vite build",
