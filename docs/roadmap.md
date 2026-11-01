@@ -37,7 +37,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 1.1 | Project scaffold and test runner | Small | ✅ Done ([#2](https://github.com/larry94555/PR-explainer/pull/2)) |
 | 1.2 | Manifest V3 and empty extension parts | Small | ✅ Done ([#4](https://github.com/larry94555/PR-explainer/pull/4)) |
 | 1.3 | PR page detection and "active" badge | Small | ✅ Done ([#5](https://github.com/larry94555/PR-explainer/pull/5)) |
-| 1.4 | Message passing between content script and service worker | Small | Not started |
+| 1.4 | Message passing between content script and service worker | Small | ✅ Done ([#6](https://github.com/larry94555/PR-explainer/pull/6)) |
 | 2.1 | Settings storage | Small | Not started |
 | 2.2 | Ollama client: list models and non-streaming chat | Medium | Not started |
 | 2.3 | Settings page UI | Medium | Not started |
@@ -115,15 +115,16 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   3. Confirm the "PR Explainer active" badge appears.
   4. Open an issue page in the same repo and confirm no badge appears.
 
-### PR 1.4: Message passing between content script and service worker (Small)
+### PR 1.4: Message passing between content script and service worker (Small) ✅ Done
+- **Status:** Done, merged in [#6](https://github.com/larry94555/PR-explainer/pull/6).
 - **Why it's needed:** All LLM calls will run in the service worker, so the content script needs a reliable way to ask it for things.
-- **Problem it solves:** Adds a small typed messaging layer (`sendRequest(type, payload)` and a handler registry in the service worker) with timeouts and error forwarding. Adds a `ping` message as the first use.
-- **Unit tests added:** `messaging.test.ts` uses a mocked `chrome.runtime` to check that requests reach the right handler, that handler errors come back as rejected promises, that unknown types are rejected, and that timeouts fire.
+- **Problem it solves:** Adds a small typed messaging layer in `src/messaging/`: `sendRequest(type, payload)` for the content script and a `MessageRouter` handler registry for the service worker, with timeouts and error forwarding. Request types and their payloads and results are declared once in `protocol.ts` (types only, so the content script still builds without shared chunks). Adds a `ping` message as the first use, and the badge tooltip shows whether the service worker answered.
+- **Unit tests added:** `messaging.test.ts` uses a fake `chrome.runtime` to check that requests reach the right handler (sync and async), that handler errors come back as rejected promises with their name and message, that unknown types are rejected, that a missing listener or a failing `sendMessage` is reported, that timeouts fire, and that messages from other extensions or without our tag are ignored. `badge.test.ts` checks the new status line in the tooltip.
 - **How to test:**
-  1. Build and reload the extension.
-  2. Open a PR page and open DevTools.
+  1. Build and reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
+  2. Open a PR page.
   3. Hover the badge and confirm its tooltip says "Service worker: connected" (it sends `ping` on load).
-  4. In `chrome://extensions`, click **service worker** under the extension to open its console and confirm a `ping received` log line.
+  4. In `chrome://extensions`, click **service worker** under the extension to open its console, reload the PR tab, and confirm a `ping received` log line.
 
 ---
 
