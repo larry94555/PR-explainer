@@ -2,6 +2,8 @@ import type { Explanation } from '../src/explain/parseExplanation';
 import {
   computePosition,
   currentPopup,
+  formatElapsed,
+  TICK_MS,
   GAP,
   openPopup,
   POPUP_ID,
@@ -223,5 +225,66 @@ describe('computePosition', () => {
   it('adds the page scroll so the popup scrolls with the page', () => {
     const scrolled = { ...viewport, scrollX: 15, scrollY: 2000 };
     expect(computePosition(ANCHOR, size, scrolled)).toEqual({ top: 2000 + 120 + GAP, left: 55 });
+  });
+});
+
+describe('elapsed time', () => {
+  let clock = 0;
+  const now = () => clock;
+  const elapsedText = () =>
+    document.getElementById(POPUP_ID)!.shadowRoot!.querySelector('.elapsed')!.textContent;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    clock = 1000;
+  });
+
+  afterEach(() => {
+    currentPopup()?.close();
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+
+  it('counts up while loading', () => {
+    const popup = openPopup(ANCHOR, { now });
+    expect(elapsedText()).toBe('0.0 s');
+    clock += 2350;
+    vi.advanceTimersByTime(TICK_MS);
+    expect(elapsedText()).toBe('2.3 s');
+    expect(popup.elapsedMs).toBe(2350);
+  });
+
+  it('freezes at the answer and says how long it took', () => {
+    const popup = openPopup(ANCHOR, { now });
+    clock += 12_400;
+    popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+    expect(elapsedText()).toBe('Answered in 12.4 s');
+    clock += 5000;
+    vi.advanceTimersByTime(TICK_MS * 10);
+    expect(elapsedText()).toBe('Answered in 12.4 s');
+    expect(popup.elapsedMs).toBe(12_400);
+  });
+
+  it('says how long it took to fail', () => {
+    const popup = openPopup(ANCHOR, { now });
+    clock += 800;
+    popup.showError('Ollama is not running.', 'Start it.');
+    expect(elapsedText()).toBe('Failed after 0.8 s');
+  });
+
+  it('stops its timer when closed', () => {
+    const popup = openPopup(ANCHOR, { now });
+    expect(vi.getTimerCount()).toBe(1);
+    popup.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('formats seconds and minutes', () => {
+    expect(formatElapsed(0)).toBe('0.0 s');
+    expect(formatElapsed(450)).toBe('0.4 s');
+    expect(formatElapsed(59_990)).toBe('59.9 s');
+    expect(formatElapsed(60_000)).toBe('1 min 00 s');
+    expect(formatElapsed(125_700)).toBe('2 min 05 s');
+    expect(formatElapsed(-5)).toBe('0.0 s');
   });
 });

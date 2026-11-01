@@ -29,6 +29,7 @@ export const POPUP_STYLE = `
   }
   .title { font-weight: 600; }
   .model { flex: 1; color: #59636e; font-size: 12px; }
+  .elapsed { color: #59636e; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .close {
     border: 0;
     background: transparent;

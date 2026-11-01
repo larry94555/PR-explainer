@@ -22,6 +22,18 @@ export interface ClickHandlerDeps {
   openPopup(anchor: Element): Popup;
   /** Called with each context block sent to the model (dev logging). */
   onContext?(context: string): void;
+  /**
+   * Called when an answer (or error) is shown, with how long it took from
+   * the click, so latency can be logged and compared across models.
+   */
+  onTiming?(timing: ExplainTiming): void;
+}
+
+export interface ExplainTiming {
+  elapsedMs: number;
+  status: 'done' | 'failed';
+  /** The model that answered, when it answered. */
+  model?: string;
 }
 
 // Elements GitHub (or the browser) already gives a meaning to a click on.
@@ -96,12 +108,20 @@ export function createClickHandler(deps: ClickHandlerDeps): (event: MouseEvent) 
     const popup = deps.openPopup(row);
     deps.explain(text).then(
       (result) => {
+        if (popup.state === 'closed') return;
         if (result.status === 'done') popup.showExplanation(result.explanation, result.model);
         else popup.showError(result.message, result.fix);
+        deps.onTiming?.({
+          elapsedMs: popup.elapsedMs,
+          status: result.status,
+          model: result.status === 'done' ? result.model : undefined,
+        });
       },
       (error: unknown) => {
+        if (popup.state === 'closed') return;
         const { message, fix } = describeRequestError(error);
         popup.showError(message, fix);
+        deps.onTiming?.({ elapsedMs: popup.elapsedMs, status: 'failed' });
       },
     );
   };

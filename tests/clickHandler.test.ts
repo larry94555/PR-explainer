@@ -5,6 +5,7 @@ import {
   describeRequestError,
   isInteractive,
   type ClickHandlerDeps,
+  type ExplainTiming,
 } from '../src/clickHandler';
 import type { ExplainResult } from '../src/explain/explainHandler';
 import { RequestError } from '../src/messaging/client';
@@ -41,6 +42,7 @@ function fakePopup(anchor: Element) {
     anchor,
     calls,
     host: document.createElement('div'),
+    elapsedMs: 1234,
     get state() {
       return state;
     },
@@ -64,6 +66,7 @@ function fakePopup(anchor: Element) {
 
 function setup(answer: () => Promise<ExplainResult> = () => Promise.resolve(DONE)) {
   const contexts: string[] = [];
+  const timings: ExplainTiming[] = [];
   const popups: ReturnType<typeof fakePopup>[] = [];
   const deps: ClickHandlerDeps = {
     explain: vi.fn((context: string) => {
@@ -76,10 +79,17 @@ function setup(answer: () => Promise<ExplainResult> = () => Promise.resolve(DONE
       popups.push(popup);
       return popup;
     },
+    onTiming: (timing) => timings.push(timing),
   };
   const handler = createClickHandler(deps);
   document.addEventListener('click', handler);
-  return { deps, contexts, popups, cleanup: () => document.removeEventListener('click', handler) };
+  return {
+    deps,
+    contexts,
+    popups,
+    timings,
+    cleanup: () => document.removeEventListener('click', handler),
+  };
 }
 
 function click(target: Element, init: MouseEventInit = {}): void {
@@ -130,6 +140,7 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(env.popups[0]!.anchor).toBe(line.closest('tr'));
     await flush();
     expect(env.popups[0]!.calls).toEqual(['done:qwen2.5-coder:7b:Marks 2.4 as done.']);
+    expect(env.timings).toEqual([{ elapsedMs: 1234, status: 'done', model: 'qwen2.5-coder:7b' }]);
   });
 
   it('shows the error message and fix when the model fails', async () => {
@@ -139,6 +150,7 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     click(code('R44'));
     await flush();
     expect(env.popups[0]!.calls).toEqual(['failed:Ollama is not running.|Start it.']);
+    expect(env.timings).toEqual([{ elapsedMs: 1234, status: 'failed', model: undefined }]);
   });
 
   it('shows a friendly error when the service worker cannot answer', async () => {
@@ -146,6 +158,7 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     click(code('R44'));
     await flush();
     expect(env.popups[0]!.calls[0]).toMatch(/^failed:The model took too long/);
+    expect(env.timings).toEqual([{ elapsedMs: 1234, status: 'failed' }]);
   });
 
   it('ignores hunk headers and clicks outside a diff', () => {
@@ -208,6 +221,8 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     await flush();
     expect(env.popups[0]!.calls).toEqual([]);
     expect(env.popups[1]!.calls).toEqual(['done:qwen2.5-coder:7b:Marks 2.4 as done.']);
+    // Only the answer that was shown is timed.
+    expect(env.timings).toHaveLength(1);
   });
 });
 

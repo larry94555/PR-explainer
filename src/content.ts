@@ -53,5 +53,12 @@ document.addEventListener(
       import.meta.env.MODE === 'development'
         ? (context) => console.log(`[PR Explainer] context for the model:\n${context}`)
         : undefined,
+    // Every build logs how long each explanation took, to track the local
+    // model's latency.
+    onTiming: ({ elapsedMs, status, model }) =>
+      console.info(
+        `[PR Explainer] ${status === 'done' ? 'explained' : 'failed'} in ${(elapsedMs / 1000).toFixed(1)} s` +
+          (model ? ` (${model})` : ''),
+      ),
   }),
 );

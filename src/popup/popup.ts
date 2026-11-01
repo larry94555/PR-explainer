@@ -4,7 +4,11 @@
 //
 // The popup has three states: loading (spinner), done (the three sections),
 // and failed (a message and a fix from describeLlmError). It closes with the
-// close button, the Esc key, or a click anywhere outside it. Only one popup
+// close button, the Esc key, or a click anywhere outside it.
+//
+// The header shows how long the request has taken: a live timer while
+// loading, then "Answered in …" or "Failed after …", so the local model's
+// latency is always visible. Only one popup
 // is open at a time: opening a new one closes the old one.
 //
 // The content script opens it from its click handler (src/clickHandler.ts),
@@ -32,6 +36,19 @@ export interface AnchorRect {
 export interface PopupOptions {
   /** Called once when the popup closes, however it was closed. */
   onClose?: () => void;
+  /** Clock in milliseconds, for the elapsed time. Tests pass a fake one. */
+  now?: () => number;
+}
+
+/** How often the elapsed time updates while loading. */
+export const TICK_MS = 100;
+
+/** "0.4 s" and "12.3 s" under a minute, then "1 min 05 s". */
+export function formatElapsed(ms: number): string {
+  const tenths = Math.floor(Math.max(0, ms) / 100);
+  if (tenths < 600) return `${(tenths / 10).toFixed(1)} s`;
+  const seconds = Math.floor(tenths / 10);
+  return `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, '0')} s`;
 }
 
 export type PopupState = 'loading' | 'done' | 'failed' | 'closed';
@@ -39,6 +56,8 @@ export type PopupState = 'loading' | 'done' | 'failed' | 'closed';
 export interface Popup {
   readonly host: HTMLElement;
   readonly state: PopupState;
+  /** Time since the popup opened, frozen when the answer or error arrives. */
+  readonly elapsedMs: number;
   showLoading(model?: string): void;
   showExplanation(explanation: Explanation, model?: string): void;
   showError(message: string, fix: string): void;
@@ -113,12 +132,14 @@ export function openPopup(
   title.textContent = 'PR Explainer';
   const modelLabel = doc.createElement('span');
   modelLabel.className = 'model';
+  const elapsedLabel = doc.createElement('span');
+  elapsedLabel.className = 'elapsed';
   const closeButton = doc.createElement('button');
   closeButton.className = 'close';
   closeButton.type = 'button';
   closeButton.setAttribute('aria-label', 'Close');
   closeButton.textContent = '×';
-  header.append(title, modelLabel, closeButton);
+  header.append(title, modelLabel, elapsedLabel, closeButton);
 
   const body = doc.createElement('div');
   body.className = 'body';
@@ -128,6 +149,26 @@ export function openPopup(
   doc.body.append(host);
 
   let state: PopupState = 'loading';
+
+  const now = options.now ?? (() => performance.now());
+  const startedAt = now();
+  let finishedAt: number | null = null;
+  const elapsed = () => (finishedAt ?? now()) - startedAt;
+  const showElapsed = (prefix = '') => {
+    elapsedLabel.textContent = prefix + formatElapsed(elapsed());
+  };
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  const startTicking = () => {
+    finishedAt = null;
+    showElapsed();
+    ticker ??= setInterval(() => showElapsed(), TICK_MS);
+  };
+  const stopTicking = (prefix: string) => {
+    clearInterval(ticker);
+    ticker = undefined;
+    finishedAt ??= now();
+    showElapsed(prefix);
+  };
 
   const place = () => {
     const rect = 'getBoundingClientRect' in anchor ? anchor.getBoundingClientRect() : anchor;
@@ -176,9 +217,13 @@ export function openPopup(
     get state() {
       return state;
     },
+    get elapsedMs() {
+      return elapsed();
+    },
     showLoading(model) {
       if (state === 'closed') return;
       setModel(model);
+      startTicking();
       const loading = doc.createElement('div');
       loading.className = 'loading';
       const spinner = doc.createElement('span');
@@ -192,6 +237,7 @@ export function openPopup(
     showExplanation(explanation, model) {
       if (state === 'closed') return;
       setModel(model);
+      stopTicking('Answered in ');
       const sections = (Object.keys(SECTION_TITLES) as SectionKey[]).map((key) => {
         const section = doc.createElement('section');
         section.dataset.section = key;
@@ -207,6 +253,7 @@ export function openPopup(
     },
     showError(message, fix) {
       if (state === 'closed') return;
+      stopTicking('Failed after ');
       const error = doc.createElement('div');
       error.className = 'error';
       error.setAttribute('role', 'alert');
@@ -222,6 +269,7 @@ export function openPopup(
     close() {
       if (state === 'closed') return;
       state = 'closed';
+      clearInterval(ticker);
       doc.removeEventListener('keydown', onKeyDown, true);
       doc.removeEventListener('mousedown', onMouseDown, true);
       host.remove();
