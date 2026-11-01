@@ -1,4 +1,12 @@
-import { BADGE_ID, BADGE_TEXT, findBadge, removeBadge, showBadge, syncBadge } from '../src/badge';
+import {
+  BADGE_ID,
+  BADGE_TEXT,
+  findBadge,
+  removeBadge,
+  setBadgeStatus,
+  showBadge,
+  syncBadge,
+} from '../src/badge';
 
 const PR_URL = 'https://github.com/owner/repo/pull/42/files';
 const ISSUE_URL = 'https://github.com/owner/repo/issues/42';
@@ -50,6 +58,26 @@ describe('badge', () => {
     expect(findBadge(document)).not.toBeNull();
     removeBadge(document);
     removeBadge(document); // removing twice is harmless
+    expect(findBadge(document)).toBeNull();
+  });
+});
+
+describe('badge status', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('adds the status as a second tooltip line and keeps it when the PR changes', () => {
+    syncBadge(document, PR_URL);
+    setBadgeStatus(document, 'Service worker: connected');
+    expect(badgeLabel()?.title).toBe('owner/repo#42 (files)\nService worker: connected');
+
+    syncBadge(document, 'https://github.com/owner/repo/pull/43');
+    expect(badgeLabel()?.title).toBe('owner/repo#43 (conversation)\nService worker: connected');
+  });
+
+  it('does nothing when there is no badge', () => {
+    setBadgeStatus(document, 'Service worker: connected');
     expect(findBadge(document)).toBeNull();
   });
 });

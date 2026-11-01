@@ -78,10 +78,10 @@ Then check that it runs on GitHub (needs the code from roadmap PR 1.3 or later):
 
 1. Open any pull request on github.com, for example one from `https://github.com/microsoft/vscode/pulls`.
 2. A small blue **"PR Explainer active"** badge appears in the bottom right corner of the page.
-3. Hover over it. The tooltip shows the PR, for example `microsoft/vscode#12345 (conversation)`.
+3. Hover over it. The tooltip shows the PR, for example `microsoft/vscode#12345 (conversation)`. With roadmap PR 1.4 or later, a second line says `Service worker: connected`.
 4. Open an issue page instead (for example from the repo's **Issues** tab). The badge does not appear there.
 
-If you want more proof, open DevTools on the PR page (**View > Developer > Developer Tools**, then the **Console** tab) and look for the line `[PR Explainer] content script loaded`.
+If you want more proof (roadmap PR 1.4 or later), open the service worker's console: on `chrome://extensions`, click the blue **service worker** link on the PR Explainer card. A DevTools window opens. Its **Console** tab shows `[PR Explainer] service worker started` and, after each PR page load, `[PR Explainer] ping received`.
 
 ## Trying a different PR, or new commits on the same PR
 
@@ -103,4 +103,5 @@ On `chrome://extensions`, click **Remove** on the PR Explainer card.
 | `npm install` or `npm run build` fails with an engine or syntax error | Your Node version is too old. Run `node --version` and install 22.22.2+ or 24.15+. |
 | A red **Errors** button on the card | Click it to read the error, then click **Clear all**, rebuild, and reload the extension. If it comes back, copy the error into the PR. |
 | No badge on a PR page | Reload the GitHub tab. Make sure the URL contains `/pull/<number>` and that the extension's switch is on. If you arrived at the PR by clicking a link from a non-PR GitHub page, reload once (Chrome only starts the extension on pages that load as a PR). |
+| The tooltip says `Service worker: not connected (...)` | The text in brackets is the reason. If it says "Extension context invalidated", the extension was reloaded after the tab opened: reload the tab. Otherwise check the card for a red **Errors** button. |
 | The badge is there but changes from the PR don't show | Rebuild, click reload on the extension card, then reload the GitHub tab. |

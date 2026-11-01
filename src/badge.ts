@@ -43,9 +43,24 @@ export function showBadge(doc: Document, pr: PrRef): HTMLElement {
     shadow.append(style, label);
     doc.body.append(host);
   }
-  const label = host.shadowRoot?.querySelector<HTMLElement>('.badge');
-  if (label) label.title = `${pr.owner}/${pr.repo}#${pr.number} (${pr.tab})`;
+  host.dataset.pr = `${pr.owner}/${pr.repo}#${pr.number} (${pr.tab})`;
+  updateTooltip(host);
   return host;
+}
+
+// Sets the second tooltip line, for example "Service worker: connected".
+// Does nothing if the badge is not on the page.
+export function setBadgeStatus(doc: Document, status: string): void {
+  const host = findBadge(doc);
+  if (!host) return;
+  host.dataset.status = status;
+  updateTooltip(host);
+}
+
+function updateTooltip(host: HTMLElement): void {
+  const label = host.shadowRoot?.querySelector<HTMLElement>('.badge');
+  if (!label) return;
+  label.title = [host.dataset.pr, host.dataset.status].filter(Boolean).join('\n');
 }
 
 export function removeBadge(doc: Document): void {
