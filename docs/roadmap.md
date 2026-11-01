@@ -39,7 +39,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 1.3 | PR page detection and "active" badge | Small | ✅ Done ([#5](https://github.com/larry94555/PR-explainer/pull/5)) |
 | 1.4 | Message passing between content script and service worker | Small | ✅ Done ([#6](https://github.com/larry94555/PR-explainer/pull/6)) |
 | 2.1 | Settings storage | Small | ✅ Done ([#7](https://github.com/larry94555/PR-explainer/pull/7)) |
-| 2.2 | Ollama client: list models and non-streaming chat | Medium | ✅ Done |
+| 2.2 | Ollama client: list models and non-streaming chat | Medium | ✅ Done ([#8](https://github.com/larry94555/PR-explainer/pull/8)) |
 | 2.3 | Settings page UI | Medium | Not started |
 | 2.4 | Friendly LLM error messages | Small | Not started |
 | 3.1 | Diff line locator | Medium | Not started |
@@ -145,7 +145,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   5. Run `await debugSettings.get()` and confirm the defaults, then `await debugSettings.save({ model: 'qwen2.5-coder:7b' })` and `await debugSettings.save({ llmUrl: 'http://example.com' })` (the second is rejected).
 
 ### PR 2.2: Ollama client: list models and non-streaming chat (Medium) ✅ Done
-- **Status:** Done.
+- **Status:** Done, merged in [#8](https://github.com/larry94555/PR-explainer/pull/8).
 - **Why it's needed:** The extension needs one place that knows how to talk to the local LLM.
 - **Problem it solves:** Adds an `LlmClient` interface (`src/llm/types.ts`) and an `OllamaClient` (`src/llm/ollamaClient.ts`) with `listModels()` (calls `/api/tags`) and `chat(messages, options)` (calls `/api/chat` with `stream: false`, passing temperature and max response length as Ollama's `temperature` and `num_predict`). Every failure becomes an `LlmError` with a `kind`: `connection`, `model-not-found`, `origin-blocked`, `no-model`, `bad-response`, `http`, or `aborted`, which PR 2.4 turns into friendly messages. `createLlmClient(settings)` builds the client from the saved URL. Adds `host_permissions` for `localhost`, `127.0.0.1` and `[::1]` (any port), the same hosts the settings accept. Keeping it behind an interface makes it possible to add other local servers (such as LM Studio) later. Dev builds expose `debugLlm` in the service worker console.
 - **Unit tests added:** `ollamaClient.test.ts` with a mocked `fetch` covers parsing the model list, building the chat request body, parsing the reply, and raising typed errors for connection refused, HTTP 404 (model missing), HTTP 403 (CORS or origin blocked), other HTTP errors, bad JSON, a missing model name, and a cancelled request. `manifest.test.ts` checks the new host permissions.
