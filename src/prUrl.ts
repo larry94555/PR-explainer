@@ -39,8 +39,9 @@ export function parsePrUrl(url: string): PrRef | null {
   const [owner, repo, pull, num, tabSegment = '', ...rest] = segments;
   if (!owner || !repo || pull !== 'pull' || !num || !/^[1-9]\d*$/.test(num)) return null;
 
-  const tab = TABS[tabSegment];
-  if (!tab) return null;
+  // Own properties only, so names like `toString` or `__proto__` are not tabs.
+  if (!Object.hasOwn(TABS, tabSegment)) return null;
+  const tab = TABS[tabSegment]!;
   // Only commits (/commits/<sha>) and files (/files/<range>) have deeper pages.
   if (rest.length > 0 && tab !== 'commits' && tab !== 'files') return null;
 
