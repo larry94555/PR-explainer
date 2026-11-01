@@ -2,6 +2,8 @@
 Chrome extension that explains code in GitHub pull requests using a local LLM.
 See [docs/features.md](docs/features.md) and [docs/roadmap.md](docs/roadmap.md).
 
+To build the extension from a PR branch and load it into Chrome, follow the [installation guide](docs/InstallingExtension.md).
+
 ## Development
 
 Requires Node 22.22.2 or newer on the 22 line, or Node 24.15.0 or newer (jsdom and Vitest need these). CI tests both 22.22.2 and the latest 24.
