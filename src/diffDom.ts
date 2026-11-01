@@ -29,6 +29,14 @@ export function locateLine(target: EventTarget | null): DiffLine | null {
   return found ? found.layout.readLine(found.row) : null;
 }
 
+// Returns the table row of the diff line `target` is in (the element the
+// explanation popup is placed next to), or null wherever locateLine returns
+// null.
+export function locateRow(target: EventTarget | null): Element | null {
+  const found = findRow(target);
+  return found && found.layout.readLine(found.row) ? found.row : null;
+}
+
 // The hunk a diff line belongs to: its `@@ ... @@` header and every code line
 // between that header and the next one, in page order.
 export interface DiffHunk {
