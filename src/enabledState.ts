@@ -42,6 +42,41 @@ export async function readEnabled(storage: LocalStorageLike): Promise<boolean> {
   return toEnabled(stored[ENABLED_KEY]);
 }
 
+/**
+ * Follows the on/off state for the content script: reads the saved state and
+ * then reports every change. `current()` is null until the first answer
+ * arrives, so a caller can ignore clicks until it knows the state (a saved
+ * OFF must not let a popup through while the read is pending).
+ *
+ * The listener is added before the read starts, so no change is missed. A
+ * change that arrives while the read is pending is newer than whatever the
+ * read returns, so the read's answer is then ignored. If the read fails, the
+ * state falls back to the default unless a change has already arrived.
+ */
+export function trackEnabled(
+  storage: LocalStorageLike,
+  events: StorageChangedEvent,
+  onChange: (enabled: boolean, cause: 'read' | 'change') => void,
+): { current(): boolean | null } {
+  let current: boolean | null = null;
+  let changed = false;
+  watchEnabled(events, (enabled) => {
+    changed = true;
+    current = enabled;
+    onChange(enabled, 'change');
+  });
+  const settle = (enabled: boolean) => {
+    if (changed) return;
+    current = enabled;
+    onChange(enabled, 'read');
+  };
+  readEnabled(storage).then(settle, (error: unknown) => {
+    console.warn('[PR Explainer] could not read the on/off state', error);
+    settle(DEFAULT_ENABLED);
+  });
+  return { current: () => current };
+}
+
 /** Calls `onChange` with the new state each time it changes in chrome.storage.local. */
 export function watchEnabled(
   events: StorageChangedEvent,

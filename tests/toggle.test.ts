@@ -3,6 +3,7 @@ import {
   DEFAULT_ENABLED,
   ENABLED_KEY,
   readEnabled,
+  trackEnabled,
   watchEnabled,
   type LocalStorageLike,
   type StorageChange,
@@ -87,6 +88,71 @@ describe('on/off state', () => {
     onChanged.fire({ 'settings.model': { newValue: 'x' } }, 'local'); // other key
     onChanged.fire({ [ENABLED_KEY]: { oldValue: false } }, 'local'); // key removed
     expect(seen).toEqual([false, true]);
+  });
+});
+
+describe('trackEnabled (content script)', () => {
+  /** A storage whose first get waits until the test settles it. */
+  function slowStorage() {
+    const { storage, onChanged } = fakeStorage({ [ENABLED_KEY]: true });
+    let finish!: (value: Record<string, unknown>) => void;
+    let fail!: (error: unknown) => void;
+    vi.mocked(storage.get).mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          finish = resolve;
+          fail = reject;
+        }),
+    );
+    return {
+      storage,
+      onChanged,
+      finish: (v: unknown) => finish({ [ENABLED_KEY]: v }),
+      fail: (e: unknown) => fail(e),
+    };
+  }
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('is unknown until the saved state is read, then reports it', async () => {
+    const { storage, onChanged, finish } = slowStorage();
+    const seen: string[] = [];
+    const state = trackEnabled(storage, onChanged, (v, cause) => seen.push(`${cause}:${v}`));
+    expect(state.current()).toBeNull();
+    finish(false);
+    await flush();
+    expect(state.current()).toBe(false);
+    expect(seen).toEqual(['read:false']);
+  });
+
+  it('ignores a pending read that a newer OFF change overtook', async () => {
+    const { storage, onChanged, finish } = slowStorage();
+    const seen: string[] = [];
+    const state = trackEnabled(storage, onChanged, (v, cause) => seen.push(`${cause}:${v}`));
+    // The toolbar is clicked while the first read is still pending...
+    onChanged.fire({ [ENABLED_KEY]: { oldValue: true, newValue: false } }, 'local');
+    expect(state.current()).toBe(false);
+    // ...and the read then answers with the older value.
+    finish(true);
+    await flush();
+    expect(state.current()).toBe(false);
+    expect(seen).toEqual(['change:false']);
+  });
+
+  it('falls back to on if the read fails, unless a change already arrived', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const a = slowStorage();
+    const first = trackEnabled(a.storage, a.onChanged, () => {});
+    a.fail(new Error('boom'));
+    await flush();
+    expect(first.current()).toBe(true);
+
+    const b = slowStorage();
+    const second = trackEnabled(b.storage, b.onChanged, () => {});
+    b.onChanged.fire({ [ENABLED_KEY]: { newValue: false } }, 'local');
+    b.fail(new Error('boom'));
+    await flush();
+    expect(second.current()).toBe(false);
+    warn.mockRestore();
   });
 });
 
