@@ -3,10 +3,58 @@
   <head>
     <meta charset="utf-8" />
     <title>PR Explainer settings</title>
+    <link rel="stylesheet" href="./options/options.css" />
+    <script type="module" src="./options/main.ts"></script>
   </head>
   <body>
-    <h1>PR Explainer settings</h1>
-    <p>Settings arrive in PR 2.3.</p>
-    <!-- PR 2.3 adds options.ts and the settings form. -->
+    <main>
+      <h1>PR Explainer settings</h1>
+      <form id="settings-form" novalidate>
+        <div class="field">
+          <label for="llmUrl">Ollama URL</label>
+          <input id="llmUrl" name="llmUrl" type="url" spellcheck="false" />
+          <p class="error" data-error-for="llmUrl" role="alert"></p>
+        </div>
+
+        <div class="field">
+          <label for="model">Model</label>
+          <div class="row">
+            <select id="model" name="model"></select>
+            <button id="refresh-models" type="button">Refresh</button>
+          </div>
+          <p id="models-status" class="hint" role="status"></p>
+          <p class="error" data-error-for="model" role="alert"></p>
+        </div>
+
+        <div class="field">
+          <label for="temperature">
+            Temperature <output id="temperature-value" for="temperature"></output>
+          </label>
+          <input id="temperature" name="temperature" type="range" min="0" max="2" step="0.1" />
+          <p class="hint">Lower gives steadier explanations; higher gives more varied ones.</p>
+          <p class="error" data-error-for="temperature" role="alert"></p>
+        </div>
+
+        <div class="field">
+          <label for="maxResponseTokens">Max response length (tokens)</label>
+          <input
+            id="maxResponseTokens"
+            name="maxResponseTokens"
+            type="number"
+            min="1"
+            max="32768"
+            step="1"
+          />
+          <p class="error" data-error-for="maxResponseTokens" role="alert"></p>
+        </div>
+
+        <div class="row">
+          <button id="save" type="submit">Save</button>
+          <button id="test-connection" type="button">Test connection</button>
+        </div>
+        <p id="save-status" role="status"></p>
+        <p id="test-status" role="status"></p>
+      </form>
+    </main>
   </body>
 </html>

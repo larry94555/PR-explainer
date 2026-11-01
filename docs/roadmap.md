@@ -40,7 +40,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 1.4 | Message passing between content script and service worker | Small | ✅ Done ([#6](https://github.com/larry94555/PR-explainer/pull/6)) |
 | 2.1 | Settings storage | Small | ✅ Done ([#7](https://github.com/larry94555/PR-explainer/pull/7)) |
 | 2.2 | Ollama client: list models and non-streaming chat | Medium | ✅ Done ([#8](https://github.com/larry94555/PR-explainer/pull/8)) |
-| 2.3 | Settings page UI | Medium | Not started |
+| 2.3 | Settings page UI | Medium | ✅ Done ([#9](https://github.com/larry94555/PR-explainer/pull/9)) |
 | 2.4 | Friendly LLM error messages | Small | Not started |
 | 3.1 | Diff line locator | Medium | Not started |
 | 3.2 | Hunk context extractor | Small | Not started |
@@ -158,16 +158,20 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   6. Run `await debugLlm.listModels()` and confirm your models are listed.
   7. Run `await debugSettings.save({ model: '<a model from step 2>' })`, then `await debugLlm.chat('Reply with OK')` and confirm the reply.
 
-### PR 2.3: Settings page UI (Medium)
+### PR 2.3: Settings page UI (Medium) ✅ Done
+- **Status:** Done, merged in [#9](https://github.com/larry94555/PR-explainer/pull/9).
 - **Why it's needed:** Users need a way to point the extension at their LLM and choose a model without editing code.
-- **Problem it solves:** Builds the options page: URL field, model dropdown filled from `listModels()`, temperature slider, max response length, **Save**, and **Test connection** (sends "Reply with OK" and shows the reply and response time).
-- **Unit tests added:** `optionsPage.test.ts` (jsdom) covers loading saved values into the form, filling the dropdown from a mocked model list, showing a validation error for a bad URL, and showing the test result or error text.
+- **Problem it solves:** Builds the options page (`src/options.html`, `src/options/optionsPage.ts`): URL field, model dropdown filled from `listModels()` (with a **Refresh** button, and reloaded when the URL changes), temperature slider, max response length, **Save**, and **Test connection** (sends "Reply with OK" using the values in the form, saved or not, and shows the reply and response time). Each invalid field shows its own error, and nothing is saved until all are valid. A saved model the server does not have stays selected and is marked "(not installed)". The page calls the LLM client directly: it is an extension page with the same host permissions as the service worker, and this keeps the typed `LlmError` for PR 2.4. Errors show the raw message for now; PR 2.4 makes them friendly.
+- **Unit tests added:** `optionsPage.test.ts` (jsdom, against the real `options.html`) covers loading saved values into the form, filling the dropdown from a mocked model list, the "Choose a model" placeholder, keeping a saved model that is not installed, the "no models" hint, a failed model load, reloading models when the URL changes, ignoring a stale model list (including after the URL is changed to an invalid one), showing a validation error for a bad URL, saving (by method and by the **Save** button), per-field errors with nothing saved, and showing the test reply and time or the error text.
 - **How to test:**
-  1. Build and reload the extension.
-  2. Open the extension's options page.
-  3. Confirm the dropdown lists the models from `ollama list`.
-  4. Pick a model, click **Save**, reload the page, and confirm the choice was kept.
-  5. Click **Test connection** and confirm a reply such as "OK" and a time in milliseconds.
+  1. Run `npm test` and confirm the `optionsPage` tests pass.
+  2. Make sure Ollama is running and allows the extension (see step 2 of PR 2.2: `OLLAMA_ORIGINS` set to `chrome-extension://*`, then restart Ollama).
+  3. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
+  4. Open the settings page. Either copy the **ID** from the PR Explainer card on `chrome://extensions` and open `chrome-extension://<ID>/options.html` in a new tab, or click **Details** on the card and scroll to the very bottom (below **Site access** and **Allow in Incognito**) to the **Extension options** link.
+  5. Confirm the dropdown lists the models from `ollama list` and the status says how many were found.
+  6. Pick a model, click **Save**, reload the page, and confirm the choice was kept.
+  7. Click **Test connection** and confirm a reply such as "OK" and a time in milliseconds.
+  8. Change the URL to `http://example.com` and click **Save**: confirm the URL error appears and, after reloading, the old URL is still there.
 
 ### PR 2.4: Friendly LLM error messages (Small)
 - **Why it's needed:** The most common first-run problems are "Ollama isn't running", "model not pulled", and "origin blocked". Users need to know how to fix them.
