@@ -63,6 +63,14 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 7.2 | Split view and lazy-loaded diffs | Medium | Not started |
 | 7.3 | Theme support and accessibility | Small | Not started |
 | 7.4 | Privacy check and packaging | Small | Not started |
+| 8.1 | Latency breakdown in the popup | Small | Not started |
+| 8.2 | Latency benchmark script and baseline | Medium | Not started |
+| 8.3 | Keep the model loaded and warm it up | Small | Not started |
+| 8.4 | Shorter answers | Small | Not started |
+| 8.5 | Smaller, cache-friendly prompts | Medium | Not started |
+| 8.6 | Model and GPU check on the settings page | Medium | Not started |
+| 8.7 | Explain on hover (prefetch) | Medium | Not started |
+| 8.8 | Latency report and faster defaults | Small | Not started |
 
 ## Milestone overview
 
@@ -75,6 +83,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 5 | Chat box | Open a chat from the popup and ask follow-up questions about the code |
 | 6 | Smarter context | Explanations use the PR description and more of the file, and stay within the model's context limit |
 | 7 | Robust on real GitHub | Works across split view, dark mode, lazy-loaded diffs, and in-page navigation; ready to share |
+| 8 | Optimize LLM latency | An explanation finishes in under 10 seconds on your laptop, or a report shows the lowest time that laptop can reach and why |
 
 ---
 
@@ -432,6 +441,102 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   1. Run `npm run package` and confirm a `.zip` appears in `release/`.
   2. Remove the dev extension, unzip the file, load that folder with **Load unpacked**, and confirm everything works.
   3. Use the extension for a few clicks with the DevTools **Network** tab open and confirm requests only go to github.com and localhost.
+
+---
+
+## Milestone 8: Optimize LLM latency
+
+**Goal:** an explanation finishes in **under 10 seconds**, measured from the click to "Answered in …" in the popup (the timer added in PR 3.5), on the laptop the extension is used on. If that is not possible on that hardware, find the lowest latency that is, and explain what limits it.
+
+**Demo:** Run `npm run bench` and show the before and after table in `docs/latency.md`. Then open a PR, click a line, and watch the popup say "Answered in" with a time under 10 seconds (or at the floor the report predicts). Open the latency details in the popup to show where the time went.
+
+**How the time breaks down.** Every Ollama reply reports `load_duration` (loading the model into memory), `prompt_eval_count` and `prompt_eval_duration` (reading the prompt), and `eval_count` and `eval_duration` (writing the answer). So:
+
+> total ≈ load time + prompt tokens ÷ prompt speed + answer tokens ÷ generation speed + extension overhead
+
+Each PR below attacks one term. Load time can be removed entirely by keeping the model loaded (8.3). Answer tokens are usually the biggest term, so 8.4 makes answers shorter. Prompt tokens are cut and cached by 8.5. Generation and prompt speed depend on the model and on whether it runs on the GPU (8.6). Prefetching (8.7) hides time the user would otherwise wait. The **floor** is the time for the smallest prompt and the shortest useful answer on the fastest model that still gives good explanations, with no load time. 8.8 measures it.
+
+This milestone comes last because it builds on streaming (4.1, 4.2), caching (4.3), and the token budget (6.2). PR 8.1 and 8.2 only measure, so they can be done earlier if wanted.
+
+### PR 8.1: Latency breakdown in the popup (Small)
+- **Why it's needed:** "Answered in 14.2 s" says the explanation was slow but not why. We can't fix what we can't see.
+- **Problem it solves:** The Ollama client returns Ollama's timing fields with each reply, and the `explain` result carries them to the content script. The popup gets a small **Details** toggle next to the time showing load, prompt (tokens and time), and answer (tokens, time, and tokens per second), plus the time spent outside Ollama (messaging and parsing). The console log from PR 3.5 adds the same numbers.
+- **Unit tests added:** `ollamaClient.test.ts` checks the timing fields are read (nanoseconds converted to milliseconds) and missing fields are tolerated. `latencyBreakdown.test.ts` checks the split, tokens per second, and the "other" time never going negative. `popup.test.ts` checks the Details toggle.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test` and confirm the new tests pass.
+  2. Run `npm run dev`, reload the extension, and refresh a PR's **Files changed** tab.
+  3. Quit Ollama and open it again so the model is not loaded. Click a line, open **Details**, and confirm "Load" is several seconds.
+  4. Click another line and confirm "Load" is now close to zero and the numbers add up to roughly the total.
+
+### PR 8.2: Latency benchmark script and baseline (Medium)
+- **Why it's needed:** Clicking lines by hand gives noisy numbers. Each later PR needs a repeatable before and after measurement.
+- **Problem it solves:** Adds `npm run bench`, a Node script (`scripts/bench.ts`) that sends the real explain prompt for 5 fixed sample contexts (short, long, and a few languages, stored in `bench/`) to the local Ollama, 3 runs each, for each model named on the command line (or the first installed model when none is named, since Node cannot read the extension's settings). It prints and saves a markdown table to `docs/latency.md` with median and slowest total time, load, prompt and answer tokens, tokens per second, and time to first token. It records the machine (CPU, RAM, GPU name if Ollama reports it) so results from different laptops are not mixed up. The first run is committed as the baseline.
+- **Unit tests added:** `benchStats.test.ts` covers median and slowest-run math, table formatting, and handling a failed run (marked, not dropped). The script itself talks to a real Ollama and is tested by hand.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test` and confirm `benchStats` passes.
+  2. Make sure Ollama is running, then run `npm run bench -- qwen2.5-coder:7b`.
+  3. Confirm progress prints for each sample and run, and the table appears at the end.
+  4. Open `docs/latency.md` and confirm the table and your machine details were added under a dated heading.
+
+### PR 8.3: Keep the model loaded and warm it up (Small)
+- **Why it's needed:** Ollama unloads a model after 5 idle minutes, and loading a 7B model can take 5 to 20 seconds. That alone can blow the 10 second goal on the first click.
+- **Problem it solves:** Sends `keep_alive` (a new setting, default 30 minutes) with every request so the model stays in memory while you review. When a PR's **Files changed** tab opens, the service worker sends a tiny warm-up request so the model is loaded before the first click. Warm-up is skipped if the model is already loaded (`/api/ps`).
+- **Unit tests added:** `ollamaClient.test.ts` checks `keep_alive` is sent. `warmup.test.ts` checks warm-up runs once per tab, is skipped when `/api/ps` lists the model, and never shows an error to the user if it fails. `settings.test.ts` covers the new setting's range.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`.
+  2. Run `npm run dev`, reload the extension. Quit Ollama and open it again.
+  3. Open a PR's **Files changed** tab, wait 15 seconds, then run `ollama ps` in Command Prompt and confirm the model is listed with an "UNTIL" about 30 minutes away.
+  4. Click a line, open **Details**, and confirm "Load" is close to zero.
+  5. Run `npm run bench` and confirm load time no longer appears in the median.
+
+### PR 8.4: Shorter answers (Small)
+- **Why it's needed:** Writing the answer is usually the slowest part: at 20 tokens per second, a 500 token answer takes 25 seconds on its own.
+- **Problem it solves:** Tightens the explain prompt to ask for at most 2 sentences per section and at most 3 concerns, and lowers the default answer limit (`maxResponseTokens`) from 1024 to 300, with the parser marking an answer that was cut off. Users who want more can still raise the limit in settings.
+- **Unit tests added:** `explainPrompt.test.ts` snapshot is updated for the new wording. `parseExplanation.test.ts` covers an answer cut off mid-section. `settings.test.ts` checks the new default.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`.
+  2. Run `npm run bench` and compare with the previous table: answer tokens and total time should both drop.
+  3. Click 5 lines in a real PR and confirm the explanations are shorter but still say what the code does, why, and real concerns.
+
+### PR 8.5: Smaller, cache-friendly prompts (Medium)
+- **Why it's needed:** On a laptop CPU, reading a long prompt can take several seconds before the first word appears. Ollama can reuse work for a prompt that starts the same way as the previous one, but only if the unchanging parts come first.
+- **Problem it solves:** Orders the prompt so the fixed instructions come first, then the PR title and description, then the file, then the clicked line, so consecutive clicks in the same PR reuse Ollama's cached prefix. Shortens the system prompt, lowers the default context window around the clicked line from 10 to 6 lines each way, and sets `num_ctx` to just what the prompt and answer need (smaller context windows are faster and use less memory). The bench script reports prompt tokens so the saving is visible.
+- **Unit tests added:** `explainPrompt.test.ts` checks the order of the parts, that two prompts from the same PR share the same prefix, and the new snapshot. `numCtx.test.ts` checks `num_ctx` is rounded up from the prompt and answer size and stays within the model's limit.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`.
+  2. Run `npm run bench` and confirm prompt tokens and prompt time dropped compared with the previous table.
+  3. In a PR, click one line, then a nearby line in the same file. Open **Details** on the second popup and confirm its prompt time is much lower than the first.
+
+### PR 8.6: Model and GPU check on the settings page (Medium)
+- **Why it's needed:** The biggest speed difference comes from the model's size and whether it runs on the GPU. A 7B model on CPU can be 5 to 10 times slower than a 1.5B or 3B model, or the same model on a GPU, and users can't easily tell which they have.
+- **Problem it solves:** The settings page gets a **Speed test** button that runs one short sample explanation on each installed coding model and shows a table of total time and tokens per second, marks the fastest model that finishes under 10 seconds, and lets the user pick it. It reads `/api/ps` to show whether the loaded model is fully on the GPU, partly, or on CPU, and suggests a fix (for example a smaller quantization such as `q4_K_M`, or closing apps that use video memory) when it is not fully on the GPU.
+- **Unit tests added:** `speedTest.test.ts` (fake client) covers ranking, marking the under-10-second pick, models that fail, and stopping the test. `gpuStatus.test.ts` covers full GPU, partial, CPU only, and missing data. `optionsPage.test.ts` checks the table and the "Use this model" button.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`.
+  2. Pull a second, smaller model: `ollama pull qwen2.5-coder:3b`.
+  3. Run `npm run dev`, reload the extension, open the settings page, and click **Speed test**.
+  4. Confirm both models are timed, the faster one is marked, and **Use this model** switches the setting.
+  5. Confirm the GPU line matches what `ollama ps` shows in the "PROCESSOR" column.
+
+### PR 8.7: Explain on hover (prefetch) (Medium)
+- **Why it's needed:** Even a fast model takes a few seconds. If the explanation starts while the user is still reading the line, it can be ready (or nearly ready) when they click.
+- **Problem it solves:** Adds an optional setting, off by default, that starts an explanation after the pointer rests on a diff line for 800 ms. The result goes into the cache from PR 4.3, so a click shows it at once or joins the request that is already running. Moving to another line cancels a prefetch that has not finished, and only one runs at a time so the laptop is not flooded.
+- **Unit tests added:** `prefetch.test.ts` (fake timers) checks the delay, cancelling on move, one prefetch at a time, a click joining a running prefetch instead of starting a second request, and nothing happening when the setting is off.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`.
+  2. Turn on **Explain on hover** on the settings page, run `npm run dev`, reload the extension, and refresh a PR.
+  3. Rest the pointer on a line for 5 seconds, then click it. Confirm the popup's time is much shorter than a normal click.
+  4. Move the pointer quickly down 20 lines and confirm (in the service worker console or `ollama ps`) that only one request ran at a time.
+
+### PR 8.8: Latency report and faster defaults (Small)
+- **Why it's needed:** The milestone needs a clear answer: did we reach under 10 seconds, and if not, what is the lowest time possible on this laptop?
+- **Problem it solves:** Runs `npm run bench` with every change in place and writes the result to `docs/latency.md`: the baseline, the time after each PR from 8.3 to 8.7, and the final median and slowest times. If the goal is met, it says so with the settings used. If not, it states the measured floor (no load time, the shortest prompt, a 150-token answer, on the fastest model whose answers were still useful) and which term of the formula above dominates, with the next step that would help (for example a GPU, or a smaller model). The defaults are updated to the best combination found (model suggestion, answer limit, keep-alive, context lines).
+- **Unit tests added:** `settings.test.ts` checks the new defaults. No new code beyond that.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`.
+  2. Read `docs/latency.md` and confirm it has the baseline, a row per optimization, and a clear conclusion (goal met, or the floor and why).
+  3. Run `npm run bench` yourself and confirm your numbers are close to the report.
+  4. Reset the extension's settings to defaults, click 5 lines on a real PR, and confirm each popup says "Answered in" with a time at or near the reported result.
 
 ---
 
