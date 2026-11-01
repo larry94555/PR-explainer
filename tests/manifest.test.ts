@@ -70,9 +70,19 @@ describe('manifest.json', () => {
     expect(matchesContentScript(url)).toBe(false);
   });
 
-  it('requests only the storage permission and github.com host access', () => {
+  it('requests only the storage permission, github.com, and this computer for the LLM', () => {
     expect(manifest.permissions).toEqual(['storage']);
-    expect(manifest.host_permissions).toEqual(['https://github.com/*']);
+    // Loopback only, matching the hosts settings.ts accepts for the LLM URL.
+    // A match pattern with no port covers every port, so any local port works.
+    expect(manifest.host_permissions).toEqual([
+      'https://github.com/*',
+      'http://localhost/*',
+      'https://localhost/*',
+      'http://127.0.0.1/*',
+      'https://127.0.0.1/*',
+      'http://[::1]/*',
+      'https://[::1]/*',
+    ]);
     for (const key of [
       'optional_permissions',
       'optional_host_permissions',

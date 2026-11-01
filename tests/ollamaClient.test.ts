@@ -1,0 +1,245 @@
+import { createLlmClient } from '../src/llm/createClient';
+import { buildChatBody, OllamaClient, type FetchLike } from '../src/llm/ollamaClient';
+import { LlmError, type LlmErrorKind } from '../src/llm/types';
+
+const BASE = 'http://localhost:11434';
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+// A fetch that answers every call with `response` (a fresh copy each time, or
+// a rejection) and records the calls.
+function fakeFetch(response: () => Response | Promise<Response>) {
+  return vi.fn<FetchLike>(async () => response());
+}
+
+async function expectLlmError(promise: Promise<unknown>, kind: LlmErrorKind, status?: number) {
+  const error = await promise.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(error).toBeInstanceOf(LlmError);
+  expect((error as LlmError).kind).toBe(kind);
+  expect((error as LlmError).details.status).toBe(status);
+  return error as LlmError;
+}
+
+const TAGS = {
+  models: [
+    { name: 'qwen2.5-coder:7b', model: 'qwen2.5-coder:7b', size: 4683087332, digest: 'abc' },
+    { name: 'llama3.2:latest', model: 'llama3.2:latest' },
+  ],
+};
+
+const CHAT_REPLY = {
+  model: 'qwen2.5-coder:7b',
+  created_at: '2026-11-01T00:00:00Z',
+  message: { role: 'assistant', content: 'OK' },
+  done: true,
+  done_reason: 'stop',
+};
+
+describe('OllamaClient.listModels', () => {
+  it('GETs /api/tags and returns each model name and size', async () => {
+    const fetch = fakeFetch(() => jsonResponse(TAGS));
+    const models = await new OllamaClient({ baseUrl: BASE, fetch }).listModels();
+
+    expect(models).toEqual([
+      { name: 'qwen2.5-coder:7b', sizeBytes: 4683087332 },
+      { name: 'llama3.2:latest' },
+    ]);
+    expect(fetch).toHaveBeenCalledWith(
+      `${BASE}/api/tags`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('returns an empty list when no models are installed', async () => {
+    const fetch = fakeFetch(() => jsonResponse({ models: [] }));
+    expect(await new OllamaClient({ baseUrl: BASE, fetch }).listModels()).toEqual([]);
+  });
+
+  it('ignores a trailing slash in the base URL', async () => {
+    const fetch = fakeFetch(() => jsonResponse(TAGS));
+    await new OllamaClient({ baseUrl: `${BASE}/`, fetch }).listModels();
+    expect(fetch.mock.calls[0]?.[0]).toBe(`${BASE}/api/tags`);
+  });
+
+  it.each([
+    ['no models list', { tags: [] }],
+    ['a model without a name', { models: [{ size: 1 }] }],
+    ['a null model', { models: [null] }],
+  ])('raises bad-response for %s', async (_label, body) => {
+    const fetch = fakeFetch(() => jsonResponse(body));
+    await expectLlmError(new OllamaClient({ baseUrl: BASE, fetch }).listModels(), 'bad-response');
+  });
+
+  it('raises http, not model-not-found, for a 404 (the URL is not an Ollama server)', async () => {
+    const fetch = fakeFetch(() => new Response('404 page not found', { status: 404 }));
+    const error = await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).listModels(),
+      'http',
+      404,
+    );
+    expect(error.message).toContain('404 page not found');
+  });
+});
+
+describe('buildChatBody', () => {
+  it('asks for a non-streaming reply with the model options Ollama expects', () => {
+    expect(
+      buildChatBody([{ role: 'user', content: 'Hi' }], {
+        model: 'm',
+        temperature: 0.2,
+        maxResponseTokens: 512,
+      }),
+    ).toEqual({
+      model: 'm',
+      messages: [{ role: 'user', content: 'Hi' }],
+      stream: false,
+      options: { temperature: 0.2, num_predict: 512 },
+    });
+  });
+
+  it('leaves out options that were not given and extra message fields', () => {
+    const message = { role: 'user' as const, content: 'Hi', extra: 'dropped' };
+    expect(buildChatBody([message], { model: 'm' })).toEqual({
+      model: 'm',
+      messages: [{ role: 'user', content: 'Hi' }],
+      stream: false,
+      options: {},
+    });
+  });
+
+  it('keeps a temperature of 0', () => {
+    expect(buildChatBody([], { model: 'm', temperature: 0 }).options).toEqual({ temperature: 0 });
+  });
+});
+
+describe('OllamaClient.chat', () => {
+  const messages = [
+    { role: 'system' as const, content: 'Be brief.' },
+    { role: 'user' as const, content: 'Reply with OK' },
+  ];
+
+  it('POSTs the chat body as JSON and returns the reply text and model', async () => {
+    const fetch = fakeFetch(() => jsonResponse(CHAT_REPLY));
+    const reply = await new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, {
+      model: 'qwen2.5-coder:7b',
+      temperature: 0.2,
+    });
+
+    expect(reply).toEqual({ content: 'OK', model: 'qwen2.5-coder:7b' });
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe(`${BASE}/api/chat`);
+    expect(init?.method).toBe('POST');
+    expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(init?.body as string)).toEqual(
+      buildChatBody(messages, { model: 'qwen2.5-coder:7b', temperature: 0.2 }),
+    );
+  });
+
+  it('passes the abort signal to fetch', async () => {
+    const fetch = fakeFetch(() => jsonResponse(CHAT_REPLY));
+    const controller = new AbortController();
+    await new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, {
+      model: 'm',
+      signal: controller.signal,
+    });
+    expect(fetch.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+  });
+
+  it('raises no-model without calling the server when no model is set', async () => {
+    const fetch = fakeFetch(() => jsonResponse(CHAT_REPLY));
+    await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, { model: '  ' }),
+      'no-model',
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('raises connection when nothing is listening', async () => {
+    const fetch = fakeFetch(() => Promise.reject(new TypeError('Failed to fetch')));
+    const error = await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, { model: 'm' }),
+      'connection',
+    );
+    expect(error.message).toContain(BASE);
+    expect(error.details.cause).toBeInstanceOf(TypeError);
+  });
+
+  it('raises model-not-found for HTTP 404, with the server message', async () => {
+    const fetch = fakeFetch(() =>
+      jsonResponse({ error: "model 'nope' not found, try pulling it first" }, 404),
+    );
+    const error = await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, { model: 'nope' }),
+      'model-not-found',
+      404,
+    );
+    expect(error.message).toContain('"nope"');
+    expect(error.message).toContain('try pulling it first');
+  });
+
+  it('raises origin-blocked for HTTP 403 with an empty body', async () => {
+    const fetch = fakeFetch(() => new Response(null, { status: 403, statusText: 'Forbidden' }));
+    const error = await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, { model: 'm' }),
+      'origin-blocked',
+      403,
+    );
+    expect(error.message).toContain('Forbidden');
+  });
+
+  it('raises http for other error statuses', async () => {
+    const fetch = fakeFetch(() => jsonResponse({ error: 'out of memory' }, 500));
+    const error = await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, { model: 'm' }),
+      'http',
+      500,
+    );
+    expect(error.message).toContain('out of memory');
+  });
+
+  it.each([
+    ['text that is not JSON', () => new Response('<html>oops</html>', { status: 200 })],
+    ['JSON that is not an object', () => jsonResponse('OK')],
+    ['a reply without message.content', () => jsonResponse({ model: 'm', done: true })],
+  ])('raises bad-response for %s', async (_label, response) => {
+    const fetch = fakeFetch(response);
+    await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, { model: 'm' }),
+      'bad-response',
+    );
+  });
+
+  it('raises aborted when the request is cancelled', async () => {
+    const fetch = fakeFetch(() =>
+      Promise.reject(new DOMException('The operation was aborted.', 'AbortError')),
+    );
+    await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, { model: 'm' }),
+      'aborted',
+    );
+  });
+
+  it('uses the requested model name when the reply does not include one', async () => {
+    const fetch = fakeFetch(() => jsonResponse({ message: { role: 'assistant', content: 'OK' } }));
+    const reply = await new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, { model: 'm' });
+    expect(reply.model).toBe('m');
+  });
+});
+
+describe('createLlmClient', () => {
+  it('builds an Ollama client for the saved URL', async () => {
+    const fetch = fakeFetch(() => jsonResponse(TAGS));
+    const client = createLlmClient({ llmUrl: 'http://127.0.0.1:8080' }, fetch);
+    expect(client).toBeInstanceOf(OllamaClient);
+    await client.listModels();
+    expect(fetch.mock.calls[0]?.[0]).toBe('http://127.0.0.1:8080/api/tags');
+  });
+});
