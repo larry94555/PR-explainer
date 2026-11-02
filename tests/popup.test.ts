@@ -299,6 +299,50 @@ describe('popup', () => {
       expect(shadow().querySelector('.message')?.textContent).toContain('<img');
     });
   });
+
+  describe('Ask a question', () => {
+    const askButton = () => shadow().querySelector<HTMLButtonElement>('.ask');
+    const footerShown = () =>
+      shadow().querySelector('.popup')!.getAttribute('data-state') === 'done';
+
+    it('is shown only once an explanation is shown', () => {
+      const popup = openPopup(ANCHOR, { onAsk: vi.fn() });
+      expect(askButton()!.textContent).toBe('Ask a question');
+      expect(footerShown()).toBe(false);
+      popup.showPartial('Adds');
+      expect(footerShown()).toBe(false);
+      popup.showExplanation(SAMPLE, 'm');
+      expect(footerShown()).toBe(true);
+      expect(shadow().textContent).not.toContain('Thinking');
+    });
+
+    it('closes the popup, then calls onAsk', () => {
+      const calls: string[] = [];
+      const popup = openPopup(ANCHOR, {
+        onAsk: () => calls.push(`ask, popup ${popup.state}`),
+        onClose: () => calls.push('closed'),
+      });
+      popup.showExplanation(SAMPLE, 'm');
+      askButton()!.click();
+      expect(calls).toEqual(['closed', 'ask, popup closed']);
+      expect(currentPopup()).toBeNull();
+    });
+
+    it('does nothing before the explanation is shown', () => {
+      const onAsk = vi.fn();
+      const popup = openPopup(ANCHOR, { onAsk });
+      askButton()!.click();
+      popup.showError('Failed.', 'Fix.');
+      askButton()!.click();
+      expect(onAsk).not.toHaveBeenCalled();
+      expect(popup.state).toBe('failed');
+    });
+
+    it('is left out without onAsk', () => {
+      openPopup(ANCHOR).showExplanation(SAMPLE, 'm');
+      expect(askButton()).toBeNull();
+    });
+  });
 });
 
 describe('computePosition', () => {

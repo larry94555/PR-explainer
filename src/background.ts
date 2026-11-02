@@ -1,5 +1,6 @@
 // Service worker. Answers requests from the content script (see
 // src/messaging/). All calls to the local LLM run here (see src/llm/).
+import { createChatHandler } from './chat/chatHandler';
 import { CACHE_STORAGE_KEY, createExplainCache } from './explain/explainCache';
 import { createExplainHandler } from './explain/explainHandler';
 import { buildExplainPrompt } from './explain/explainPrompt';
@@ -7,7 +8,7 @@ import { SAMPLE_CONTEXT } from './explain/sampleContext';
 import { createLlmClient } from './llm/createClient';
 import { detectPlatform } from './llm/describeLlmError';
 import { MessageRouter } from './messaging/router';
-import { listenForExplainPorts } from './messaging/streamPort';
+import { listenForChatPorts, listenForExplainPorts } from './messaging/streamPort';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from './settings';
 import { setupToolbarToggle } from './toolbarToggle';
 
@@ -33,6 +34,15 @@ new MessageRouter()
 // Explanations stream over a port, so the popup can show the reply as it
 // arrives and stop it midway (see src/messaging/streamPort.ts).
 listenForExplainPorts(chrome.runtime, explain);
+// Chat answers (the chat panel) stream the same way, over their own port.
+listenForChatPorts(
+  chrome.runtime,
+  createChatHandler({
+    getSettings,
+    createClient: createLlmClient,
+    platform: detectPlatform(navigator.userAgent),
+  }),
+);
 
 // The toolbar button turns click-to-explain on and off for every tab.
 setupToolbarToggle({ action: chrome.action, storage: chrome.storage.local });

@@ -3,6 +3,8 @@ import {
   currentChatPanel,
   formatLines,
   openChatPanel,
+  STOPPED_EMPTY,
+  STOPPED_NOTE,
   type ChatPanelOptions,
 } from '../src/chat/chatPanel';
 
@@ -285,5 +287,47 @@ describe('chat panel', () => {
     const chat = open();
     chat.focus();
     expect(shadow().activeElement).toBe(input());
+  });
+
+  describe('Stop, errors and stopped answers', () => {
+    const stopButton = () => shadow().querySelector<HTMLButtonElement>('.stop')!;
+    const busy = () => shadow().querySelector('.chat')!.getAttribute('data-busy');
+
+    it('Stop calls onStop only while an answer is being written', () => {
+      const onStop = vi.fn();
+      const chat = open({ onStop });
+      expect(stopButton().textContent).toBe('Stop');
+      stopButton().click();
+      expect(onStop).not.toHaveBeenCalled();
+      chat.setBusy(true);
+      expect(busy()).toBe('true');
+      stopButton().click();
+      expect(onStop).toHaveBeenCalledOnce();
+    });
+
+    it('shows an error with its fix, as text', () => {
+      const chat = open();
+      const answer = chat.addMessage('assistant', 'Part');
+      answer.showError('Could not reach `localhost` <img src=x>', 'Start Ollama.');
+      expect(answer.element.dataset.status).toBe('failed');
+      expect(answer.element.getAttribute('role')).toBe('alert');
+      expect(answer.element.querySelector('.error-message')!.textContent).toBe(
+        'Could not reach localhost <img src=x>',
+      );
+      expect(answer.element.querySelector('.error-message code')).not.toBeNull();
+      expect(answer.element.querySelector('img')).toBeNull();
+      expect(answer.element.querySelector('.fix')!.textContent).toBe('Start Ollama.');
+    });
+
+    it('marks a stopped answer, keeping its text', () => {
+      const chat = open();
+      const partial = chat.addMessage('assistant', 'It **matches**');
+      partial.showStopped();
+      expect(partial.element.querySelector('strong')!.textContent).toBe('matches');
+      expect(partial.element.querySelector('.stopped-note')!.textContent).toBe(STOPPED_NOTE);
+      const empty = chat.addMessage('assistant', '');
+      empty.showStopped();
+      expect(empty.element.textContent).toBe(STOPPED_EMPTY);
+    });
   });
 });

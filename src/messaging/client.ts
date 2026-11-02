@@ -1,9 +1,11 @@
 // Content script side: send a typed request to the service worker and wait
 // for its answer, or stream an explanation over a port.
 
+import type { ChatPayload, ChatResult } from '../chat/chatHandler';
 import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
 import type {
-  ExplainPortMessage,
+  ChatPortName,
+  ChatPortRequest,
   ExplainPortName,
   ExplainPortRequest,
   ExtensionRuntime,
@@ -14,6 +16,7 @@ import type {
   RequestType,
   ResponseEnvelope,
   ResultOf,
+  StreamPortMessage,
 } from './protocol';
 
 export const DEFAULT_TIMEOUT_MS = 10_000;
@@ -77,21 +80,27 @@ export async function sendRequest<T extends RequestType>(
   }
 }
 
-// Must match EXPLAIN_PORT in streamPort.ts; the type makes TypeScript check it.
+// Must match EXPLAIN_PORT and CHAT_PORT in streamPort.ts; the types make
+// TypeScript check them.
 const EXPLAIN_PORT: ExplainPortName = 'pr-explainer:explain';
+const CHAT_PORT: ChatPortName = 'pr-explainer:chat';
 
-export interface ExplainStream {
+/** A request streaming over a port. */
+export interface PortStream<R> {
   /**
    * The final result. Rejects with a RequestError when the service worker
    * cannot be reached or closes the port early, and with an "AbortError"
    * RequestError after stop().
    */
-  result: Promise<ExplainResult>;
+  result: Promise<R>;
   /** Disconnects the port, which aborts the request in the service worker. */
   stop(): void;
 }
 
-function isPortMessage(value: unknown): value is ExplainPortMessage {
+export type ExplainStream = PortStream<ExplainResult>;
+export type ChatStream = PortStream<ChatResult>;
+
+function isPortMessage<R>(value: unknown): value is StreamPortMessage<R> {
   return typeof value === 'object' && value !== null && 'type' in value;
 }
 
@@ -106,9 +115,33 @@ export function openExplainStream(
   onChunk: (text: string) => void,
   runtime: PortRuntime = chrome.runtime,
 ): ExplainStream {
-  let resolveResult!: (result: ExplainResult) => void;
+  const request: ExplainPortRequest = { type: 'start', ...payload };
+  return openStream<ExplainResult>(EXPLAIN_PORT, request, onChunk, runtime);
+}
+
+/**
+ * Asks the service worker to answer a chat question (PR 5.3), sending the
+ * whole message list from ChatSession.messagesFor, and calling `onChunk` with
+ * each piece of the answer as it arrives. Works like openExplainStream.
+ */
+export function openChatStream(
+  payload: ChatPayload,
+  onChunk: (text: string) => void,
+  runtime: PortRuntime = chrome.runtime,
+): ChatStream {
+  const request: ChatPortRequest = { type: 'start', ...payload };
+  return openStream<ChatResult>(CHAT_PORT, request, onChunk, runtime);
+}
+
+function openStream<R>(
+  name: string,
+  request: { type: 'start' },
+  onChunk: (text: string) => void,
+  runtime: PortRuntime,
+): PortStream<R> {
+  let resolveResult!: (result: R) => void;
   let rejectResult!: (error: RequestError) => void;
-  const result = new Promise<ExplainResult>((resolve, reject) => {
+  const result = new Promise<R>((resolve, reject) => {
     resolveResult = resolve;
     rejectResult = reject;
   });
@@ -131,9 +164,9 @@ export function openExplainStream(
   try {
     // connect() throws "Extension context invalidated" after the extension
     // is reloaded.
-    port = runtime.connect({ name: EXPLAIN_PORT });
+    port = runtime.connect({ name });
     port.onMessage.addListener((message) => {
-      if (settled || !isPortMessage(message)) return;
+      if (settled || !isPortMessage<R>(message)) return;
       if (message.type === 'chunk') onChunk(message.text);
       else if (message.type === 'result') finish(() => resolveResult(message.result));
       else if (message.type === 'error') {
@@ -143,7 +176,6 @@ export function openExplainStream(
     port.onDisconnect.addListener(() =>
       unreachable(runtime.lastError?.message ?? 'the connection closed before the answer arrived.'),
     );
-    const request: ExplainPortRequest = { type: 'start', ...payload };
     port.postMessage(request);
   } catch (error) {
     unreachable(error instanceof Error ? error.message : String(error));

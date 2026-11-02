@@ -112,5 +112,24 @@ export const CHAT_PANEL_STYLE = `
   }
   .send:hover:not(:disabled) { background: #1a7f37; }
   .send:disabled { background: #94d3a2; border-color: #94d3a2; cursor: not-allowed; }
+  .stop {
+    align-self: end;
+    border: 1px solid #d0d7de;
+    background: #ffffff;
+    color: #1f2328;
+    font: inherit;
+    font-weight: 600;
+    padding: 5px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .stop:hover, .stop:focus-visible { background: #ffebe9; border-color: #d1242f; color: #d1242f; }
+  /* Stop takes Send's place while an answer is being written. */
+  .chat[data-busy='true'] .send, .chat:not([data-busy='true']) .stop { display: none; }
+  /* An answer that has no text yet. */
+  .message.assistant:empty::before { content: 'Thinking…'; color: #59636e; }
+  .message[data-status='failed'] { background: #fff8f8; border-color: #ffcecb; }
+  .error-message { color: #d1242f; font-weight: 600; }
+  .stopped-note { color: #59636e; font-style: italic; }
   .hint { grid-column: 1 / -1; color: #59636e; font-size: 11px; }
 `;

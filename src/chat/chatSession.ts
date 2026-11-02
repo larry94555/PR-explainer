@@ -3,7 +3,7 @@
 // was sent to the model, the explanation it gave, and the questions and
 // answers that follow, and builds the message list the LLM is sent for the
 // next question. It has no UI and does not talk to the LLM; the chat panel
-// (PR 5.2) and the streaming hookup (PR 5.3) use it.
+// (src/chat/chatPanel.ts) shows it and src/chat/chatFlow.ts sends it to the model.
 //
 // The sessions live in the content script, so a conversation lasts as long as
 // the tab and is never written to storage. That also means this file must not
@@ -146,6 +146,13 @@ export class ChatSessions {
       session = new ChatSession(seed);
       this.#byPr.set(pr, session);
     }
+    return session;
+  }
+
+  /** Starts a new session for the PR from `seed`, replacing any it had. */
+  restart(pr: string, seed: ChatSeed): ChatSession {
+    const session = new ChatSession(seed);
+    this.#byPr.set(pr, session);
     return session;
   }
 }

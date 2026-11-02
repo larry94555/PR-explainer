@@ -1,7 +1,15 @@
 // Static demo for the popup (`npm run demo:popup`). Uses fake data only: no
-// extension APIs and no LLM, so each state can be checked by eye.
+// extension APIs and no LLM, so each state can be checked by eye. Ask a
+// question opens the real chat flow (src/chat/chatFlow.ts) with a fake model
+// that streams canned answers word by word; a question with "fail" in it
+// gets an error instead.
 
+import type { ChatResult } from '../src/chat/chatHandler';
+import { openChatPanel } from '../src/chat/chatPanel';
+import { startChat } from '../src/chat/chatFlow';
+import { ChatSession } from '../src/chat/chatSession';
 import { describeLlmError } from '../src/llm/describeLlmError';
+import type { ChatMessage } from '../src/llm/types';
 import { LlmError } from '../src/llm/types';
 import { openPopup } from '../src/popup/popup';
 import type { Explanation } from '../src/explain/parseExplanation';
@@ -38,6 +46,46 @@ const LINES: Array<[string, string]> = [
   [' ', '}'],
 ];
 
+const ANSWERS = [
+  'Use fake timers, so the test does not wait for the real delays:\n\n```ts\n' +
+    "it('retries three times', async () => {\n  vi.useFakeTimers();\n" +
+    "  const fn = vi.fn().mockRejectedValue(new Error('down'));\n  const result = retry(fn);\n" +
+    "  await vi.runAllTimersAsync();\n  await expect(result).rejects.toThrow('down');\n" +
+    '  expect(fn).toHaveBeenCalledTimes(4);\n});\n```\n\n' +
+    '- The first call plus **three** retries makes 4 calls.',
+  'In Jest the same test uses `jest.useFakeTimers()` and `jest.runAllTimersAsync()`:\n\n```ts\n' +
+    "test('retries three times', async () => {\n  jest.useFakeTimers();\n" +
+    "  const fn = jest.fn().mockRejectedValue(new Error('down'));\n" +
+    '  const result = retry(fn);\n  await jest.runAllTimersAsync();\n' +
+    "  await expect(result).rejects.toThrow('down');\n});\n```",
+];
+
+/** A fake model: streams a canned answer word by word, until stopped. */
+function fakeAsk(messages: ChatMessage[], onChunk: (text: string) => void) {
+  const question = messages.at(-1)!.content;
+  const earlier = messages.filter((m) => m.role === 'user').length - 2;
+  const words = ANSWERS[earlier % ANSWERS.length]!.split(/(?<=\s)/);
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const result = new Promise<ChatResult>((resolve) => {
+    if (/fail/i.test(question)) {
+      const { message, fix } = describeLlmError(new LlmError('connection', 'fetch failed'), {
+        url: 'http://localhost:11434',
+        platform: 'windows',
+      });
+      setTimeout(() => resolve({ status: 'failed', message, fix }), 600);
+      return;
+    }
+    let shown = 0;
+    timer = setInterval(() => {
+      onChunk(words[shown++]!);
+      if (shown < words.length) return;
+      clearInterval(timer);
+      resolve({ status: 'done', answer: words.join(''), model: MODEL });
+    }, 60);
+  });
+  return { result, stop: () => clearInterval(timer) };
+}
+
 function fillDiff(table: HTMLTableElement, start: number): void {
   LINES.forEach(([marker, code], i) => {
     const row = table.insertRow();
@@ -58,7 +106,19 @@ const chosen = () =>
 document.addEventListener('click', (event) => {
   const row = (event.target as Element).closest?.('table.diff tr');
   if (!row) return;
-  const popup = openPopup(row, { onClose: () => (status.textContent = 'Last event: closed') });
+  const popup = openPopup(row, {
+    onClose: () => (status.textContent = 'Last event: closed'),
+    onAsk: () => {
+      const session = new ChatSession({
+        context: LINES.map(([marker, code]) => marker + code).join('\n'),
+        explanation: chosen() === 'unsafe' ? UNSAFE : SAMPLE,
+      });
+      const line = Number((row as HTMLTableRowElement).cells[0]!.textContent);
+      const subject = { filePath: 'src/llm/retry.ts', startLine: line };
+      startChat({ ask: fakeAsk, openPanel: openChatPanel }, session, subject).focus();
+      status.textContent = 'Last event: chat opened';
+    },
+  });
   status.textContent = `Last event: opened (${chosen()})`;
   switch (chosen()) {
     case 'loading':

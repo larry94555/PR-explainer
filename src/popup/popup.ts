@@ -9,7 +9,9 @@
 // key, or a click anywhere outside it. Once stopped or closed it ignores
 // further updates, so a late answer changes nothing. Once the model has
 // finished, failed, or been stopped, a Regenerate button asks it again,
-// skipping the explanation cache; the popup goes back to loading.
+// skipping the explanation cache; the popup goes back to loading. Once an
+// explanation is shown, an Ask a question button (when the caller passes
+// onAsk) closes the popup and opens the chat about the same code (PR 5.3).
 //
 // The header shows how long the request has taken: a live timer while
 // loading and streaming, then "Answered in …", "Failed after …", or
@@ -58,6 +60,12 @@ export interface PopupOptions {
    * back to loading, to ask the model again without the cache.
    */
   onRegenerate?: () => void;
+  /**
+   * Called when the Ask a question button is pressed, after the popup has
+   * closed. The button is shown only once an explanation is shown, and only
+   * when this is passed.
+   */
+  onAsk?: () => void;
   /** Clock in milliseconds, for the elapsed time. Tests pass a fake one. */
   now?: () => number;
 }
@@ -188,7 +196,23 @@ export function openPopup(
   const body = doc.createElement('div');
   body.className = 'body';
   body.setAttribute('aria-live', 'polite');
-  panel.append(header, body);
+  // Shown only once the explanation is shown (see popupStyle.ts).
+  const footer = doc.createElement('div');
+  footer.className = 'footer';
+  if (options.onAsk) {
+    const askButton = doc.createElement('button');
+    askButton.className = 'ask';
+    askButton.type = 'button';
+    askButton.textContent = 'Ask a question';
+    askButton.title = 'Chat with the model about this code';
+    askButton.addEventListener('click', () => {
+      if (state !== 'done') return;
+      popup.close();
+      options.onAsk?.();
+    });
+    footer.append(askButton);
+  }
+  panel.append(header, body, footer);
   shadow.append(style, panel);
   doc.body.append(host);
 
