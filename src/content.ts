@@ -1,6 +1,8 @@
-// Content script, injected on GitHub PR pages (see public/manifest.json).
-// Detects the PR, shows the "PR Explainer active" badge, checks that the
-// service worker answers, and explains diff lines when they are clicked.
+// Content script, injected on every github.com page (see public/manifest.json)
+// because GitHub moves between pages without a reload (PR 7.1). On PR pages
+// it shows the "PR Explainer active" badge and checks that the service worker
+// answers; on a PR's Files changed and commit pages it explains diff lines
+// when they are clicked. Elsewhere it only waits for a move to a PR.
 //
 // Chrome runs content scripts as classic scripts, not ES modules, so this
 // entry must not share imports with other entries: Vite would move shared
@@ -13,6 +15,7 @@ import { ChatSessions } from './chat/chatSession';
 import { createClickHandler, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
 import { openAfter, openChatStream, openExplainStream, sendRequest } from './messaging/client';
+import { closeDetached, DiffPageFeatures, watchNavigation } from './navigation';
 import { currentPopup, openPopup } from './popup/popup';
 import { createFileContextLoader, type CodeSpan } from './fileContext';
 import type { FileContext } from './explain/explainPrompt';
@@ -78,49 +81,33 @@ const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (va
   update();
 });
 
+let pinged = false;
+/** Checks once, on the first PR page, that the service worker answers. */
+function pingWorker(): void {
+  if (pinged) return;
+  pinged = true;
+  sendRequest('ping', undefined).then(
+    () => {
+      workerStatus = 'Service worker: connected';
+      update();
+    },
+    (error: Error) => {
+      workerStatus = `Service worker: not connected (${error.message})`;
+      console.warn('[PR Explainer]', error);
+      update();
+    },
+  );
+}
+
 function update(): void {
   // Moving to another PR (or off PRs) without a reload closes its chat.
   currentChat.leave(prName(location.href));
   if (!syncBadge(document, location.href)) return;
+  pingWorker();
   setBadgeStatus(document, workerStatus);
   const value = enabled.current();
   if (value !== null) setBadgeEnabled(document, value);
 }
-
-update();
-// Read the description ahead of the first click, so it does not wait.
-void loadPrMetadata();
-
-sendRequest('ping', undefined).then(
-  () => {
-    workerStatus = 'Service worker: connected';
-    update();
-  },
-  (error: Error) => {
-    workerStatus = `Service worker: not connected (${error.message})`;
-    console.warn('[PR Explainer]', error);
-    update();
-  },
-);
-
-// GitHub changes pages without a full reload (Turbo), so this script keeps
-// running when the user moves from a PR to, say, an issue. Re-check the URL
-// after each of those navigations and on back/forward.
-// Each navigation may come back from editing the PR's title or description,
-// so they are read again (PR 6.1): ahead of time once the new page has loaded,
-// or on the next click after back/forward.
-document.addEventListener('turbo:load', () => {
-  update();
-  prMetadata.forget();
-  fileContexts.forget();
-  void loadPrMetadata();
-});
-document.addEventListener('turbo:render', update);
-window.addEventListener('popstate', () => {
-  update();
-  prMetadata.forget();
-  fileContexts.forget();
-});
 
 // Click a diff line to explain it: a popup opens next to the line and the
 // model's answer streams into it (see src/clickHandler.ts). There is no
@@ -194,7 +181,43 @@ const explainDeps: ClickHandlerDeps = {
     );
   },
 };
-document.addEventListener('click', createClickHandler(explainDeps));
-// Drag across lines, or click one and Shift-click another, to explain the
-// block as a whole (src/selection.ts).
-installSelection(explainDeps);
+const onClick = createClickHandler(explainDeps);
+// Click-to-explain is attached only while a PR's diffs are shown, once
+// however often GitHub re-renders the page, and taken off when the user
+// moves elsewhere (PR 7.1).
+const features = new DiffPageFeatures(() => {
+  document.addEventListener('click', onClick);
+  // Drag across lines, or click one and Shift-click another, to explain the
+  // block as a whole (src/selection.ts).
+  const removeSelection = installSelection(explainDeps);
+  return () => {
+    document.removeEventListener('click', onClick);
+    removeSelection();
+    // Closing the popup also stops its request.
+    currentPopup()?.close();
+  };
+});
+
+update();
+features.sync(location.href);
+// Read the description ahead of the first click, so it does not wait.
+void loadPrMetadata();
+
+// GitHub changes pages without a full reload (Turbo, or pushState in its
+// React views), so this script keeps running when the user moves from a PR
+// to, say, an issue, or from the Conversation tab to Files changed. Each move
+// to another page updates the badge and attaches or removes click-to-explain.
+// It may also come back from editing the PR's title or description, so they
+// (and the files) are read again (PR 6.1, 6.3).
+watchNavigation(window, (url) => {
+  // A popup or chat whose part of the page GitHub replaced is closed, so
+  // its request stops and clicks do not go to it.
+  closeDetached([currentPopup(), currentChatPanel()]);
+  update();
+  features.sync(url);
+  prMetadata.forget();
+  fileContexts.forget();
+  void loadPrMetadata();
+});
+// Turbo can also redraw the same page (after a form is sent), dropping the badge.
+document.addEventListener('turbo:render', update);
