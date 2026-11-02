@@ -80,8 +80,8 @@ const explainDeps: ClickHandlerDeps = {
   openPopup: (anchor, options) => openPopup(anchor, options),
   // The popup's Ask a question button: chat about the explained code, with
   // answers streamed from the service worker (src/chat/chatFlow.ts).
-  openChat: ({ subject, ...seed }) => {
-    const session = chatSessionFor(chats, prName(location.href), seed);
+  openChat: ({ subject, regenerated, ...seed }) => {
+    const session = chatSessionFor(chats, prName(location.href), seed, { regenerated });
     const panel = startChat(
       {
         ask: (messages, onChunk) => openChatStream({ messages }, onChunk),

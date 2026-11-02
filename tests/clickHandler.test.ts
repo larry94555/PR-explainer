@@ -416,7 +416,16 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
       context: env.contexts[1],
       explanation: DONE.explanation,
       subject: { filePath: 'docs/roadmap.md', startLine: 44 },
+      regenerated: false,
     });
+
+    // After Regenerate the chat is marked to start over, even with the same text.
+    env.popups[1]!.pressRegenerate();
+    await flush();
+    env.popups[1]!.hooks.onAsk!();
+    expect(openChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ explanation: DONE.explanation, regenerated: true }),
+    );
   });
 
   it('Ask a question does nothing until there is an explanation', () => {

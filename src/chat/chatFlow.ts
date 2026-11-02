@@ -40,18 +40,21 @@ export const EMPTY_ANSWER = {
 /**
  * The session to chat in for `seed`. The PR's session is reused while it is
  * about the same code and explanation, so closing and reopening the chat
- * carries on the conversation. Asking about other code (or after Regenerate)
- * starts a new one; PR 5.4 keeps the conversation across lines instead.
- * Without a PR name the session is not kept.
+ * carries on the conversation. Asking about other code starts a new one; PR
+ * 5.4 keeps the conversation across lines instead. `regenerated` (the
+ * explanation came from Regenerate) always starts a new one, even when the
+ * model wrote the same text again. Without a PR name the session is not kept.
  */
 export function chatSessionFor(
   sessions: ChatSessions,
   pr: string | undefined,
   seed: ChatSeed,
+  { regenerated = false }: { regenerated?: boolean } = {},
 ): ChatSession {
   if (pr === undefined) return new ChatSession(seed);
   const existing = sessions.get(pr);
   const same =
+    !regenerated &&
     existing?.context === seed.context &&
     formatExplanation(existing.explanation) === formatExplanation(seed.explanation);
   return same ? existing : sessions.restart(pr, seed);

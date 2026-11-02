@@ -245,6 +245,20 @@ describe('chatSessionFor', () => {
     expect(chatSessionFor(sessions, 'o/r#1', regenerated)).not.toBe(other);
   });
 
+  it('starts over after Regenerate even when the text is the same, and keeps turns otherwise', () => {
+    const sessions = new ChatSessions();
+    const first = chatSessionFor(sessions, 'o/r#1', SEED);
+    first.addTurn('How would I unit test this?', 'Use fake timers.');
+    // Closed and reopened without regenerating: the turns are still there.
+    expect(chatSessionFor(sessions, 'o/r#1', SEED).turns).toHaveLength(1);
+
+    const regenerated = chatSessionFor(sessions, 'o/r#1', SEED, { regenerated: true });
+    expect(regenerated).not.toBe(first);
+    expect(regenerated.turns).toEqual([]);
+    // Asking again later (not regenerated) carries on the new conversation.
+    expect(chatSessionFor(sessions, 'o/r#1', SEED)).toBe(regenerated);
+  });
+
   it('does not keep a session without a PR', () => {
     const sessions = new ChatSessions();
     expect(chatSessionFor(sessions, undefined, SEED)).not.toBe(

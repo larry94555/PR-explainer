@@ -64,6 +64,8 @@ export interface ClickHandlerDeps {
 /** What a chat starts from: the code, its explanation, and where the code is. */
 export interface ChatStart extends ChatSeed {
   subject: ChatSubject;
+  /** True when the explanation came from Regenerate, so the chat starts over. */
+  regenerated: boolean;
 }
 
 /** The code to explain: the context block for the model, and where it is. */
@@ -181,6 +183,7 @@ export function explainInPopup(
     deps.onTiming?.({ elapsedMs: popup.elapsedMs, ...timing, firstChunkMs });
   // The explanation the popup shows, for Ask a question.
   let explanation: Explanation | undefined;
+  let regenerated = false;
   const { openChat } = deps;
   // The popup's callbacks only run after a user action, by which time
   // `stream` (below) is set.
@@ -202,7 +205,7 @@ export function explainInPopup(
     // explanation is shown.
     ...(openChat && {
       onAsk: () => {
-        if (explanation) openChat({ context: text, explanation, subject });
+        if (explanation) openChat({ context: text, explanation, subject, regenerated });
       },
     }),
   });
@@ -214,6 +217,7 @@ export function explainInPopup(
   const ask = (fresh: boolean): ExplainStream => {
     firstChunkMs = undefined;
     explanation = undefined;
+    regenerated = fresh;
     let reply = '';
     const current = () => latest === request && waiting();
     const request: ExplainStream = deps.explain(
