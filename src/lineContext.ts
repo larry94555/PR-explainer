@@ -9,7 +9,9 @@ export interface ContextOptions {
   after: number;
 }
 
-export const DEFAULT_CONTEXT: ContextOptions = { before: 10, after: 10 };
+// Six lines each way (PR 8.5, down from 10): enough to see what the line is
+// part of, and the file context (PR 6.3) shows the rest of the function.
+export const DEFAULT_CONTEXT: ContextOptions = { before: 6, after: 6 };
 
 export interface LineContext {
   line: DiffLine;

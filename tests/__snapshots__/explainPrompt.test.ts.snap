@@ -3,26 +3,24 @@
 exports[`buildExplainPrompt > builds a system prompt and a user message for a sample context 1`] = `
 [
   {
-    "content": "You are a senior software engineer helping a colleague review a GitHub pull request.
-You are given one line from the diff, the lines around it, and the file it is in.
-Explain the clicked line in the context of the change.
+    "content": "You are a senior engineer helping review a GitHub pull request. You get its title and
+description, code from the file, and the diff lines to explain: one clicked line, or a
+selected block to explain as a whole. Use the title and description for why the change needs it.
 
-Answer in Markdown with exactly these three level-2 headings, in this order:
+Answer in Markdown with exactly these level-2 headings, in this order:
 ## What it does
-At most two sentences on what the line does.
+At most two sentences.
 ## Why it's needed
-At most two sentences on why the change needs it.
+At most two sentences.
 ## Concerns
-At most three bullets, one sentence each, most important first, on real problems:
-bugs, edge cases, security, or performance. If there are none, write "None found."
+At most three one-sentence bullets, most important first: bugs, edge cases, security,
+or performance. If there are none, write "None found."
 
-Be brief and specific. Do not repeat the code back. Do not add other headings or a summary.",
+Be brief. Do not repeat the code. No other headings, no summary.",
     "role": "system",
   },
   {
-    "content": "Explain the clicked line in this pull request diff.
-
-\`\`\`
+    "content": "\`\`\`
 File: src/settings.ts (TypeScript)
 Clicked line: added, line 42 of the new file
 +const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -36,7 +34,9 @@ Surrounding diff (the clicked line starts with >):
 +
  export interface SettingsIssue {
    field: SettingsField;
-\`\`\`",
+\`\`\`
+
+Explain the clicked line.",
     "role": "user",
   },
 ]
@@ -45,28 +45,24 @@ Surrounding diff (the clicked line starts with >):
 exports[`buildExplainPrompt > with the PR title and description (PR 6.1) > puts them before the code and asks to use them for why the change needs it 1`] = `
 [
   {
-    "content": "You are a senior software engineer helping a colleague review a GitHub pull request.
-You are given one line from the diff, the lines around it, and the file it is in.
-Explain the clicked line in the context of the change.
+    "content": "You are a senior engineer helping review a GitHub pull request. You get its title and
+description, code from the file, and the diff lines to explain: one clicked line, or a
+selected block to explain as a whole. Use the title and description for why the change needs it.
 
-Answer in Markdown with exactly these three level-2 headings, in this order:
+Answer in Markdown with exactly these level-2 headings, in this order:
 ## What it does
-At most two sentences on what the line does.
+At most two sentences.
 ## Why it's needed
-At most two sentences on why the change needs it.
+At most two sentences.
 ## Concerns
-At most three bullets, one sentence each, most important first, on real problems:
-bugs, edge cases, security, or performance. If there are none, write "None found."
+At most three one-sentence bullets, most important first: bugs, edge cases, security,
+or performance. If there are none, write "None found."
 
-Be brief and specific. Do not repeat the code back. Do not add other headings or a summary.",
+Be brief. Do not repeat the code. No other headings, no summary.",
     "role": "system",
   },
   {
-    "content": "Explain the clicked line in this pull request diff.
-
-Use the pull request's title and description to explain why the change needs this code.
-
-Pull request title: Add a feature flag for the new checkout
+    "content": "Pull request title: Add a feature flag for the new checkout
 Pull request description:
 <description>
 Roll out the new checkout to 10% of users behind \`newCheckout\`.
@@ -86,33 +82,47 @@ Surrounding diff (the clicked line starts with >):
 +
  export interface SettingsIssue {
    field: SettingsField;
-\`\`\`",
+\`\`\`
+
+Explain the clicked line.",
     "role": "user",
   },
 ]
 `;
 
-exports[`buildExplainPrompt > with the block from the full file (PR 6.3) > adds it after the diff, with the clicked line marked 1`] = `
+exports[`buildExplainPrompt > with the block from the full file (PR 6.3) > adds it before the diff, without marking the clicked line (PR 8.5) 1`] = `
 [
   {
-    "content": "You are a senior software engineer helping a colleague review a GitHub pull request.
-You are given one line from the diff, the lines around it, and the file it is in.
-Explain the clicked line in the context of the change.
+    "content": "You are a senior engineer helping review a GitHub pull request. You get its title and
+description, code from the file, and the diff lines to explain: one clicked line, or a
+selected block to explain as a whole. Use the title and description for why the change needs it.
 
-Answer in Markdown with exactly these three level-2 headings, in this order:
+Answer in Markdown with exactly these level-2 headings, in this order:
 ## What it does
-At most two sentences on what the line does.
+At most two sentences.
 ## Why it's needed
-At most two sentences on why the change needs it.
+At most two sentences.
 ## Concerns
-At most three bullets, one sentence each, most important first, on real problems:
-bugs, edge cases, security, or performance. If there are none, write "None found."
+At most three one-sentence bullets, most important first: bugs, edge cases, security,
+or performance. If there are none, write "None found."
 
-Be brief and specific. Do not repeat the code back. Do not add other headings or a summary.",
+Be brief. Do not repeat the code. No other headings, no summary.",
     "role": "system",
   },
   {
-    "content": "Explain the clicked line in this pull request diff.
+    "content": "The lines around the code in the full file (lines 36 to 45 of the file at the PR's head commit):
+\`\`\`
+export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
+export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
+
+// Code never leaves the laptop, so only loopback addresses are accepted.
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+export interface SettingsIssue {
+  field: SettingsField;
+  message: string;
+}
+\`\`\`
 
 \`\`\`
 File: src/settings.ts (TypeScript)
@@ -130,19 +140,7 @@ Surrounding diff (the clicked line starts with >):
    field: SettingsField;
 \`\`\`
 
-The lines around the code in the full file (lines 36 to 45 of the file at the PR's head commit; the clicked code starts with >):
-\`\`\`
-  export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
-  export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
-  
-  // Code never leaves the laptop, so only loopback addresses are accepted.
-> const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
-  
-  export interface SettingsIssue {
-    field: SettingsField;
-    message: string;
-  }
-\`\`\`",
+Explain the clicked line.",
     "role": "user",
   },
 ]

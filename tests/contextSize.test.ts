@@ -13,6 +13,7 @@ function setup(modelContext: () => Promise<ModelContext>) {
   const client: LlmClient = {
     listModels: vi.fn(),
     loadedModels: vi.fn(),
+    loadedContextTokens: vi.fn(async () => undefined),
     loadModel: vi.fn(),
     modelContext: vi.fn(modelContext),
     chat: vi.fn(),

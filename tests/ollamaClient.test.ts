@@ -401,7 +401,54 @@ describe('OllamaClient.loadedModels (PR 8.3)', () => {
   });
 });
 
+describe('OllamaClient.loadedContextTokens (PR 8.5)', () => {
+  const ps = (models: unknown[]) => fakeFetch(() => jsonResponse({ models }));
+
+  it("reads the loaded model's context_length from /api/ps", async () => {
+    const fetch = ps([
+      { name: 'llama3.2:3b', context_length: 8192 },
+      { name: 'qwen2.5-coder:7b', context_length: 4096 },
+    ]);
+    const client = new OllamaClient({ baseUrl: BASE, fetch });
+    await expect(client.loadedContextTokens('qwen2.5-coder:7b')).resolves.toBe(4096);
+    expect(fetch).toHaveBeenCalledWith(
+      `${BASE}/api/ps`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('matches a name with no tag to its :latest', async () => {
+    const fetch = ps([{ model: 'llama3.2:latest', context_length: 2048 }]);
+    await expect(
+      new OllamaClient({ baseUrl: BASE, fetch }).loadedContextTokens('llama3.2'),
+    ).resolves.toBe(2048);
+  });
+
+  it('is undefined when the model is not loaded, or Ollama is too old to say', async () => {
+    const notLoaded = ps([{ name: 'llama3.2:3b', context_length: 2048 }]);
+    await expect(
+      new OllamaClient({ baseUrl: BASE, fetch: notLoaded }).loadedContextTokens('qwen2.5-coder:7b'),
+    ).resolves.toBeUndefined();
+    const old = ps([{ name: 'qwen2.5-coder:7b' }, { name: 'x', context_length: 'big' }]);
+    const client = new OllamaClient({ baseUrl: BASE, fetch: old });
+    await expect(client.loadedContextTokens('qwen2.5-coder:7b')).resolves.toBeUndefined();
+    await expect(client.loadedContextTokens('x')).resolves.toBeUndefined();
+  });
+});
+
 describe('OllamaClient.loadModel (PR 8.3)', () => {
+  it('sends the context window when given, so the first click does not reload (PR 8.5)', async () => {
+    const fetch = fakeFetch(() => jsonResponse({ ...CHAT_REPLY, done_reason: 'load' }));
+    await new OllamaClient({ baseUrl: BASE, fetch }).loadModel('qwen2.5-coder:7b', {
+      keepAliveMinutes: 30,
+      contextTokens: 2048,
+    });
+    expect(JSON.parse(fetch.mock.calls[0]![1]?.body as string)).toMatchObject({
+      keep_alive: '30m',
+      options: { num_ctx: 2048 },
+    });
+  });
+
   it('POSTs /api/chat with no messages and the keep-alive, which only loads the model', async () => {
     const fetch = fakeFetch(() =>
       jsonResponse({

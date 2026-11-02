@@ -25,6 +25,7 @@ function setup(chatStream: LlmClient['chatStream'], settings: Settings = SETTING
   const client: LlmClient = {
     listModels: vi.fn(),
     loadedModels: vi.fn(),
+    loadedContextTokens: vi.fn(async () => undefined),
     loadModel: vi.fn(),
     modelContext: vi.fn(),
     chat: vi.fn(),
@@ -68,8 +69,9 @@ describe('explain handler', () => {
       model: 'qwen2.5-coder:7b',
       temperature: SETTINGS.temperature,
       maxResponseTokens: SETTINGS.maxResponseTokens,
-      // Automatic context size with no sizer: Ollama's usual default (PR 6.2).
-      contextTokens: 4096,
+      // Automatic context size with no sizer: at most Ollama's usual default
+      // (PR 6.2), and only as much as this small prompt needs (PR 8.5).
+      contextTokens: 2048,
       // Keeps the model loaded between clicks (PR 8.3).
       keepAliveMinutes: SETTINGS.keepAliveMinutes,
       signal,
@@ -109,7 +111,7 @@ describe('explain handler', () => {
     const [messages] = vi.mocked(client.chatStream).mock.calls[0] as [ChatMessage[], ChatOptions];
     expect(messages[1]!.content).toContain('The lines around the code in the full file');
     expect(messages[1]!.content).toContain(
-      "> const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);",
+      "\nconst LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);",
     );
   });
 
@@ -228,17 +230,51 @@ describe('explain handler', () => {
       ),
     ].join('\n');
 
-    it('runs the model with the context size from the sizer', async () => {
+    it('fits the prompt to the context size from the sizer, but runs only as big a window as it needs (PR 8.5)', async () => {
       const { client } = setup(streamOf(DONE));
       const contextTokens = vi.fn(async () => 8192);
       const handler = createExplainHandler({
-        getSettings: async () => SETTINGS,
+        getSettings: async () => ({ ...SETTINGS, showPrompt: true }),
         createClient: () => client,
         platform: 'other',
         contextTokens,
       });
+      const result = await handler({ context: SAMPLE_CONTEXT });
+      expect(contextTokens).toHaveBeenCalledWith({ ...SETTINGS, showPrompt: true }, undefined);
+      expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(2048);
+      expect(result.status === 'done' && result.prompt).toMatchObject({
+        budget: 8192 - SETTINGS.maxResponseTokens - 32,
+        contextTokens: 2048,
+      });
+    });
+
+    it('keeps the window the model is loaded with when the prompt fits, so it is not reloaded (PR 8.5)', async () => {
+      const { client } = setup(streamOf(DONE));
+      vi.mocked(client.loadedContextTokens).mockResolvedValue(4096);
+      const handler = createExplainHandler({
+        getSettings: async () => SETTINGS,
+        createClient: () => client,
+        platform: 'other',
+        contextTokens: async () => 8192,
+      });
       await handler({ context: SAMPLE_CONTEXT });
-      expect(contextTokens).toHaveBeenCalledWith(SETTINGS, undefined);
+      expect(client.loadedContextTokens).toHaveBeenCalledWith(SETTINGS.model, {
+        signal: undefined,
+      });
+      expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(4096);
+    });
+
+    it('goes ahead with the smallest window when the loaded window cannot be read', async () => {
+      const { handler, client } = setup(streamOf(DONE));
+      vi.mocked(client.loadedContextTokens).mockRejectedValue(new Error('down'));
+      await handler({ context: SAMPLE_CONTEXT });
+      expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(2048);
+    });
+
+    it('sends a Context size the user set as it is, without asking what is loaded', async () => {
+      const { handler, client } = setup(streamOf(DONE), { ...SETTINGS, contextTokens: 8192 });
+      await handler({ context: SAMPLE_CONTEXT });
+      expect(client.loadedContextTokens).not.toHaveBeenCalled();
       expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(8192);
     });
 

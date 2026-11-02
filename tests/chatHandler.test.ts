@@ -27,6 +27,7 @@ function setup(pieces: string[], error?: Error) {
   const client: LlmClient = {
     listModels: vi.fn(),
     loadedModels: vi.fn(),
+    loadedContextTokens: vi.fn(async () => undefined),
     loadModel: vi.fn(),
     modelContext: vi.fn(),
     chat: vi.fn(),
@@ -69,6 +70,7 @@ describe('chat handler', () => {
       createClient: () => ({
         listModels: vi.fn(),
         loadedModels: vi.fn(),
+        loadedContextTokens: vi.fn(async () => undefined),
         loadModel: vi.fn(),
         modelContext: vi.fn(),
         chat: vi.fn(),
@@ -111,6 +113,7 @@ describe('chat handler', () => {
     const client: LlmClient = {
       listModels: vi.fn(),
       loadedModels: vi.fn(),
+      loadedContextTokens: vi.fn(async () => undefined),
       loadModel: vi.fn(),
       modelContext: vi.fn(),
       chat: vi.fn(),

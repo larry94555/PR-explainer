@@ -30,7 +30,8 @@ const explain = createExplainHandler({
 });
 
 // Loads the model when a PR's diffs open, before the first click (PR 8.3).
-const warmup = createWarmup({ getSettings, createClient: createLlmClient });
+// It loads it with the window the first click will ask for (PR 8.5).
+const warmup = createWarmup({ getSettings, createClient: createLlmClient, contextTokens });
 chrome.tabs.onRemoved.addListener((tabId) => warmup.forgetTab(tabId));
 
 // Listeners must be added on the first run of the worker, before it goes idle,

@@ -36,7 +36,6 @@ describe('buildExplainPrompt', () => {
       const content = user!.content;
       expect(content).toContain('Pull request title: Add a feature flag for the new checkout');
       expect(content).toContain(`<description>\n${pr.description}\n</description>`);
-      expect(content).toContain("Use the pull request's title and description");
       expect(content.indexOf('Pull request title:')).toBeLessThan(content.indexOf('```'));
       expect(content).toContain(`\`\`\`\n${SAMPLE_CONTEXT}\n\`\`\``);
     });
@@ -70,7 +69,7 @@ describe('buildExplainPrompt', () => {
   });
 
   describe('with the block from the full file (PR 6.3)', () => {
-    it('adds it after the diff, with the clicked line marked', () => {
+    it('adds it before the diff, without marking the clicked line (PR 8.5)', () => {
       expect(buildExplainPrompt(SAMPLE_CONTEXT, undefined, SAMPLE_FILE_CONTEXT)).toMatchSnapshot();
     });
 
@@ -108,9 +107,59 @@ describe('buildExplainPrompt', () => {
 
     it("keeps the block's opening and notes the lines left out", () => {
       const text = fileContextSection(block, 9, 11);
-      expect(text).toContain('  ): SettingsIssue[] {\n(6 lines left out)\n    step69();');
-      expect(text).toContain('\n>   step70();\n');
-      expect(text).toMatch(/ {2}step71\(\);\n\(2 lines left out\)\n```$/);
+      expect(text).toContain('): SettingsIssue[] {\n(6 lines left out)\n  step69();');
+      expect(text).toContain('\n  step70();\n');
+      expect(text).not.toContain('>');
+      expect(text).toMatch(/\n {2}step71\(\);\n\(2 lines left out\)\n```$/);
+    });
+  });
+
+  describe('order of the parts, for reusing the cached prompt (PR 8.5)', () => {
+    const pr = { title: 'Add retries', description: 'Retry failed calls to the LLM.' };
+    const contextFor = (n: number) =>
+      SAMPLE_CONTEXT.replaceAll('line 42 of', `line ${n} of`).replace(
+        '>+const LOCAL_HOSTNAMES',
+        `>+const LINE_${n}`,
+      );
+    const fileFor = (n: number) => ({ ...SAMPLE_FILE_CONTEXT, focusStart: n, focusEnd: n });
+
+    it('puts the PR first, then the file, then the diff, then what to explain', () => {
+      const [, user] = buildExplainPrompt(SAMPLE_CONTEXT, pr, SAMPLE_FILE_CONTEXT);
+      const content = user!.content;
+      const at = (text: string) => content.indexOf(text);
+      expect(at('Pull request title:')).toBe(0);
+      expect(at('Pull request title:')).toBeLessThan(at('<description>'));
+      expect(at('</description>')).toBeLessThan(at('The lines around the code in the full file'));
+      expect(at('The lines around the code')).toBeLessThan(at('File: src/settings.ts'));
+      expect(content.endsWith('```\n\nExplain the clicked line.')).toBe(true);
+    });
+
+    it('gives two clicks in the same PR and file the same prompt up to the diff', () => {
+      const first = buildExplainPrompt(contextFor(42), pr, fileFor(42));
+      const second = buildExplainPrompt(contextFor(44), pr, fileFor(44));
+      expect(second[0]).toEqual(first[0]);
+      const a = first[1]!.content;
+      const b = second[1]!.content;
+      let shared = 0;
+      while (shared < a.length && a[shared] === b[shared]) shared++;
+      // Everything before the diff's code block is the same text.
+      const diffStart = a.indexOf('```\nFile: ');
+      expect(diffStart).toBeGreaterThan(0);
+      expect(shared).toBeGreaterThanOrEqual(diffStart);
+      expect(a.slice(0, diffStart)).toContain(SAMPLE_FILE_CONTEXT.lines[0]);
+    });
+
+    it('uses the same system prompt for a line and a selection', () => {
+      const selection = SAMPLE_CONTEXT.replace('Clicked line: ', 'Selection: ');
+      expect(buildExplainPrompt(selection, pr)[0]).toEqual(buildExplainPrompt(SAMPLE_CONTEXT)[0]);
+      expect(buildExplainPrompt(selection, pr)[1]!.content).toMatch(
+        /\nExplain the selected lines as a whole\.$/,
+      );
+    });
+
+    it('is shorter than before PR 8.5', () => {
+      // The system prompt was about 800 characters.
+      expect(buildExplainPrompt(SAMPLE_CONTEXT)[0]!.content.length).toBeLessThan(700);
     });
   });
 });

@@ -8,9 +8,15 @@
 // loads the model and keeps it for the Keep model loaded setting. It runs
 // once per tab and PR, and never shows an error: if it fails, the first
 // click simply loads the model as before.
+//
+// The model is loaded with the window the first explanation will most likely
+// ask for (PR 8.5, src/llm/numCtx.ts), since a different num_ctx would make
+// Ollama load it again on that click.
 
 import type { Settings } from '../settings';
-import type { LlmClient } from './types';
+import type { ContextSizer } from './contextSize';
+import { startingNumCtx } from './numCtx';
+import { isSameModel, type LlmClient } from './types';
 
 /**
  * What a warm-up did:
@@ -35,6 +41,11 @@ export interface WarmupResult {
 export interface WarmupDeps {
   getSettings(): Promise<Settings>;
   createClient(settings: Pick<Settings, 'llmUrl'>): LlmClient;
+  /**
+   * The automatic context size (src/llm/contextSize.ts). Without it, the
+   * model is loaded with the server's default window unless one is set.
+   */
+  contextTokens?: ContextSizer;
   /** Where to say what happened. Defaults to console.info. */
   log?: (message: string) => void;
 }
@@ -48,9 +59,7 @@ export interface Warmup {
 
 /** Whether `loaded` (names from /api/ps) has `model`; "llama3" is listed as "llama3:latest". */
 export function isModelLoaded(loaded: readonly string[], model: string): boolean {
-  return loaded.some(
-    (name) => name === model || (!model.includes(':') && name === `${model}:latest`),
-  );
+  return loaded.some((name) => isSameModel(name, model));
 }
 
 export function createWarmup(deps: WarmupDeps): Warmup {
@@ -69,8 +78,15 @@ export function createWarmup(deps: WarmupDeps): Warmup {
         log(`[PR Explainer] warm-up: ${model} is already loaded`);
         return 'already-loaded';
       }
+      const window =
+        settings.contextTokens > 0
+          ? settings.contextTokens
+          : deps.contextTokens && startingNumCtx(await deps.contextTokens(settings));
       const started = Date.now();
-      await client.loadModel(model, { keepAliveMinutes });
+      await client.loadModel(model, {
+        keepAliveMinutes,
+        ...(window !== undefined && { contextTokens: window }),
+      });
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
       log(`[PR Explainer] warm-up: loaded ${model} in ${seconds} s`);
       return 'loaded';

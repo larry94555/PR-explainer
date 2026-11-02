@@ -154,6 +154,7 @@ describe('explain handler with the cache', () => {
     const client: LlmClient = {
       listModels: vi.fn(),
       loadedModels: vi.fn(),
+      loadedContextTokens: vi.fn(async () => undefined),
       loadModel: vi.fn(),
       modelContext: vi.fn(),
       chat: vi.fn(),

@@ -201,7 +201,7 @@ describe('formatReport', () => {
     expect(text).toContain('- **GPU:** AMD Radeon 780M');
     expect(text).toContain('- **Ollama:** 0.12.3 at http://localhost:11434');
     expect(text).toContain('temperature 0.2, answers up to 1024 tokens, 2 runs per sample');
-    expect(text).toContain('### qwen2.5-coder:7b (context 4096 tokens, ran on 100% GPU)');
+    expect(text).toContain('### qwen2.5-coder:7b (context up to 4096 tokens, ran on 100% GPU)');
   });
 
   it('adds a row for all samples together', () => {

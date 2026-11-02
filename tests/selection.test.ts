@@ -4,7 +4,6 @@ import type { ClickHandlerDeps } from '../src/clickHandler';
 import { locateRange, type DiffRange } from '../src/diffDom';
 import {
   buildExplainPrompt,
-  EXPLAIN_SELECTION_SYSTEM_PROMPT,
   EXPLAIN_SYSTEM_PROMPT,
   isSelectionContext,
 } from '../src/explain/explainPrompt';
@@ -206,9 +205,9 @@ describe('formatSelection', () => {
     const block = formatSelection(selectionContext(range));
     expect(isSelectionContext(block)).toBe(true);
     const [system, user] = buildExplainPrompt(block);
-    expect(system!.content).toBe(EXPLAIN_SELECTION_SYSTEM_PROMPT);
-    expect(system!.content).toContain('as a whole');
-    expect(user!.content).toMatch(/^Explain the selected lines/);
+    // One system prompt for both, so it is cached across clicks (PR 8.5).
+    expect(system!.content).toBe(EXPLAIN_SYSTEM_PROMPT);
+    expect(user!.content).toMatch(/\nExplain the selected lines as a whole\.$/);
 
     const single = formatContext(extractContext(code('R44'))!);
     expect(isSelectionContext(single)).toBe(false);

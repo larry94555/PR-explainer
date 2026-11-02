@@ -27,9 +27,14 @@
 //
 // An answer from the model carries the server's timings (PR 8.1), for the
 // popup's latency Details. A cached answer has none.
+//
+// With Context size on automatic, the window is sized to the prompt and the
+// answer (PR 8.5, src/llm/numCtx.ts) instead of always the largest allowed,
+// and the window the model is already loaded with is kept when it fits.
 
 import { FALLBACK_CONTEXT_TOKENS, promptBudget, type ContextSizer } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
+import { chooseNumCtx } from '../llm/numCtx';
 import type { ChatMessage, LlmClient, LlmTimings } from '../llm/types';
 import type { Settings } from '../settings';
 import { explainCacheKey, type ExplainCache } from './explainCache';
@@ -156,6 +161,22 @@ export interface ExplainDeps {
 export const settingsContextTokens: ContextSizer = async (settings) =>
   settings.contextTokens > 0 ? settings.contextTokens : FALLBACK_CONTEXT_TOKENS;
 
+/** The window the model is loaded with, or undefined when that is unknown. Never throws. */
+async function loadedWindow(
+  client: LlmClient,
+  model: string,
+  signal: AbortSignal | undefined,
+): Promise<number | undefined> {
+  if (!model) return undefined;
+  try {
+    const tokens = await client.loadedContextTokens(model, { signal });
+    return typeof tokens === 'number' ? tokens : undefined;
+  } catch {
+    // Not knowing only means the window may change; the request goes ahead.
+    return undefined;
+  }
+}
+
 export function createExplainHandler(deps: ExplainDeps) {
   return async (
     payload: ExplainPayload,
@@ -185,15 +206,28 @@ export function createExplainHandler(deps: ExplainDeps) {
       };
     }
     const { messages } = fitted;
-    const prompt: PromptReport | undefined = settings.showPrompt
-      ? {
-          text: promptText(messages),
-          tokens: fitted.tokens,
-          budget,
-          contextTokens,
-          trimmed: fitted.trimmed,
-        }
-      : undefined;
+    const client = deps.createClient(settings);
+    // The window to run with: a set Context size as it is; on automatic,
+    // just what this prompt needs, or the loaded model's window if it fits.
+    const windowFor = (loaded?: number) =>
+      settings.contextTokens > 0
+        ? contextTokens
+        : chooseNumCtx({
+            promptTokens: fitted.tokens,
+            answerTokens: settings.maxResponseTokens,
+            limit: contextTokens,
+            loaded,
+          });
+    const report = (numCtx: number): PromptReport | undefined =>
+      settings.showPrompt
+        ? {
+            text: promptText(messages),
+            tokens: fitted.tokens,
+            budget,
+            contextTokens: numCtx,
+            trimmed: fitted.trimmed,
+          }
+        : undefined;
     // Everything that shapes the answer is in the key, so changing the model,
     // the temperature, the response limit, or the prompt is a miss.
     const key =
@@ -209,6 +243,7 @@ export function createExplainHandler(deps: ExplainDeps) {
     if (cache && key && payload.fresh !== true) {
       const hit = await cache.get(key).catch(() => null);
       if (hit) {
+        const prompt = report(windowFor());
         return {
           status: 'done',
           explanation: hit.explanation,
@@ -218,13 +253,19 @@ export function createExplainHandler(deps: ExplainDeps) {
         };
       }
     }
+    // Asked only when the model will run, so a cached answer costs no request.
+    const numCtx =
+      settings.contextTokens > 0
+        ? contextTokens
+        : windowFor(await loadedWindow(client, settings.model, signal));
+    const prompt = report(numCtx);
     const startedAt = now();
     try {
-      const stream = deps.createClient(settings).chatStream(messages, {
+      const stream = client.chatStream(messages, {
         model: settings.model,
         temperature: settings.temperature,
         maxResponseTokens: settings.maxResponseTokens,
-        contextTokens,
+        contextTokens: numCtx,
         keepAliveMinutes: settings.keepAliveMinutes,
         signal,
       });
