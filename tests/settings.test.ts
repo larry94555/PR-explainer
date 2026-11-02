@@ -62,6 +62,8 @@ describe('settings', () => {
         maxResponseTokens: 300,
         contextTokens: 0,
         keepAliveMinutes: 30,
+        // Explain on hover uses the model for lines never clicked (PR 8.7).
+        explainOnHover: false,
         showPrompt: false,
       });
       expect(validateSettings(DEFAULT_SETTINGS)).toEqual([]);
@@ -93,6 +95,7 @@ describe('settings', () => {
         maxResponseTokens: 2048,
         contextTokens: 8192,
         keepAliveMinutes: 90,
+        explainOnHover: true,
         showPrompt: true,
       };
       await expect(saveSettings(update, storage)).resolves.toEqual(update);
@@ -238,6 +241,15 @@ describe('settings', () => {
         );
       },
     );
+
+    it('accepts Explain on hover on or off and nothing else (PR 8.7)', async () => {
+      await expect(saveSettings({ explainOnHover: true }, fakeStorage())).resolves.toMatchObject({
+        explainOnHover: true,
+      });
+      const promise = saveSettings({ explainOnHover: 1 as unknown as boolean }, fakeStorage());
+      await expectRejectedFields(promise, ['explainOnHover']);
+      await expect(promise).rejects.toThrow('Explain on hover must be on or off.');
+    });
 
     it('accepts Show prompt on or off and nothing else', async () => {
       await expect(saveSettings({ showPrompt: true }, fakeStorage())).resolves.toMatchObject({

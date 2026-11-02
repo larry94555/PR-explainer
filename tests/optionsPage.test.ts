@@ -18,6 +18,7 @@ const SAVED: Settings = {
   maxResponseTokens: 512,
   contextTokens: 0,
   keepAliveMinutes: 30,
+  explainOnHover: false,
   showPrompt: false,
 };
 
@@ -80,7 +81,22 @@ describe('options page', () => {
     expect($<HTMLInputElement>('contextTokens').value).toBe('');
     expect($<HTMLInputElement>('contextTokens').placeholder).toBe('Automatic');
     expect($<HTMLInputElement>('keepAliveMinutes').value).toBe('30');
+    expect($<HTMLInputElement>('explainOnHover').checked).toBe(false);
     expect($<HTMLInputElement>('showPrompt').checked).toBe(false);
+  });
+
+  it('loads and saves Explain on hover (PR 8.7)', async () => {
+    const deps = fakeDeps(fakeClient());
+    await deps.saveSettings({ explainOnHover: true });
+    const page = await initOptionsPage(document, deps);
+    expect($<HTMLInputElement>('explainOnHover').checked).toBe(true);
+
+    $<HTMLInputElement>('explainOnHover').checked = false;
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ explainOnHover: false });
+    $<HTMLInputElement>('explainOnHover').checked = true;
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ explainOnHover: true });
   });
 
   it('loads and saves how long to keep the model loaded (PR 8.3)', async () => {
@@ -264,6 +280,7 @@ describe('options page', () => {
       maxResponseTokens: 2048,
       contextTokens: 0,
       keepAliveMinutes: 30,
+      explainOnHover: false,
       showPrompt: false,
     });
     expect(text('save-status')).toBe('Saved.');

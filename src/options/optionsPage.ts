@@ -1,6 +1,6 @@
 // The settings page: the Ollama URL, a model dropdown filled from the server,
 // temperature, max response length, context size, how long to keep the model
-// loaded (PR 8.3) and the Show prompt debug option (PR 6.2), Save, and Test
+// loaded (PR 8.3), Explain on hover (PR 8.7), the Show prompt debug option (PR 6.2), Save, and Test
 // connection. The Speed section (PR 8.6) says whether the picked model runs on
 // the GPU, and its Speed test times each coding model and lets the user pick
 // the fastest (src/llm/speedTest.ts).
@@ -81,6 +81,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const maxTokensInput = el<HTMLInputElement>(doc, 'maxResponseTokens');
   const contextInput = el<HTMLInputElement>(doc, 'contextTokens');
   const keepAliveInput = el<HTMLInputElement>(doc, 'keepAliveMinutes');
+  const hoverInput = el<HTMLInputElement>(doc, 'explainOnHover');
   const showPromptInput = el<HTMLInputElement>(doc, 'showPrompt');
   const refreshButton = el<HTMLButtonElement>(doc, 'refresh-models');
   const testButton = el<HTMLButtonElement>(doc, 'test-connection');
@@ -105,6 +106,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     // Automatic (0) shows as an empty box with "Automatic" as its placeholder.
     contextInput.value = settings.contextTokens > 0 ? String(settings.contextTokens) : '';
     keepAliveInput.value = String(settings.keepAliveMinutes);
+    hoverInput.checked = settings.explainOnHover;
     showPromptInput.checked = settings.showPrompt;
   }
 
@@ -121,6 +123,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       // An empty box means automatic.
       contextTokens: contextTokens === '' ? 0 : Number(contextTokens),
       keepAliveMinutes: keepAlive === '' ? NaN : Number(keepAlive),
+      explainOnHover: hoverInput.checked,
       showPrompt: showPromptInput.checked,
     };
   }
