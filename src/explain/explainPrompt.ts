@@ -17,37 +17,26 @@ export const SECTION_HEADINGS = {
   concerns: 'Concerns',
 } as const;
 
-function systemPrompt(given: string, task: string, subject: string): string {
-  return [
-    'You are a senior software engineer helping a colleague review a GitHub pull request.',
-    given,
-    task,
-    '',
-    'Answer in Markdown with exactly these three level-2 headings, in this order:',
-    `## ${SECTION_HEADINGS.what}`,
-    `At most two sentences on what the ${subject} does.`,
-    `## ${SECTION_HEADINGS.why}`,
-    'At most two sentences on why the change needs it.',
-    `## ${SECTION_HEADINGS.concerns}`,
-    'At most three bullets, one sentence each, most important first, on real problems:',
-    'bugs, edge cases, security, or performance. If there are none, write "None found."',
-    '',
-    'Be brief and specific. Do not repeat the code back. Do not add other headings or a summary.',
-  ].join('\n');
-}
-
-export const EXPLAIN_SYSTEM_PROMPT = systemPrompt(
-  'You are given one line from the diff, the lines around it, and the file it is in.',
-  'Explain the clicked line in the context of the change.',
-  'line',
-);
-
-// For a block of lines the user selected (PR 4.4).
-export const EXPLAIN_SELECTION_SYSTEM_PROMPT = systemPrompt(
-  'You are given a block of lines selected from the diff, the lines around it, and the file it is in.',
-  'Explain the selected block as a whole in the context of the change, not line by line.',
-  'block',
-);
+// One system prompt for a clicked line and a selected block, so it is the
+// same text on every click (PR 8.5): Ollama reuses the work for the start of
+// a prompt that matches the previous one, so everything that stays the same
+// within a PR comes first and the clicked code comes last.
+export const EXPLAIN_SYSTEM_PROMPT = [
+  'You are a senior engineer helping review a GitHub pull request. You get its title and',
+  'description, code from the file, and the diff lines to explain: one clicked line, or a',
+  'selected block to explain as a whole. Use the title and description for why the change needs it.',
+  '',
+  'Answer in Markdown with exactly these level-2 headings, in this order:',
+  `## ${SECTION_HEADINGS.what}`,
+  'At most two sentences.',
+  `## ${SECTION_HEADINGS.why}`,
+  'At most two sentences.',
+  `## ${SECTION_HEADINGS.concerns}`,
+  'At most three one-sentence bullets, most important first: bugs, edge cases, security,',
+  'or performance. If there are none, write "None found."',
+  '',
+  'Be brief. Do not repeat the code. No other headings, no summary.',
+].join('\n');
 
 // formatSelection (src/lineContext.ts) starts its second line with this. The
 // content script cannot share code with the service worker, so the text is
@@ -71,8 +60,6 @@ export interface PrInfo {
 function prSection(title: string, description: string): string[] {
   if (!title && !description) return [];
   return [
-    "Use the pull request's title and description to explain why the change needs this code.",
-    '',
     ...(title ? [`Pull request title: ${title}`] : []),
     'Pull request description:' + (description ? '' : ' (none)'),
     ...(description ? [description] : []),
@@ -104,20 +91,23 @@ export function fileContextHeading(context: FileContext, first: number, last: nu
     context.kind === 'block'
       ? 'The function or block the code is in'
       : 'The lines around the code in the full file';
-  return `${what} (${where}; the clicked code starts with >):`;
+  return `${what} (${where}):`;
 }
 
 /**
  * The file context as it goes in the prompt, with only the lines from index
  * `from` to index `to` (inclusive) of `context.lines`, plus the block's
  * opening, which is always kept. Lines left out are replaced with a note.
+ * The clicked code is not marked here (PR 8.5), so two clicks in the same
+ * function send the same text and Ollama can reuse it; the diff after it
+ * says which line was clicked.
  */
 export function fileContextSection(
   context: FileContext,
   from = 0,
   to = context.lines.length - 1,
 ): string {
-  const { lines, startLine, focusStart, focusEnd } = context;
+  const { lines, startLine } = context;
   const header = Math.min(context.headerLines, lines.length);
   const kept = (i: number) => i < header || (i >= from && i <= to);
   const out: string[] = [];
@@ -129,8 +119,7 @@ export function fileContextSection(
     }
     if (gap) out.push(`(${gap} ${gap === 1 ? 'line' : 'lines'} left out)`);
     gap = 0;
-    const n = startLine + i;
-    out.push((n >= focusStart && n <= focusEnd ? '> ' : '  ') + line);
+    out.push(line);
   });
   if (gap) out.push(`(${gap} ${gap === 1 ? 'line' : 'lines'} left out)`);
   const last = startLine + lines.length - 1;
@@ -162,26 +151,26 @@ export interface ExplainPromptParts {
   selection?: boolean;
 }
 
-/** Puts the pieces together into the system prompt and the user message. */
+/**
+ * Puts the pieces together into the system prompt and the user message:
+ * the PR, then the file, then the diff around the code, then what to explain.
+ * Two clicks in the same PR share everything up to the file, and two clicks
+ * in the same function share the file too.
+ */
 export function assembleExplainPrompt(parts: ExplainPromptParts): ChatMessage[] {
   const selection = parts.selection ?? isSelectionContext(parts.context);
   return [
-    {
-      role: 'system',
-      content: selection ? EXPLAIN_SELECTION_SYSTEM_PROMPT : EXPLAIN_SYSTEM_PROMPT,
-    },
+    { role: 'system', content: EXPLAIN_SYSTEM_PROMPT },
     {
       role: 'user',
       content: [
-        selection
-          ? 'Explain the selected lines in this pull request diff.'
-          : 'Explain the clicked line in this pull request diff.',
-        '',
         ...prSection(parts.title, parts.description),
+        ...(parts.fileContext ? [parts.fileContext, ''] : []),
         '```',
         parts.context.trimEnd(),
         '```',
-        ...(parts.fileContext ? ['', parts.fileContext] : []),
+        '',
+        selection ? 'Explain the selected lines as a whole.' : 'Explain the clicked line.',
       ].join('\n'),
     },
   ];

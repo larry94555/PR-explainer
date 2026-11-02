@@ -212,7 +212,8 @@ export function formatReport(report: BenchReport): string {
   ];
   for (const model of report.models) {
     const notes = [
-      model.contextTokens !== undefined && `context ${model.contextTokens} tokens`,
+      // The window is sized to each prompt within this (PR 8.5).
+      model.contextTokens !== undefined && `context up to ${model.contextTokens} tokens`,
       model.gpuShare !== undefined && `ran on ${formatGpuShare(model.gpuShare)}`,
     ].filter((n) => n !== false);
     const all = model.rows.flatMap((r) => r.runs);

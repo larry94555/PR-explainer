@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { locateHunk, type DiffHunk } from '../src/diffDom';
-import { contextFromHunk, extractContext, formatContext, languageFor } from '../src/lineContext';
+import {
+  contextFromHunk,
+  DEFAULT_CONTEXT,
+  extractContext,
+  formatContext,
+  languageFor,
+} from '../src/lineContext';
 
 function fixture(name: string): string {
   return readFileSync(resolve(import.meta.dirname, 'fixtures', name), 'utf8');
@@ -64,6 +70,10 @@ describe.each(layouts)('extractContext on the $name layout', ({ file, code, head
     expect(context.before).toEqual([HUNK[3]]);
     expect(context.line.side).toBe('added');
     expect(context.after).toEqual([HUNK[5]]);
+  });
+
+  it('takes six lines each way by default (PR 8.5)', () => {
+    expect(DEFAULT_CONTEXT).toEqual({ before: 6, after: 6 });
   });
 
   it('stops at the start and end of the hunk', () => {

@@ -10,6 +10,7 @@ function setup(
     loaded?: () => Promise<string[]>;
     load?: () => Promise<void>;
     settings?: Partial<Settings>;
+    contextTokens?: () => Promise<number>;
   } = {},
 ) {
   const client: LlmClient = {
@@ -18,6 +19,7 @@ function setup(
     chat: vi.fn(),
     chatStream: vi.fn(),
     loadedModels: vi.fn(options.loaded ?? (async () => [])),
+    loadedContextTokens: vi.fn(async () => undefined),
     loadModel: vi.fn(options.load ?? (async () => {})),
   };
   const createClient = vi.fn(() => client);
@@ -26,6 +28,7 @@ function setup(
     getSettings: async () => ({ ...SETTINGS, ...options.settings }),
     createClient,
     log,
+    ...(options.contextTokens && { contextTokens: options.contextTokens }),
   });
   return { warmup, client, createClient, log };
 }
@@ -49,6 +52,27 @@ describe('warm-up (PR 8.3)', () => {
     expect(log).toHaveBeenCalledWith(
       expect.stringMatching(/^\[PR Explainer\] warm-up: loaded qwen2\.5-coder:7b in \d+\.\d s$/),
     );
+  });
+
+  it('loads it with the window the first explanation will ask for (PR 8.5)', async () => {
+    const auto = setup({ contextTokens: async () => 8192 });
+    await auto.warmup.warmUp(1, PR);
+    expect(auto.client.loadModel).toHaveBeenCalledWith('qwen2.5-coder:7b', {
+      keepAliveMinutes: 30,
+      contextTokens: 2048,
+    });
+    // A model whose own window is smaller is loaded with that.
+    const small = setup({ contextTokens: async () => 1024 });
+    await small.warmup.warmUp(1, PR);
+    expect(vi.mocked(small.client.loadModel).mock.calls[0]![1]).toMatchObject({
+      contextTokens: 1024,
+    });
+    // A Context size the user set is used as it is.
+    const set = setup({ contextTokens: async () => 8192, settings: { contextTokens: 6000 } });
+    await set.warmup.warmUp(1, PR);
+    expect(vi.mocked(set.client.loadModel).mock.calls[0]![1]).toMatchObject({
+      contextTokens: 6000,
+    });
   });
 
   it('is skipped when /api/ps lists the model', async () => {

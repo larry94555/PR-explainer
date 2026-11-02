@@ -64,8 +64,9 @@
             placeholder="Automatic"
           />
           <p class="hint">
-            How much the model can read at once, prompt and answer together. Leave empty to use the
-            model's own size, up to 4096. Long code is trimmed to fit.
+            How much the model can read at once, prompt and answer together. Leave empty to size it
+            to each explanation (2048 for most, up to the model's own size or 4096), which is faster
+            and uses less memory. Long code is trimmed to fit.
           </p>
           <p class="error" data-error-for="contextTokens" role="alert"></p>
         </div>

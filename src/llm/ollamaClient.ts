@@ -19,6 +19,7 @@
 // A chat request with no messages only loads the model (loadModel).
 
 import {
+  isSameModel,
   LlmError,
   type ChatMessage,
   type ChatOptions,
@@ -71,17 +72,40 @@ export class OllamaClient implements LlmClient {
     });
   }
 
+  async loadedContextTokens(
+    model: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<number | undefined> {
+    const body = await this.request('/api/ps', { method: 'GET', signal: options.signal });
+    const models = (body as { models?: unknown }).models;
+    if (!Array.isArray(models)) throw badResponse('/api/ps', 'missing "models" list');
+    for (const m of models) {
+      const { name, model: id, context_length } = (m ?? {}) as Record<string, unknown>;
+      const listed = typeof name === 'string' ? name : id;
+      if (typeof listed === 'string' && isSameModel(listed, model)) {
+        // Older Ollama versions do not report context_length.
+        return isPositiveInteger(context_length) ? context_length : undefined;
+      }
+    }
+    return undefined;
+  }
+
   async loadModel(
     model: string,
-    options: { keepAliveMinutes?: number; signal?: AbortSignal } = {},
+    options: { keepAliveMinutes?: number; contextTokens?: number; signal?: AbortSignal } = {},
   ): Promise<void> {
     const name = requireModel({ model });
     // Ollama loads the model and answers at once when there are no messages.
+    // The window is sent too: loading with one and asking with another
+    // would make Ollama load the model again on the first click (PR 8.5).
     const body = {
       model: name,
       messages: [],
       stream: false,
       ...keepAlive(options.keepAliveMinutes),
+      ...(options.contextTokens !== undefined && {
+        options: { num_ctx: options.contextTokens },
+      }),
     };
     await this.request('/api/chat', chatInit(body, options.signal), name);
   }

@@ -218,11 +218,11 @@ describe('buildFittedExplainPrompt with the full file context (PR 6.3)', () => {
     const fitted = buildFittedExplainPrompt(clicked(10, 10), pr, full - 200, file);
     expect(fitted.trimmed).toEqual(['full file context']);
     const content = user(fitted.messages);
-    expect(content).toContain('  export function compute(\n    n: number): number {\n');
-    expect(content).toContain('> ' + '  const step111 = work(111);');
+    expect(content).toContain('\nexport function compute(\n  n: number): number {\n');
+    expect(content).toContain('\n  const step111 = work(111);\n');
     expect(content).toContain('step110');
     expect(content).not.toContain('step158');
-    expect(content).toMatch(/\(\d+ lines left out\)\n```$/);
+    expect(content).toMatch(/\(\d+ lines left out\)\n```\n\n```\nFile: /);
     // The description and the diff are whole.
     expect(content).toContain(clicked(10, 10));
     expect(content).toContain(words(200));

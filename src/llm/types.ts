@@ -81,17 +81,31 @@ export interface ModelContext {
   configuredTokens?: number;
 }
 
+/** Whether `listed` (a name from /api/ps) is `model`; "llama3" is listed as "llama3:latest". */
+export function isSameModel(listed: string, model: string): boolean {
+  return listed === model || (!model.includes(':') && listed === `${model}:latest`);
+}
+
 export interface LlmClient {
   listModels(options?: { signal?: AbortSignal }): Promise<ModelInfo[]>;
   /** The models loaded in memory right now, by name (PR 8.3). */
   loadedModels(options?: { signal?: AbortSignal }): Promise<string[]>;
   /**
+   * The context window `model` is loaded with right now (PR 8.5), or
+   * undefined when it is not loaded or the server does not say.
+   */
+  loadedContextTokens(
+    model: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<number | undefined>;
+  /**
    * Loads `model` into memory without asking it anything, and keeps it there
-   * for `keepAliveMinutes` (PR 8.3). Resolves once it is loaded.
+   * for `keepAliveMinutes` (PR 8.3), with a `contextTokens` window when given
+   * (PR 8.5). Resolves once it is loaded.
    */
   loadModel(
     model: string,
-    options?: { keepAliveMinutes?: number; signal?: AbortSignal },
+    options?: { keepAliveMinutes?: number; contextTokens?: number; signal?: AbortSignal },
   ): Promise<void>;
   /** Looks up `model`'s context window. */
   modelContext(model: string, options?: { signal?: AbortSignal }): Promise<ModelContext>;
