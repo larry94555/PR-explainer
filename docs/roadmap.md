@@ -440,8 +440,10 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   5. Click a different line in the diff. Confirm no popup opens, and the chat header and a "Now looking at …" note name the new line.
   6. Ask `How does this relate to the previous line?` and confirm the answer refers to both lines.
   7. Drag across a few lines and click **Explain selection**. Confirm the block is added to the chat ("lines … to …") instead of opening a popup.
-  8. Click **New chat** and confirm the history clears, leaving only the first explanation.
-  9. Close the panel with **×** and click a line. Confirm the explanation popup opens as usual.
+  8. Close the panel with **×**, click the first line, and click **Ask a question**. Confirm the conversation is back and the header names the last line you moved to.
+  9. Click **New chat** and confirm the history clears, leaving only the first explanation.
+  10. Close the panel and click a line. Confirm the explanation popup opens as usual.
+  11. With a chat open, use GitHub's links to go to another PR's **Files changed** tab without reloading, and click a line. Confirm the old chat is gone and the popup explains the new line.
 
 ---
 
