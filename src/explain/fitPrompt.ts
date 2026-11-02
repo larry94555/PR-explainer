@@ -11,6 +11,7 @@ import type { ChatMessage } from '../llm/types';
 import {
   assembleExplainPrompt,
   descriptionBlock,
+  isSelectionContext,
   type ExplainPromptParts,
   type PrInfo,
 } from './explainPrompt';
@@ -202,7 +203,13 @@ export function buildFittedExplainPrompt(
   const description = pr?.description.trim() ?? '';
   // The instructions part is everything that is not cut: the whole prompt
   // without the context and the description, measured once.
-  const bare = assembleExplainPrompt({ context: '', title, description: '' });
+  // Measured with the system prompt the real context gets: a selection's is longer.
+  const bare = assembleExplainPrompt({
+    context: '',
+    title,
+    description: '',
+    selection: isSelectionContext(contextText),
+  });
   const parts: BudgetPart[] = [
     { label: PART_LABELS.instructions, text: bare.map((m) => m.content).join('\n') },
     contextPart(contextText),

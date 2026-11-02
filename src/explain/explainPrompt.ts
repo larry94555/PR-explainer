@@ -96,11 +96,16 @@ export interface ExplainPromptParts {
   title: string;
   /** descriptionBlock() of the PR's description, a note that it was left out, or ''. */
   description: string;
+  /**
+   * Whether the context is a selected block. Left out, it is read from
+   * `context`; fitPrompt sets it when measuring the prompt without the context.
+   */
+  selection?: boolean;
 }
 
 /** Puts the pieces together into the system prompt and the user message. */
 export function assembleExplainPrompt(parts: ExplainPromptParts): ChatMessage[] {
-  const selection = isSelectionContext(parts.context);
+  const selection = parts.selection ?? isSelectionContext(parts.context);
   return [
     {
       role: 'system',

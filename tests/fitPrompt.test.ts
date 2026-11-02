@@ -158,6 +158,27 @@ describe('buildFittedExplainPrompt', () => {
     expect(fitted.trimmed).toEqual(['lines around the code']);
   });
 
+  it.each([
+    ['a selection', () => selected(10, 5, 10)],
+    ['a clicked line', () => clicked(10, 10)],
+  ])('never sends more than the budget for %s, even with little room to spare', (_, make) => {
+    const text = make();
+    const full = estimateMessages(buildExplainPrompt(text, pr));
+    let checked = 0;
+    for (let budget = full - 1; budget > 0; budget--) {
+      let fitted;
+      try {
+        fitted = buildFittedExplainPrompt(text, pr, budget);
+      } catch (error) {
+        expect(error).toBeInstanceOf(PromptTooLargeError);
+        break;
+      }
+      expect(estimateMessages(fitted.messages)).toBeLessThanOrEqual(budget);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+
   it('throws PromptTooLargeError when the instructions and the code alone do not fit', () => {
     expect(() => buildFittedExplainPrompt(clicked(10, 10), pr, 200)).toThrow(PromptTooLargeError);
   });
