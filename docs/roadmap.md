@@ -71,7 +71,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 8.5 | Smaller, cache-friendly prompts | Medium | ✅ Done ([#38](https://github.com/larry94555/PR-explainer/pull/38)) |
 | 8.6 | Model and GPU check on the settings page | Medium | ✅ Done ([#39](https://github.com/larry94555/PR-explainer/pull/39)) |
 | 8.7 | Explain on hover (prefetch) | Medium | ✅ Done ([#40](https://github.com/larry94555/PR-explainer/pull/40)) |
-| 8.8 | Latency report and faster defaults | Small | Not started |
+| 8.8 | Latency report and faster defaults | Small | ✅ Done ([#41](https://github.com/larry94555/PR-explainer/pull/41)) |
 
 ## Milestone overview
 
@@ -708,15 +708,18 @@ This milestone comes last because it builds on streaming (4.1, 4.2), caching (4.
   7. Close the popup and move the pointer quickly down 20 lines without stopping. Confirm the console shows at most one "started" at a time, each followed by "cancelled" before the next starts.
   8. Untick **Explain on hover** on the settings page and click **Save** (no need to reload the PR). Rest on a line for 5 seconds and confirm nothing new appears in the console.
 
-### PR 8.8: Latency report and faster defaults (Small)
+### PR 8.8: Latency report and faster defaults (Small) ✅ Done
+- **Status:** Done ([#41](https://github.com/larry94555/PR-explainer/pull/41)).
 - **Why it's needed:** The milestone needs a clear answer: did we reach under 10 seconds, and if not, what is the lowest time possible on this laptop?
-- **Problem it solves:** Runs `npm run bench` with every change in place and writes the result to `docs/latency.md`: the baseline, the time after each PR from 8.3 to 8.7, and the final median and slowest times. If the goal is met, it says so with the settings used. If not, it states the measured floor (no load time, the shortest prompt, a 150-token answer, on the fastest model whose answers were still useful) and which term of the formula above dominates, with the next step that would help (for example a GPU, or a smaller model). The defaults are updated to the best combination found (model suggestion, answer limit, keep-alive, context lines).
-- **Unit tests added:** `settings.test.ts` checks the new defaults. No new code beyond that.
+- **Problem it solves:** No benchmark had been committed to `docs/latency.md` yet, so there was no baseline to compare against, and running `npm run bench` by hand at five old commits is slow and easy to get wrong. `npm run bench:history -- [model ...] [--runs N] [--url URL] [--no-save]` (`scripts/benchHistory.ts`) does it in one go: for the merge of each PR that changed the explain request (8.2 as the baseline, 8.3, 8.4, 8.5, and the code as it is now, which includes 8.6 and 8.7) it checks the code out in a temporary git worktree that shares this checkout's `node_modules`, unloads the models so each step starts the same way, and runs that version's own `npm run bench`. It then measures the floor with the current code: the shortest sample, answers of at most 150 tokens, the model already loaded. It adds one **Latency report** section to `docs/latency.md`: a row per step (median and slowest for each model), the conclusion, and each step's full tables under it. The conclusion (`scripts/latencyReport.ts`) says the goal is met by the fastest model (and warns when its slowest run still passes 10 s), or gives the floor, splits it into loading, reading the prompt, writing the answer and time outside Ollama, names the part that limits it, and suggests the next step (a GPU when the model runs on the CPU, otherwise a smaller model or quantization). It notes that keeping the model loaded (8.3) mostly helps the first click after a pause, which back-to-back runs do not show, and that Explain on hover (8.7) hides time rather than cutting it. Only name models whose answers you find useful, since the report picks the fastest of them. CI now checks out the full history, because a test checks each step is a commit on this branch. The defaults (answer limit, keep-alive, context lines) are changed only if the report from the laptop shows a better combination.
+- **Unit tests added:** `latencyReport.test.ts` checks that every step is a commit in this branch's history and the last is the current code, reading durations and the last dated section back from `docs/latency.md`, reading each model's **All samples** row and where it ran from a real `npm run bench` section (and one where every run failed), splitting the time into its parts (medians, time outside Ollama never negative, adding up the parts when Ollama gives no total), the part that dominates and the next step for each (GPU or smaller model), picking the fastest model, the goal-met conclusion (with the warning for a slow worst case), the goal-not-met conclusion with the floor and what limits it, and the report section (a row per step, a failed step marked and listed, each step's tables one heading level lower).
 - **How to test (Windows 11, Command Prompt):**
-  1. Run `npm test`.
-  2. Read `docs/latency.md` and confirm it has the baseline, a row per optimization, and a clear conclusion (goal met, or the floor and why).
-  3. Run `npm run bench` yourself and confirm your numbers are close to the report.
-  4. Reset the extension's settings to defaults, click 5 lines on a real PR, and confirm each popup says "Answered in" with a time at or near the reported result.
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass (1056 tests in 46 files, including `latencyReport`). Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Make sure Ollama is running (its icon is in the system tray, near the clock) and close other apps that use the GPU. Run `npm run bench:history -- qwen2.5-coder:7b qwen2.5-coder:3b` (or the models you use; `ollama list` shows them). It takes about 15 to 30 minutes on a laptop.
+  3. Confirm it prints `=== Baseline (8.2) (b03ff14) ===` and then the usual bench progress, the same for each step up to `=== Now (8.6 to 8.8) (HEAD) ===`, then `=== Floor (…) ===` with a line per run, and ends with "Added to docs/latency.md". Run `git worktree list` and confirm only your own checkout is listed.
+  4. Open `docs/latency.md` and confirm the new **Latency report** section has a row per step, a **Conclusion** (goal met with which model, or the floor, what limits it, and the next step), and each step's tables under it.
+  5. Commit `docs/latency.md` (or send the section to Claude to commit), so the defaults can be set from it.
+  6. Reset the extension's settings to defaults, pick the model the conclusion names, click 5 lines on a real PR, and confirm each popup says "Answered in" with a time at or near the reported median.
 
 ---
 

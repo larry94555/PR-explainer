@@ -12,3 +12,9 @@ when the first word arrived. **Load** is Ollama loading the model into memory (n
 once it is loaded). **Prompt tokens** counts only the tokens Ollama had to read, so a
 cached prompt counts fewer. **Tokens/s** is how fast the answer was written. A failed run
 is listed under its table and counted in **Runs**, never dropped.
+
+`npm run bench:history -- [model ...]` (roadmap PR 8.8) adds a **Latency report** section: the
+same benchmark run with the code as it was after each latency PR, a row per step, and a
+conclusion. The conclusion says whether the fastest model explains in under 10 seconds with the
+default settings, and if not, the floor (the shortest sample, an answer of at most 150 tokens,
+the model already loaded), which part of the time limits it, and what would help next.

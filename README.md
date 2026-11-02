@@ -22,5 +22,6 @@ Requires Node 22.22.2 or newer on the 22 line, or Node 24.15.0 or newer (jsdom a
 | `npm run dev` | Rebuild into `dist/` on every change |
 | `npm run package` | Build and zip the extension into `release/pr-explainer-<version>.zip` |
 | `npm run bench -- [model ...]` | Time explanations on the local Ollama and add the results to `docs/latency.md` |
+| `npm run bench:history -- [model ...]` | Run the benchmark with the code after each latency PR (8.2 to now), measure the floor, and add the latency report to `docs/latency.md` |
 | `npm run demo:popup` | Open a demo page for the explanation popup, with fake data |
 | `npm run demo:chat` | Open a demo page for the chat panel, with fake messages |

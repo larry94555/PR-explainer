@@ -12,6 +12,7 @@
     "dev": "vite build --watch --mode development",
     "package": "npm run build && node scripts/package.ts",
     "bench": "node scripts/bench.ts",
+    "bench:history": "node scripts/benchHistory.ts",
     "demo:popup": "vite --config vite.demo.config.ts --open /popup.html",
     "demo:chat": "vite --config vite.demo.config.ts --open /chat.html",
     "test": "vitest run",
