@@ -53,7 +53,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 4.2 | Stream to the popup with a Stop button | Medium | ✅ Done ([#18](https://github.com/larry94555/PR-explainer/pull/18)) |
 | 4.3 | Explanation cache and Regenerate | Medium | ✅ Done ([#19](https://github.com/larry94555/PR-explainer/pull/19)) |
 | 4.4 | Multi-line selection | Medium | ✅ Done ([#20](https://github.com/larry94555/PR-explainer/pull/20)) |
-| 5.1 | Chat session model | Small | Not started |
+| 5.1 | Chat session model | Small | ✅ Done ([#21](https://github.com/larry94555/PR-explainer/pull/21)) |
 | 5.2 | Chat panel UI | Medium | Not started |
 | 5.3 | Connect chat to the LLM with streaming | Medium | Not started |
 | 5.4 | Chat about a new line from the same panel | Small | Not started |
@@ -382,12 +382,16 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 
 **Demo:** After an explanation appears, click **Ask a question**. A chat panel opens with the code and explanation already in context. Ask "How would I unit test this?" and get a streamed answer, then ask a follow-up that relies on the first answer.
 
-### PR 5.1: Chat session model (Small)
-- **Why it's needed:** Chat needs a clear record of messages and what context they carry, separate from the UI.
-- **Problem it solves:** Adds a `ChatSession` that holds the system prompt, the code context, the original explanation, and the list of user and assistant messages. It builds the message list for the LLM and keeps one session per PR in memory while the tab is open.
-- **Unit tests added:** `chatSession.test.ts` covers creating a session from an explanation, adding turns, the exact message list sent to the model, and one session per PR being reused.
-- **How to test:**
-  1. Run `npm test` and confirm the chat session tests pass. (There is no UI yet; this PR is logic only.)
+### PR 5.1: Chat session model (Small) ✅ Done
+- **Status:** Done ([#21](https://github.com/larry94555/PR-explainer/pull/21)).
+- **Why it's needed:** Chat needs a clear record of messages and what context they carry, separate from the UI, so the panel (PR 5.2) and the streaming hookup (PR 5.3) can be small and tested on their own.
+- **Problem it solves:** Adds `src/chat/chatSession.ts`. A `ChatSession` starts from what the popup already has: the context block that was sent to the model (from `formatContext` or `formatSelection`, so a single line and a selected block both work) and the explanation it gave. It keeps the finished questions and answers. `messagesFor(question)` builds the exact list for the LLM: a chat system prompt, the code as the first user message, the explanation as the model's reply (written back with the same three headings, so the model sees what it said), every earlier turn oldest first, then the new question. Building the list records nothing; `addTurn(question, answer)` records a turn only once there is an answer, so a request that fails or is stopped before any text leaves the session as it was, and a stopped reply can be kept with the text it got. Empty questions are refused and empty answers are not recorded. `ChatSessions` keeps one session per PR (`owner/repo#17`) in the content script's memory: asking for the same PR again returns the same session, so the conversation lasts while the tab is open and is never written to storage. The file only has type imports, as the content script requires (see `src/content.ts`), and keeps its own copy of the section headings, which a test checks against `src/explain/explainPrompt.ts`. Nothing uses it yet, so the extension behaves exactly as after PR 4.4 (timer, Stop, cache, Regenerate and selection are untouched).
+- **Unit tests added:** `chatSession.test.ts` covers creating a session from an explanation (and refusing one without code context), the session keeping its own copy of the explanation, the exact message list for the first question, earlier turns appearing in order before a new question, building messages not recording a turn (the failed or stopped case), an empty answer not being recorded, empty questions being refused, the recorded turns not being changeable from outside, the headings matching the explain prompt's, `formatExplanation`'s output, one session per PR being reused (and a second seed being ignored), separate PRs getting separate sessions, and a session that failed to start not being kept.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm the `chatSession` tests pass and all the others still do (430 tests in 23 files).
+  2. Run `npx vitest run tests/chatSession.test.ts` to run only the new tests and read their names; they describe what the session does. There is no UI yet; this PR is logic only.
+  3. Run `npm run lint` and `npm run build` and confirm both succeed.
+  4. Run `npm run dev`, wait for `built in`, reload the extension (see [InstallingExtension.md](InstallingExtension.md)), refresh a PR's **Files changed** tab, and click a line. Confirm the popup works as before: the timer counts up, **Stop** stops it, clicking the same line again says "From cache · took …", **Regenerate** asks again, and dragging across lines still shows **Explain selection**.
 
 ### PR 5.2: Chat panel UI (Medium)
 - **Why it's needed:** Users need a place to type questions and read answers.
