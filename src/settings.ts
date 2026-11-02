@@ -38,6 +38,13 @@ export interface Settings {
    * 0 unloads it as soon as each answer is done, and turns off warm-up.
    */
   keepAliveMinutes: number;
+  /**
+   * Start explaining a diff line once the pointer rests on it (PR 8.7), so a
+   * click often shows the answer at once. Off by default, because it uses the
+   * model for lines the user may never click. The content script reads it
+   * straight from storage (src/prefetch.ts).
+   */
+  explainOnHover: boolean;
   /** Debug option: show the prompt sent to the model under each explanation. */
   showPrompt: boolean;
 }
@@ -51,6 +58,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   maxResponseTokens: 300,
   contextTokens: 0,
   keepAliveMinutes: 30,
+  explainOnHover: false,
   showPrompt: false,
 });
 
@@ -130,6 +138,8 @@ function checkField(field: SettingsField, value: unknown): string | null {
       );
     case 'keepAliveMinutes':
       return checkNumber(value, KEEP_ALIVE_MINUTES_RANGE, true, 'Keep model loaded');
+    case 'explainOnHover':
+      return typeof value === 'boolean' ? null : 'Explain on hover must be on or off.';
     case 'showPrompt':
       return typeof value === 'boolean' ? null : 'Show prompt must be on or off.';
   }

@@ -20,6 +20,7 @@ import { currentPopup, openPopup } from './popup/popup';
 import { latencyBreakdown, latencySummary } from './popup/latencyBreakdown';
 import { createFileContextLoader, type CodeSpan } from './fileContext';
 import type { FileContext } from './explain/explainPrompt';
+import { createPrefetcher, trackHoverSetting, type PrefetchEvent } from './prefetch';
 import { createPrMetadataLoader, type PrMetadata } from './prMetadata';
 import { parsePrUrl } from './prUrl';
 import { installSelection } from './selection';
@@ -83,6 +84,7 @@ const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (va
   if (!value) {
     currentPopup()?.close();
     currentChatPanel()?.close();
+    prefetcher.cancel();
   }
   update();
 });
@@ -136,34 +138,64 @@ function update(): void {
 // timeout: the popup's Stop button ends a request that takes too long.
 // One chat per PR, kept for as long as the tab is open (never stored).
 const chats = new ChatSessions();
-const explainDeps: ClickHandlerDeps = {
-  isEnabled: () => enabled.current() === true,
-  // The PR names the cache entry, so the same code in two PRs is asked
-  // separately (src/explain/explainCache.ts). The PR's title and description
-  // go with the code, so the answer can say why the PR needs it (PR 6.1).
-  // The block around the code in the full file goes too (PR 6.3).
-  explain: (context, onChunk, { fresh, code }) => {
-    const pr = prName(location.href);
-    const ready = Promise.all([loadPrMetadata(), loadFileContext(code)]);
-    return openAfter(ready, ([prInfo, fileContext]) => {
-      if (import.meta.env.MODE === 'development') {
-        if (prInfo) {
-          console.log(
-            `[PR Explainer] PR title for the model: ${prInfo.title || '(none)'}\n` +
-              `PR description for the model:\n${prInfo.description || '(none)'}`,
-          );
-        }
+// The PR names the cache entry, so the same code in two PRs is asked
+// separately (src/explain/explainCache.ts). The PR's title and description
+// go with the code, so the answer can say why the PR needs it (PR 6.1).
+// The block around the code in the full file goes too (PR 6.3).
+const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, { fresh, code }) => {
+  const pr = prName(location.href);
+  const ready = Promise.all([loadPrMetadata(), loadFileContext(code)]);
+  return openAfter(ready, ([prInfo, fileContext]) => {
+    if (import.meta.env.MODE === 'development') {
+      if (prInfo) {
         console.log(
-          '[PR Explainer] full file context for the model: ' +
-            (fileContext
-              ? `${fileContext.kind}, lines ${fileContext.startLine} to ` +
-                `${fileContext.startLine + fileContext.lines.length - 1}`
-              : '(none)'),
+          `[PR Explainer] PR title for the model: ${prInfo.title || '(none)'}\n` +
+            `PR description for the model:\n${prInfo.description || '(none)'}`,
         );
       }
-      return openExplainStream({ context, pr, fresh, prInfo, fileContext }, onChunk);
-    });
+      console.log(
+        '[PR Explainer] full file context for the model: ' +
+          (fileContext
+            ? `${fileContext.kind}, lines ${fileContext.startLine} to ` +
+              `${fileContext.startLine + fileContext.lines.length - 1}`
+            : '(none)'),
+      );
+    }
+    return openExplainStream({ context, pr, fresh, prInfo, fileContext }, onChunk);
+  });
+};
+
+// Explain on hover (PR 8.7): with the setting on, resting the pointer on a
+// line starts its explanation, and a click joins it (src/prefetch.ts).
+const hoverSetting = trackHoverSetting(chrome.storage.sync, chrome.storage.onChanged, (on) => {
+  if (!on) prefetcher.cancel();
+});
+function describePrefetch(event: PrefetchEvent): string {
+  const seconds = 'elapsedMs' in event ? ` after ${(event.elapsedMs / 1000).toFixed(1)} s` : '';
+  if (event.type === 'finished') {
+    return `prefetch of ${event.key} ${event.status === 'done' ? 'finished' : 'failed'}${seconds}`;
+  }
+  if (event.type === 'joined') return `click joined the prefetch of ${event.key}${seconds}`;
+  return `prefetch of ${event.key} ${event.type}`;
+}
+const prefetcher = createPrefetcher({
+  explain: askWorker,
+  isOn: () => hoverSetting.current(),
+  isEnabled: () => enabled.current() === true,
+  // One request at a time: not while a click's answer is still coming, and
+  // not while the chat is open (a click then goes to the chat).
+  isBusy: () => {
+    const state = currentPopup()?.state;
+    return state === 'loading' || state === 'streaming' || currentChatPanel() !== null;
   },
+  // Every build logs prefetches, like the timing of each explanation below.
+  onEvent: (event) => console.info(`[PR Explainer] ${describePrefetch(event)}`),
+});
+
+const explainDeps: ClickHandlerDeps = {
+  isEnabled: () => enabled.current() === true,
+  // A click joins a running prefetch of the same line instead of asking again.
+  explain: prefetcher.explain,
   openPopup: (anchor, options) => openPopup(anchor, options),
   // The popup's Ask a question button: chat about the explained code, with
   // answers streamed from the service worker (src/chat/chatFlow.ts).
@@ -212,11 +244,16 @@ const onClick = createClickHandler(explainDeps);
 // moves elsewhere (PR 7.1).
 const features = new DiffPageFeatures(() => {
   document.addEventListener('click', onClick);
+  document.addEventListener('mouseover', prefetcher.onMouseOver);
+  document.addEventListener('mousedown', prefetcher.onMouseDown);
   // Drag across lines, or click one and Shift-click another, to explain the
   // block as a whole (src/selection.ts).
   const removeSelection = installSelection(explainDeps);
   return () => {
     document.removeEventListener('click', onClick);
+    document.removeEventListener('mouseover', prefetcher.onMouseOver);
+    document.removeEventListener('mousedown', prefetcher.onMouseDown);
+    prefetcher.cancel();
     removeSelection();
     // Closing the popup also stops its request.
     currentPopup()?.close();
@@ -244,6 +281,8 @@ function onPageChanged(url: string): void {
   features.sync(url);
   prMetadata.forget();
   fileContexts.forget();
+  // A prefetch or wait from before the move is for code that may be gone.
+  prefetcher.pageChanged();
   void loadPrMetadata();
 }
 watchNavigation(window, onPageChanged, { onRedraw: onPageChanged });

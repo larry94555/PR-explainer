@@ -180,23 +180,35 @@ export function explainLineAt(
   >,
   target: EventTarget | null,
 ): boolean {
+  const found = lineRequest(target);
+  if (!found) return false;
+  explainCode(deps, found.request, found.row);
+  return true;
+}
+
+/**
+ * The row of the diff line `target` is on and the request that explains it,
+ * or null when `target` is not on a code line. A click and a hover prefetch
+ * (src/prefetch.ts) both build their request here, so they send the same text
+ * and a click can join the prefetch.
+ */
+export function lineRequest(
+  target: EventTarget | null,
+): { row: Element; request: ExplainRequest } | null {
   const row = locateRow(target);
   const context = row && extractContext(target);
-  if (!row || !context) return false;
-
+  if (!row || !context) return null;
   const { filePath, lineNumber, side, text } = context.line;
   const code =
     side === 'removed' ? undefined : { filePath, startLine: lineNumber, endLine: lineNumber, text };
-  explainCode(
-    deps,
-    {
+  return {
+    row,
+    request: {
       text: formatContext(context),
       subject: { filePath, startLine: lineNumber },
       ...(code && { code }),
     },
-    row,
-  );
-  return true;
+  };
 }
 
 /**
