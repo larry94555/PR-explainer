@@ -429,3 +429,65 @@ describe('selectionSubject', () => {
     });
   });
 });
+
+// Split view (PR 7.2): GitHub selects text on one side at a time, so a drag
+// down the left side explains the old lines and one down the right side the
+// new lines. Both fixtures are tests/manifest.test.ts from PR #28.
+describe.each([
+  { name: 'classic', file: 'github-diff-classic-split.html' },
+  { name: 'new (React)', file: 'github-diff-new-split.html' },
+])('selecting lines in split view on the $name layout', ({ file }) => {
+  let env: ReturnType<typeof setup>;
+  // The code cell on `column`'s side of the n-th code row (hunk headers left out).
+  const cell = (n: number, column: 'left' | 'right') =>
+    [...document.querySelectorAll('tbody tr')].filter((r) => r.children.length === 4)[n]!.children[
+      column === 'left' ? 1 : 3
+    ]!;
+
+  // Selects the text of the cells from `from` to `to`, like a drag.
+  const dragCells = (from: Element, to: Element) => {
+    const range = document.createRange();
+    range.setStart(from, 0);
+    range.setEnd(to, to.childNodes.length);
+    document.getSelection()!.removeAllRanges();
+    document.getSelection()!.addRange(range);
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = fixture(file);
+  });
+  afterEach(() => env?.uninstall());
+
+  // Rows 2 to 6 of the first hunk: new lines 47 to 51, with two changed rows.
+  it('explains only the old lines for a drag down the left side', () => {
+    env = setup();
+    dragCells(cell(2, 'left'), cell(6, 'left'));
+    mouse('mouseup', cell(6, 'left'));
+    expect(highlighted()).toHaveLength(5);
+    expect(uiButton()?.textContent).toBe('Explain selection (5 lines)');
+    uiButton()!.click();
+    expect(env.contexts[0]).toContain('Selection: 5 lines (2 removed, 3 unchanged)');
+    expect(env.contexts[0]).not.toMatch(/^\+/m);
+  });
+
+  it('explains only the new lines for a drag down the right side', () => {
+    env = setup();
+    dragCells(cell(2, 'right'), cell(6, 'right'));
+    mouse('mouseup', cell(6, 'right'));
+    uiButton()!.click();
+    expect(env.contexts[0]).toContain('Selection: 5 lines (2 added, 3 unchanged)');
+  });
+
+  it('counts both lines of each changed row for a Shift-click across sides', () => {
+    env = setup();
+    click(cell(2, 'left'));
+    mouse('mousedown', cell(6, 'right'), { shiftKey: true });
+    mouse('mouseup', cell(6, 'right'), { shiftKey: true });
+    expect(highlighted()).toHaveLength(5);
+    expect(uiButton()?.textContent).toBe('Explain selection (7 lines)');
+    uiButton()!.click();
+    expect(env.contexts[0]).toContain('Selection: 7 lines (2 added, 2 removed, 3 unchanged)');
+    // Removed before added, as in the unified view.
+    expect(env.contexts[0]).toMatch(/^-.*injects one content script[^\n]*\n\+/m);
+  });
+});

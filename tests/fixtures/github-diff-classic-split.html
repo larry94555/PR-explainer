@@ -1,0 +1,424 @@
+<!--
+  Trimmed copy of GitHub's classic "Files changed" page in split view, saved
+  from https://github.com/larry94555/PR-explainer/pull/28/files?diff=split.
+  Only two hunks of tests/manifest.test.ts are kept; icons, tooltips and inline styles were
+  removed. Used by tests/diffDom.test.ts.
+-->
+<div class="js-diff-progressive-container">
+<copilot-diff-entry data-file-path="tests/manifest.test.ts">
+<div id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819e" class="file js-file" data-file-type=".ts" data-tagsearch-path="tests/manifest.test.ts">
+<div class="file-header js-file-header" data-path="tests/manifest.test.ts"><a class="Link--primary" href="#diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819e">tests/manifest.test.ts</a></div>
+<div class="js-file-content">
+<table class=" diff-table js-diff-table tab-size  file-diff-split js-file-diff-split" data-tab-size="4" data-diff-anchor="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819e" data-paste-markdown-skip>
+<thead class="sr-only">
+<tr>
+<th scope="col">Original file line number</th>
+<th scope="col">Original file line</th>
+<th scope="col">Diff line number</th>
+<th scope="col">Diff line change</th>
+</tr>
+</thead>
+<colgroup>
+<col width="40">
+<col>
+<col width="40">
+<col>
+</colgroup>
+                <tbody><tr class="js-expandable-line js-skip-tagsearch" data-position="11">
+<td class="blob-num blob-num-expandable" colspan="1">
+<a href="#diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819e"
+                id="expand-down-link-11-diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819e"
+                class="js-expand directional-expander" aria-label="Expand Down"
+                data-left-range="10-25" data-right-range="12-27">
+</a>
+<a href="#diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819e"
+              id="expand-up-link-11-diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819e"
+              class="js-expand directional-expander" aria-label="Expand Up"
+              data-left-range="26-42" data-right-range="28-44">
+</a>
+</td>
+<td class="blob-code blob-code-inner blob-code-hunk" colspan="3">@@ -43,9 +45,9 @@ describe(&#39;manifest.json&#39;, () =&gt; {</td>
+</tr>
+<tr data-hunk="ea3dd4863f1d9c67db1766b4eb2f9a14905c588398b46d979a79b0b9afd3c874">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL43"
+        data-line-number="43"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">    expect(manifest).not.toHaveProperty(&#39;background.page&#39;);</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR45"
+        data-line-number="45"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">    expect(manifest).not.toHaveProperty(&#39;background.page&#39;);</span>
+</td>
+</tr>
+<tr data-hunk="ea3dd4863f1d9c67db1766b4eb2f9a14905c588398b46d979a79b0b9afd3c874">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL44"
+        data-line-number="44"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">  });</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR46"
+        data-line-number="46"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">  });</span>
+</td>
+</tr>
+<tr data-hunk="ea3dd4863f1d9c67db1766b4eb2f9a14905c588398b46d979a79b0b9afd3c874">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL45"
+        data-line-number="45"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" "><br></span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR47"
+        data-line-number="47"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" "><br></span>
+</td>
+</tr>
+<tr data-hunk="ea3dd4863f1d9c67db1766b4eb2f9a14905c588398b46d979a79b0b9afd3c874">
+<td class="blob-num blob-num-deletion js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL46"
+        data-line-number="46"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-deletion js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker js-skip-tagsearch" data-code-marker="-">  it(&#39;injects one content script, <span class="x x-first x-last">only </span>on <span class="x x-first x-last">PR URLs</span>&#39;, () =&gt; {</span>
+</td>
+<td class="blob-num blob-num-addition js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR48"
+        data-line-number="48"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-addition js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker="+">  it(&#39;injects one content script, on <span class="x x-first x-last">github.com pages only</span>&#39;, () =&gt; {</span>
+</td>
+</tr>
+<tr data-hunk="ea3dd4863f1d9c67db1766b4eb2f9a14905c588398b46d979a79b0b9afd3c874">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL47"
+        data-line-number="47"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">    expect(manifest.content_scripts).toHaveLength(1);</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR49"
+        data-line-number="49"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">    expect(manifest.content_scripts).toHaveLength(1);</span>
+</td>
+</tr>
+<tr data-hunk="ea3dd4863f1d9c67db1766b4eb2f9a14905c588398b46d979a79b0b9afd3c874">
+<td class="blob-num blob-num-deletion js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL48"
+        data-line-number="48"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-deletion js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker js-skip-tagsearch" data-code-marker="-">    expect(manifest.content_scripts[0]?.matches).toEqual([<span class="x x-first x-last">PR_PATTERN</span>]);</span>
+</td>
+<td class="blob-num blob-num-addition js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR50"
+        data-line-number="50"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-addition js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker="+">    expect(manifest.content_scripts[0]?.matches).toEqual([<span class="x x-first x-last">GITHUB_PATTERN</span>]);</span>
+</td>
+</tr>
+<tr data-hunk="ea3dd4863f1d9c67db1766b4eb2f9a14905c588398b46d979a79b0b9afd3c874">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL49"
+        data-line-number="49"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">    expect(manifest.content_scripts[0]?.js).toEqual([&#39;content.js&#39;]);</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR51"
+        data-line-number="51"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">    expect(manifest.content_scripts[0]?.js).toEqual([&#39;content.js&#39;]);</span>
+</td>
+</tr>
+<tr data-hunk="ea3dd4863f1d9c67db1766b4eb2f9a14905c588398b46d979a79b0b9afd3c874">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL50"
+        data-line-number="50"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">  });</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR52"
+        data-line-number="52"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">  });</span>
+</td>
+</tr>
+<tr data-hunk="ea3dd4863f1d9c67db1766b4eb2f9a14905c588398b46d979a79b0b9afd3c874">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL51"
+        data-line-number="51"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" "><br></span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR53"
+        data-line-number="53"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" "><br></span>
+</td>
+</tr>
+<tr class="js-expandable-line js-skip-tagsearch" data-position="23">
+<td class="blob-num blob-num-expandable" colspan="1">
+<a href="#diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819e"
+              id="expand-link-23-diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819e"
+              class="js-expand directional-expander single-expander" aria-label="Expand All"
+              data-left-range="52-51" data-right-range="54-53">
+</a>
+</td>
+<td class="blob-code blob-code-inner blob-code-hunk" colspan="3">@@ -54,15 +56,16 @@ describe(&#39;manifest.json&#39;, () =&gt; {</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL54"
+        data-line-number="54"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">    &#39;https://github.com/owner/repo/pull/123/files&#39;,</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR56"
+        data-line-number="56"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">    &#39;https://github.com/owner/repo/pull/123/files&#39;,</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL55"
+        data-line-number="55"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">    &#39;https://github.com/owner/repo/pull/123/commits&#39;,</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR57"
+        data-line-number="57"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">    &#39;https://github.com/owner/repo/pull/123/commits&#39;,</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL56"
+        data-line-number="56"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">    &#39;https://github.com/owner/repo/pull/123/files?w=1#diff-abc&#39;,</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR58"
+        data-line-number="58"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">    &#39;https://github.com/owner/repo/pull/123/files?w=1#diff-abc&#39;,</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-empty empty-cell"></td>
+<td class="blob-code blob-code-empty empty-cell" data-split-side="left"></td>
+<td class="blob-num blob-num-addition js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR59"
+        data-line-number="59"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-addition js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker="+">    // Pages a PR is often reached from without a reload.</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-empty empty-cell"></td>
+<td class="blob-code blob-code-empty empty-cell" data-split-side="left"></td>
+<td class="blob-num blob-num-addition js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR60"
+        data-line-number="60"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-addition js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker="+">    &#39;https://github.com/owner/repo&#39;,</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-empty empty-cell"></td>
+<td class="blob-code blob-code-empty empty-cell" data-split-side="left"></td>
+<td class="blob-num blob-num-addition js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR61"
+        data-line-number="61"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-addition js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker="+">    &#39;https://github.com/owner/repo/pulls&#39;,</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-empty empty-cell"></td>
+<td class="blob-code blob-code-empty empty-cell" data-split-side="left"></td>
+<td class="blob-num blob-num-addition js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR62"
+        data-line-number="62"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-addition js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker="+">    &#39;https://github.com/owner/repo/issues/1&#39;,</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-empty empty-cell"></td>
+<td class="blob-code blob-code-empty empty-cell" data-split-side="left"></td>
+<td class="blob-num blob-num-addition js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR63"
+        data-line-number="63"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-addition js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker="+">    &#39;https://github.com/pulls&#39;,</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL57"
+        data-line-number="57"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">  ])(&#39;runs the content script on %s&#39;, (url) =&gt; {</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR64"
+        data-line-number="64"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">  ])(&#39;runs the content script on %s&#39;, (url) =&gt; {</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL58"
+        data-line-number="58"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">    expect(matchesContentScript(url)).toBe(true);</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR65"
+        data-line-number="65"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">    expect(matchesContentScript(url)).toBe(true);</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL59"
+        data-line-number="59"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">  });</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR66"
+        data-line-number="66"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">  });</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL60"
+        data-line-number="60"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" "><br></span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR67"
+        data-line-number="67"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" "><br></span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL61"
+        data-line-number="61"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">  it.each([</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR68"
+        data-line-number="68"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">  it.each([</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-deletion js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL62"
+        data-line-number="62"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-deletion js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker js-skip-tagsearch" data-code-marker="-">    &#39;https://github.com/owner/repo&#39;,</span>
+</td>
+<td class="blob-num blob-num-empty empty-cell"></td>
+<td class="blob-code blob-code-empty empty-cell" data-split-side="right"></td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-deletion js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL63"
+        data-line-number="63"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-deletion js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker js-skip-tagsearch" data-code-marker="-">    &#39;https://github.com/owner/repo/pulls&#39;,</span>
+</td>
+<td class="blob-num blob-num-empty empty-cell"></td>
+<td class="blob-code blob-code-empty empty-cell" data-split-side="right"></td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-deletion js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL64"
+        data-line-number="64"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-deletion js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker js-skip-tagsearch" data-code-marker="-">    &#39;https://github.com/owner/repo/issues/1&#39;,</span>
+</td>
+<td class="blob-num blob-num-empty empty-cell"></td>
+<td class="blob-code blob-code-empty empty-cell" data-split-side="right"></td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-deletion js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL65"
+        data-line-number="65"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-deletion js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker js-skip-tagsearch" data-code-marker="-">    &#39;https://github.com/pulls&#39;,</span>
+</td>
+<td class="blob-num blob-num-empty empty-cell"></td>
+<td class="blob-code blob-code-empty empty-cell" data-split-side="right"></td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL66"
+        data-line-number="66"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">    &#39;http://github.com/owner/repo/pull/1&#39;,</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR69"
+        data-line-number="69"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">    &#39;http://github.com/owner/repo/pull/1&#39;,</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL67"
+        data-line-number="67"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">    &#39;https://gist.github.com/owner/repo/pull/1&#39;,</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR70"
+        data-line-number="70"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">    &#39;https://gist.github.com/owner/repo/pull/1&#39;,</span>
+</td>
+</tr>
+<tr data-hunk="c8d91a463582a6d71bd0806c18483be010d3cf086f39cd72114f5231e33bcd44">
+<td class="blob-num blob-num-context js-linkable-line-number"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eL68"
+        data-line-number="68"></td>
+<td data-split-side="left" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line js-skip-tagsearch">
+      <span class="blob-code-inner blob-code-marker " data-code-marker=" ">    &#39;https://example.com/owner/repo/pull/1&#39;,</span>
+</td>
+<td class="blob-num blob-num-context js-linkable-line-number js-blob-rnum"
+        id="diff-6b7d91a5558daacfdbbbc366ca3671d910b6a775c28cb8386ed9a0c9f4bc819eR71"
+        data-line-number="71"></td>
+<td data-split-side="right" data-lock-side-selection="" class="code-review blob-code blob-code-context js-file-line">
+      <span class="blob-code-inner blob-code-marker" data-code-marker=" ">    &#39;https://example.com/owner/repo/pull/1&#39;,</span>
+</td>
+</tr>
+  
+</tbody></table>
+</div></div></copilot-diff-entry></div>

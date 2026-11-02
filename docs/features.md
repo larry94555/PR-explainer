@@ -9,7 +9,7 @@ Open a pull request on github.com, go to the **Files changed** tab, and click an
 - **Concerns:** possible bugs, edge cases, security, performance, or style issues. It says "None found" when there are none.
 
 ## 2. Multi-line selection
-Drag to select several lines (or a whole hunk) and get one explanation for the selection rather than for a single line.
+Drag to select several lines (or a whole hunk) and get one explanation for the selection rather than for a single line. In split view, a selection down one side covers that side's lines (old or new).
 
 ## 3. Context-aware prompts
 Every request includes the surrounding context the model needs: the file path and language, the diff hunk around the clicked line (added, removed, and unchanged lines), the function or block the line sits in (read from the full file at the PR's head, even when the diff hides most of it), and the PR title and description. Context is trimmed to fit the model's context window: the full-file block first, then the PR description, then the lines farthest from the clicked code, which is never cut.

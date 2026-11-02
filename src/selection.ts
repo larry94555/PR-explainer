@@ -91,6 +91,11 @@ export function selectionSubject(context: SelectionContext): ChatSubject {
   };
 }
 
+/** How many code lines a range holds (two per changed split view row). */
+function lineCount(range: DiffRange): number {
+  return range.items.filter((item) => 'line' in item).length;
+}
+
 /**
  * Where a selection is in the new file (PR 6.3), for reading its enclosing
  * block from the full file. Undefined when it is only removed lines.
@@ -169,8 +174,9 @@ function selectionEnds(doc: Document): [Node, Node] | null {
  */
 export function installSelection(deps: SelectionDeps, doc: Document = document): () => void {
   const win = doc.defaultView!;
-  // The row of the last plain click on a line, for Shift-click.
-  let anchorRow: Element | null = null;
+  // Where the last plain click on a line landed (its cell, so split view
+  // knows which side), for a later Shift-click.
+  let anchorAt: Node | null = null;
   let rows: Element[] = [];
   let ui: HTMLElement | null = null;
   let noteTimer: ReturnType<typeof setTimeout> | undefined;
@@ -244,7 +250,8 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
     const box = last.getBoundingClientRect();
     const button = doc.createElement('button');
     button.type = 'button';
-    button.textContent = `Explain selection (${rows.length} lines)`;
+    // A split view row can hold two lines (removed and added).
+    button.textContent = `Explain selection (${lineCount(range)} lines)`;
     button.addEventListener('click', () => {
       removeUi();
       explaining = true;
@@ -274,8 +281,8 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
     if (isInteractive(target)) return;
 
     let ends: [Node | EventTarget | null, Node | EventTarget | null] | null = null;
-    if (event.shiftKey && anchorRow?.isConnected && locateRow(target)) {
-      ends = [anchorRow, target];
+    if (event.shiftKey && anchorAt?.isConnected && locateRow(target)) {
+      ends = [anchorAt, target];
       // Shift-click also stretches the browser's text selection; it is noise here.
       doc.getSelection()?.removeAllRanges();
     } else {
@@ -287,7 +294,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
       // A plain click on a line is where a later Shift-click starts from.
       const row = locateRow(target);
       if (row && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
-        anchorRow = row;
+        anchorAt = target instanceof Node ? target : row;
       }
       return;
     }
@@ -298,7 +305,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
     const y = (box?.bottom ?? event.clientY) + win.scrollY + 4;
     const x = event.clientX + win.scrollX;
     if (range === 'other-file') showNote(x, y, OTHER_FILE_NOTE);
-    else if (range.rows.length > MAX_SELECTED_LINES) showNote(x, y, TOO_MANY_NOTE);
+    else if (lineCount(range) > MAX_SELECTED_LINES) showNote(x, y, TOO_MANY_NOTE);
     else select(range, event.clientX);
   };
 
