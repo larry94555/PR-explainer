@@ -54,7 +54,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 4.3 | Explanation cache and Regenerate | Medium | ✅ Done ([#19](https://github.com/larry94555/PR-explainer/pull/19)) |
 | 4.4 | Multi-line selection | Medium | ✅ Done ([#20](https://github.com/larry94555/PR-explainer/pull/20)) |
 | 5.1 | Chat session model | Small | ✅ Done ([#21](https://github.com/larry94555/PR-explainer/pull/21)) |
-| 5.2 | Chat panel UI | Medium | Not started |
+| 5.2 | Chat panel UI | Medium | ✅ Done ([#22](https://github.com/larry94555/PR-explainer/pull/22)) |
 | 5.3 | Connect chat to the LLM with streaming | Medium | Not started |
 | 5.4 | Chat about a new line from the same panel | Small | Not started |
 | 6.1 | Include PR title and description | Small | Not started |
@@ -393,13 +393,22 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   3. Run `npm run lint` and `npm run build` and confirm both succeed.
   4. Run `npm run dev`, wait for `built in`, reload the extension (see [InstallingExtension.md](InstallingExtension.md)), refresh a PR's **Files changed** tab, and click a line. Confirm the popup works as before: the timer counts up, **Stop** stops it, clicking the same line again says "From cache · took …", **Regenerate** asks again, and dragging across lines still shows **Explain selection**.
 
-### PR 5.2: Chat panel UI (Medium)
+### PR 5.2: Chat panel UI (Medium) ✅ Done
+- **Status:** Done ([#22](https://github.com/larry94555/PR-explainer/pull/22)).
 - **Why it's needed:** Users need a place to type questions and read answers.
-- **Problem it solves:** Adds a chat panel in the Shadow DOM: message list, text box, **Send** (and **Enter** to send, **Shift+Enter** for a new line), auto-scroll, and a header showing which file and lines are being discussed. Answers are rendered as sanitized markdown with code blocks.
-- **Unit tests added:** `chatPanel.test.ts` (jsdom) covers rendering a conversation, Enter versus Shift+Enter, the Send button being disabled for empty input, and auto-scroll on new messages.
-- **How to test:**
-  1. Run `npm run demo:chat` (added in this PR) and check the panel with fake messages.
-  2. Type a message and confirm Enter sends it and Shift+Enter adds a line.
+- **Problem it solves:** Adds `openChatPanel` (`src/chat/chatPanel.ts`), a chat panel docked in the bottom-right corner of the window, in a Shadow DOM root like the popup. It has a message list, a text box, and **Send**: **Enter** sends, **Shift+Enter** starts a new line, and Enter that picks a word in an input method (IME) does not send. **Send** is disabled while the text box is empty or only spaces, and while an answer is being written (`setBusy`). The header names the file and lines being discussed ("`src/llm/retry.ts` lines 12 to 18", or "line 42"). Questions show as plain text; answers are untrusted model output and are rendered with the popup's `renderMarkdown`, so code blocks, lists and inline code work and HTML never runs. The list keeps the newest message in view while an answer streams in, unless the user has scrolled up to read, and always scrolls to a question the user just sent. Key presses inside the panel are kept from reaching GitHub's page, so typing "t" or "s" does not trigger GitHub's keyboard shortcuts. Only one panel is open at a time, and it closes with its **×** button (not with a click outside, so the diff can still be clicked). The panel does not talk to the LLM or keep the conversation: it reports each question through `onSend`, and the caller adds the answer with `addMessage` and fills it in with `update`. Adds `npm run demo:chat`, a demo page with fake messages and a fake answer that streams in word by word. Nothing on GitHub changes yet; PR 5.3 opens the panel from the popup.
+- **Unit tests added:** `chatPanel.test.ts` (jsdom) covers the header for a block and a single line (`formatLines`), rendering a conversation in order with answers as markdown, questions as plain text, HTML in answers and questions not creating elements, updating a streaming answer, **Send** disabled for empty or blank input, Enter sending (the question is added, the box cleared, `onSend` called with the trimmed text), the **Send** button sending, Shift+Enter not sending, Enter during IME composition not sending, an empty question not being sent, no sending while busy (and sending again after), key presses not reaching the page, auto-scroll (to a new message at the bottom, following a streaming answer, staying put when scrolled up, always showing a sent question), closing with **×** (and `onClose` called once), one panel at a time, styles staying in the shadow root, and focusing the text box.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm the `chatPanel` tests pass and all the others still do (452 tests in 24 files).
+  2. Run `npm run demo:chat`. Your browser opens the demo page (if it does not, open the `Local:` address it prints, adding `/chat.html`). Press `Ctrl+C` in Command Prompt to stop it when you are done.
+  3. Click **Open with a conversation**. Confirm a panel opens in the bottom-right corner with "Chat", `src/llm/retry.ts`, and "lines 12 to 18" in the header, scrolled to the newest message: a question on the right and an answer on the left with a code block and a bullet list. Confirm **Send** is greyed out.
+  4. Type `Can the limit be`, press **Shift+Enter**, and type `passed in instead?`. Confirm the text box shows two lines and **Send** turns green.
+  5. Press **Enter**. Confirm your question appears on the right as you typed it, the text box empties, and a fake answer streams in word by word while the list scrolls with it. While it is streaming, type something and confirm **Send** stays greyed out and **Enter** does nothing; once the answer finishes, **Enter** sends it.
+  6. Send two or three more questions until the list is long, then scroll up while an answer is streaming. Confirm the list stays where you scrolled instead of jumping to the bottom.
+  7. Click **Open about one line**. Confirm the old panel is replaced by one whose header says "line 15".
+  8. Click **Open with unsafe model output**. Confirm the `<img>`, `<script>` and `<b>` tags show as plain text, no alert box opens, and "A link that goes nowhere" is not a link.
+  9. Click the **×** button and confirm the panel closes and "Last event: closed" shows.
+  10. Run `npm run lint` and `npm run build` and confirm both succeed (the demo is not part of `dist/`).
 
 ### PR 5.3: Connect chat to the LLM with streaming (Medium)
 - **Why it's needed:** This turns the chat panel into a working feature.
