@@ -7,6 +7,7 @@ import {
   GAP,
   openPopup,
   POPUP_ID,
+  promptSummary,
   STOPPED_EMPTY,
   type AnchorRect,
 } from '../src/popup/popup';
@@ -65,6 +66,39 @@ describe('popup', () => {
     expect(section('what').querySelector('li strong')?.textContent).toBe('three');
     expect(section('why').querySelector('em')?.textContent).toBe('slow');
     expect(section('concerns').textContent).toBe('None found.');
+  });
+
+  describe('Show prompt (PR 6.2)', () => {
+    const REPORT = {
+      text: '[system]\nYou are a senior engineer.\n\n[user]\nExplain the clicked line.',
+      tokens: 1234,
+      budget: 3040,
+      contextTokens: 4096,
+      trimmed: ['lines around the code', 'PR description'],
+    };
+
+    it('adds a collapsed Prompt sent section under the explanation', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'llama3');
+      popup.showPrompt(REPORT);
+      const details = shadow().querySelector('details.prompt') as HTMLDetailsElement;
+      expect(details.open).toBe(false);
+      expect(details.querySelector('summary')!.textContent).toBe(
+        'Prompt sent · about 1,234 of 3,040 tokens (4,096-token context) · ' +
+          'trimmed: lines around the code, PR description',
+      );
+      expect(details.querySelector('pre')!.textContent).toBe(REPORT.text);
+    });
+
+    it('says when nothing was trimmed', () => {
+      expect(promptSummary({ ...REPORT, trimmed: [] })).toMatch(/· nothing trimmed$/);
+    });
+
+    it('shows nothing unless an explanation is shown', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showPrompt(REPORT);
+      expect(shadow().querySelector('details.prompt')).toBeNull();
+    });
   });
 
   it('shows an error message and a fix, with commands as code', () => {

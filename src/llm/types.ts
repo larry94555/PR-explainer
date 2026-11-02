@@ -17,6 +17,8 @@ export interface ChatOptions {
   temperature?: number;
   /** Upper limit on the reply length, in tokens. */
   maxResponseTokens?: number;
+  /** The context window to run the model with, prompt and reply together, in tokens. */
+  contextTokens?: number;
   /** Cancels the request. The promise then rejects with kind "aborted". */
   signal?: AbortSignal;
 }
@@ -43,8 +45,18 @@ export interface ModelInfo {
   sizeBytes?: number;
 }
 
+/** What the server says about one model's context window (PR 6.2). */
+export interface ModelContext {
+  /** The longest context the model was trained for, when the server says. */
+  maxTokens?: number;
+  /** The context size the model's own settings ask for (Ollama's num_ctx), if any. */
+  configuredTokens?: number;
+}
+
 export interface LlmClient {
   listModels(options?: { signal?: AbortSignal }): Promise<ModelInfo[]>;
+  /** Looks up `model`'s context window. */
+  modelContext(model: string, options?: { signal?: AbortSignal }): Promise<ModelContext>;
   chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatReply>;
   /**
    * Like chat(), but yields the reply in pieces as the model writes them.

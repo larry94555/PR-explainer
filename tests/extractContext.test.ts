@@ -137,10 +137,10 @@ describe('contextFromHunk', () => {
         'Clicked line: removed, line 3 of the old file',
         '-line 3',
         '',
-        'Surrounding diff:',
+        'Surrounding diff (the clicked line starts with >):',
         '@@ -1,5 +1,5 @@',
         ' line 2',
-        '-line 3',
+        '>-line 3',
         ' line 4',
       ].join('\n'),
     );
@@ -148,7 +148,7 @@ describe('contextFromHunk', () => {
 
   it('leaves out an empty hunk header', () => {
     const text = formatContext(contextFromHunk({ ...hunk, header: '' }, { before: 0, after: 0 }));
-    expect(text.endsWith('Surrounding diff:\n line 3')).toBe(true);
+    expect(text.endsWith('starts with >):\n> line 3')).toBe(true);
   });
 });
 

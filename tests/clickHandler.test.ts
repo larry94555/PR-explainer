@@ -66,6 +66,7 @@ function fakePopup(anchor: PopupAnchor, hooks: PopupHooks) {
       return state;
     },
     showLoading: () => calls.push('loading'),
+    showPrompt: (report) => calls.push(`prompt:${report.tokens}`),
     showPartial: (markdown) => {
       if (state !== 'loading' && state !== 'streaming') return;
       state = 'streaming';
@@ -189,6 +190,17 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     await flush();
     expect(env.deps.explain).toHaveBeenCalledTimes(1);
     expect(env.popups[0]!.calls).toEqual([`done:${DONE.model}:${DONE.explanation.what}`]);
+  });
+
+  it('shows the prompt under the explanation when the result has one (PR 6.2)', async () => {
+    const prompt = { text: 'p', tokens: 42, budget: 100, contextTokens: 2048, trimmed: [] };
+    env = setup(() => Promise.resolve({ ...DONE, prompt }));
+    click(code('R44'));
+    await flush();
+    expect(env.popups[0]!.calls).toEqual([
+      `done:${DONE.model}:${DONE.explanation.what}`,
+      'prompt:42',
+    ]);
   });
 
   it('opens a popup next to the clicked row and shows the explanation', async () => {

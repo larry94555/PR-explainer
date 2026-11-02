@@ -55,7 +55,15 @@ export function withMarker(line: DiffLine): string {
   return MARKERS[line.side] + line.text;
 }
 
-// Plain-text block for the console now and the model later.
+// The heading over the lines around a clicked line, and the mark in front of
+// the clicked line among them (PR 6.2). The mark tells the model, and the
+// service worker's context trimming (src/explain/fitPrompt.ts), which of the
+// lines was clicked even when the same text appears twice, such as "}". The
+// service worker keeps its own copy of both, and a test checks they agree.
+export const SURROUNDING_HEADING = 'Surrounding diff (the clicked line starts with >):';
+export const CLICKED_MARK = '>';
+
+// Plain-text block for the model: the clicked line, then the lines around it.
 export function formatContext(context: LineContext): string {
   const { line } = context;
   const fileSide = line.side === 'removed' ? 'old' : 'new';
@@ -64,10 +72,10 @@ export function formatContext(context: LineContext): string {
     `Clicked line: ${line.side}, line ${line.lineNumber} of the ${fileSide} file`,
     withMarker(line),
     '',
-    'Surrounding diff:',
+    SURROUNDING_HEADING,
     ...(context.hunkHeader ? [context.hunkHeader] : []),
     ...context.before,
-    withMarker(line),
+    CLICKED_MARK + withMarker(line),
     ...context.after,
   ].join('\n');
 }

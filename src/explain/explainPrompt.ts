@@ -68,30 +68,44 @@ export interface PrInfo {
 // The part of the user message that says what the PR is for. Empty when
 // neither the title nor the description is known. The description is the
 // PR author's text, so it is fenced off as something to read, not obey.
-function prSection(pr: PrInfo | undefined): string[] {
-  const title = pr?.title.trim() ?? '';
-  const description = pr?.description.trim() ?? '';
+function prSection(title: string, description: string): string[] {
   if (!title && !description) return [];
   return [
     "Use the pull request's title and description to explain why the change needs this code.",
     '',
     ...(title ? [`Pull request title: ${title}`] : []),
-    ...(description
-      ? [
-          'Pull request description:',
-          '<description>',
-          description.replaceAll('</description>', ''),
-          '</description>',
-        ]
-      : ['Pull request description: (none)']),
+    'Pull request description:' + (description ? '' : ' (none)'),
+    ...(description ? [description] : []),
     '',
   ];
 }
 
-// The messages for one explain request. `contextText` is formatContext or
-// formatSelection output; `pr` is the PR's title and description, when known.
-export function buildExplainPrompt(contextText: string, pr?: PrInfo): ChatMessage[] {
-  const selection = isSelectionContext(contextText);
+/** The description as it goes in the prompt: inside a block it cannot close early. */
+export function descriptionBlock(description: string): string {
+  const text = description.trim();
+  return text
+    ? ['<description>', text.replaceAll('</description>', ''), '</description>'].join('\n')
+    : '';
+}
+
+/** The pieces of an explain prompt, which src/explain/fitPrompt.ts may cut to fit. */
+export interface ExplainPromptParts {
+  /** The context block from formatContext or formatSelection. */
+  context: string;
+  /** The PR's title, or ''. */
+  title: string;
+  /** descriptionBlock() of the PR's description, a note that it was left out, or ''. */
+  description: string;
+  /**
+   * Whether the context is a selected block. Left out, it is read from
+   * `context`; fitPrompt sets it when measuring the prompt without the context.
+   */
+  selection?: boolean;
+}
+
+/** Puts the pieces together into the system prompt and the user message. */
+export function assembleExplainPrompt(parts: ExplainPromptParts): ChatMessage[] {
+  const selection = parts.selection ?? isSelectionContext(parts.context);
   return [
     {
       role: 'system',
@@ -104,11 +118,21 @@ export function buildExplainPrompt(contextText: string, pr?: PrInfo): ChatMessag
           ? 'Explain the selected lines in this pull request diff.'
           : 'Explain the clicked line in this pull request diff.',
         '',
-        ...prSection(pr),
+        ...prSection(parts.title, parts.description),
         '```',
-        contextText.trimEnd(),
+        parts.context.trimEnd(),
         '```',
       ].join('\n'),
     },
   ];
+}
+
+// The messages for one explain request, uncut. `contextText` is formatContext
+// or formatSelection output; `pr` is the PR's title and description, when known.
+export function buildExplainPrompt(contextText: string, pr?: PrInfo): ChatMessage[] {
+  return assembleExplainPrompt({
+    context: contextText,
+    title: pr?.title.trim() ?? '',
+    description: descriptionBlock(pr?.description ?? ''),
+  });
 }

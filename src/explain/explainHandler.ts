@@ -15,13 +15,21 @@
 // The PR's title and description, when the content script sends them, go
 // into the prompt (and so into the cache key) so "Why it's needed" can refer
 // to the PR's stated goal (PR 6.1).
+//
+// The prompt is cut to fit the model's context window (PR 6.2, see
+// src/explain/fitPrompt.ts), and the model is run with that window. When even
+// the code is too long, the result says so with a fix. With the Show prompt
+// setting on, the result carries the prompt as sent.
 
+import { FALLBACK_CONTEXT_TOKENS, promptBudget, type ContextSizer } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
-import type { LlmClient } from '../llm/types';
+import type { ChatMessage, LlmClient } from '../llm/types';
 import type { Settings } from '../settings';
 import { explainCacheKey, type ExplainCache } from './explainCache';
-import { buildExplainPrompt, type PrInfo } from './explainPrompt';
+import type { PrInfo } from './explainPrompt';
+import { buildFittedExplainPrompt, type PromptReport } from './fitPrompt';
 import { parseExplanation, type Explanation } from './parseExplanation';
+import { PromptTooLargeError } from './tokenBudget';
 
 export interface ExplainPayload {
   /** The context block from formatContext (src/lineContext.ts). */
@@ -54,8 +62,36 @@ export interface CachedInfo {
 }
 
 export type ExplainResult =
-  | { status: 'done'; explanation: Explanation; model: string; cached?: CachedInfo }
+  | {
+      status: 'done';
+      explanation: Explanation;
+      model: string;
+      cached?: CachedInfo;
+      /** The prompt as sent, when the Show prompt setting is on. */
+      prompt?: PromptReport;
+    }
   | { status: 'failed'; message: string; fix: string };
+
+/** The message and fix for code too long for the model's context window. */
+export function tooLargeError(
+  error: PromptTooLargeError,
+  contextTokens: number,
+  maxResponseTokens: number,
+): { message: string; fix: string } {
+  return {
+    message:
+      `This code is too long for the model's context: the prompt needs about ` +
+      `${error.needed} tokens, and a ${contextTokens}-token context with ` +
+      `${maxResponseTokens} kept for the answer leaves ${Math.max(0, error.budget)}.`,
+    fix:
+      'Raise **Context size** or lower **Max response length** in the settings, ' +
+      'or select fewer lines.',
+  };
+}
+
+function promptText(messages: ChatMessage[]): string {
+  return messages.map((m) => `[${m.role}]\n${m.content}`).join('\n\n');
+}
 
 export interface ExplainStreamOptions {
   /** Called with each piece of the reply as the model writes it. */
@@ -72,7 +108,16 @@ export interface ExplainDeps {
   cache?: ExplainCache;
   /** Clock in milliseconds. Tests pass a fake one. */
   now?: () => number;
+  /**
+   * The context window for these settings (src/llm/contextSize.ts). Without it,
+   * the setting is used, or FALLBACK_CONTEXT_TOKENS when it is automatic.
+   */
+  contextTokens?: ContextSizer;
 }
+
+/** The context window when no ContextSizer is given. */
+export const settingsContextTokens: ContextSizer = async (settings) =>
+  settings.contextTokens > 0 ? settings.contextTokens : FALLBACK_CONTEXT_TOKENS;
 
 export function createExplainHandler(deps: ExplainDeps) {
   return async (
@@ -85,7 +130,28 @@ export function createExplainHandler(deps: ExplainDeps) {
     const settings = await deps.getSettings();
     const now = deps.now ?? Date.now;
     const { cache } = deps;
-    const messages = buildExplainPrompt(payload.context, toPrInfo(payload.prInfo));
+    const contextTokens = await (deps.contextTokens ?? settingsContextTokens)(settings, signal);
+    const budget = promptBudget(contextTokens, settings.maxResponseTokens);
+    let fitted;
+    try {
+      fitted = buildFittedExplainPrompt(payload.context, toPrInfo(payload.prInfo), budget);
+    } catch (error) {
+      if (!(error instanceof PromptTooLargeError)) throw error;
+      return {
+        status: 'failed',
+        ...tooLargeError(error, contextTokens, settings.maxResponseTokens),
+      };
+    }
+    const { messages } = fitted;
+    const prompt: PromptReport | undefined = settings.showPrompt
+      ? {
+          text: promptText(messages),
+          tokens: fitted.tokens,
+          budget,
+          contextTokens,
+          trimmed: fitted.trimmed,
+        }
+      : undefined;
     // Everything that shapes the answer is in the key, so changing the model,
     // the temperature, the response limit, or the prompt is a miss.
     const key =
@@ -106,6 +172,7 @@ export function createExplainHandler(deps: ExplainDeps) {
           explanation: hit.explanation,
           model: hit.model,
           cached: { elapsedMs: hit.elapsedMs, savedAt: hit.savedAt },
+          ...(prompt && { prompt }),
         };
       }
     }
@@ -115,6 +182,7 @@ export function createExplainHandler(deps: ExplainDeps) {
         model: settings.model,
         temperature: settings.temperature,
         maxResponseTokens: settings.maxResponseTokens,
+        contextTokens,
         signal,
       });
       let content = '';
@@ -132,7 +200,7 @@ export function createExplainHandler(deps: ExplainDeps) {
           .set(key, { explanation, model, elapsedMs: now() - startedAt, savedAt: now() })
           .catch(() => {});
       }
-      return { status: 'done', explanation, model };
+      return { status: 'done', explanation, model, ...(prompt && { prompt }) };
     } catch (error) {
       const { message, fix } = describeLlmError(error, {
         url: settings.llmUrl,

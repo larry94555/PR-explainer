@@ -21,15 +21,16 @@ function streamOf(pieces: string[], error?: Error, model = 'qwen2.5-coder:7b') {
   };
 }
 
-function setup(chatStream: LlmClient['chatStream']) {
+function setup(chatStream: LlmClient['chatStream'], settings: Settings = SETTINGS) {
   const client: LlmClient = {
     listModels: vi.fn(),
+    modelContext: vi.fn(),
     chat: vi.fn(),
     chatStream: vi.fn(chatStream),
   };
   const createClient = vi.fn(() => client);
   const handler = createExplainHandler({
-    getSettings: async () => SETTINGS,
+    getSettings: async () => settings,
     createClient,
     platform: 'windows',
   });
@@ -65,6 +66,8 @@ describe('explain handler', () => {
       model: 'qwen2.5-coder:7b',
       temperature: SETTINGS.temperature,
       maxResponseTokens: SETTINGS.maxResponseTokens,
+      // Automatic context size with no sizer: Ollama's usual default (PR 6.2).
+      contextTokens: 4096,
       signal,
     });
   });
@@ -141,5 +144,87 @@ describe('explain handler', () => {
     const { handler, client } = setup(streamOf([]));
     await expect(handler({ context: '  ' })).rejects.toThrow('non-empty context');
     expect(client.chatStream).not.toHaveBeenCalled();
+  });
+
+  describe('context budget (PR 6.2)', () => {
+    const DONE = ['## What it does\nA.'];
+    const longContext = [
+      'File: src/big.ts (TypeScript)',
+      'Clicked line: added, line 41 of the new file',
+      '+const target = 1;',
+      '',
+      'Surrounding diff (the clicked line starts with >):',
+      ...Array.from(
+        { length: 40 },
+        (_, i) => ` const value${i} = compute(${i}); // nearby line ${i}`,
+      ),
+      '>+const target = 1;',
+      ...Array.from(
+        { length: 40 },
+        (_, i) => ` const after${i} = compute(${i}); // later line ${i}`,
+      ),
+    ].join('\n');
+
+    it('runs the model with the context size from the sizer', async () => {
+      const { client } = setup(streamOf(DONE));
+      const contextTokens = vi.fn(async () => 8192);
+      const handler = createExplainHandler({
+        getSettings: async () => SETTINGS,
+        createClient: () => client,
+        platform: 'other',
+        contextTokens,
+      });
+      await handler({ context: SAMPLE_CONTEXT });
+      expect(contextTokens).toHaveBeenCalledWith(SETTINGS, undefined);
+      expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(8192);
+    });
+
+    it('trims the lines around the code to fit a 2048-token context', async () => {
+      const { handler, client } = setup(streamOf(DONE), { ...SETTINGS, contextTokens: 2048 });
+      const result = await handler({ context: longContext });
+      expect(result.status).toBe('done');
+      const [messages, options] = vi.mocked(client.chatStream).mock.calls[0]!;
+      expect(options.contextTokens).toBe(2048);
+      expect(messages[1]!.content).toContain('>+const target = 1;');
+      expect(messages[1]!.content).toMatch(/earlier lines left out/);
+      expect(messages[1]!.content).not.toContain('nearby line 0\n');
+    });
+
+    it('says the code is too long, with a fix, instead of calling the model', async () => {
+      const { handler, client } = setup(streamOf(DONE), {
+        ...SETTINGS,
+        contextTokens: 1024,
+        maxResponseTokens: 1000,
+      });
+      const result = await handler({ context: SAMPLE_CONTEXT });
+      expect(result).toMatchObject({
+        status: 'failed',
+        message: expect.stringContaining("too long for the model's context"),
+        fix: expect.stringContaining('**Context size**'),
+      });
+      expect(client.chatStream).not.toHaveBeenCalled();
+    });
+
+    it('returns the prompt as sent when Show prompt is on, and not otherwise', async () => {
+      const on = setup(streamOf(DONE), { ...SETTINGS, contextTokens: 2048, showPrompt: true });
+      const result = await on.handler({ context: longContext });
+      expect(result).toMatchObject({
+        status: 'done',
+        prompt: {
+          contextTokens: 2048,
+          budget: 2048 - SETTINGS.maxResponseTokens - 32,
+          trimmed: ['lines around the code'],
+        },
+      });
+      if (result.status !== 'done') return;
+      const sent = vi.mocked(on.client.chatStream).mock.calls[0]![0];
+      expect(result.prompt!.text).toBe(
+        `[system]\n${sent[0]!.content}\n\n[user]\n${sent[1]!.content}`,
+      );
+      expect(result.prompt!.tokens).toBeLessThanOrEqual(result.prompt!.budget);
+
+      const off = setup(streamOf(DONE));
+      expect(await off.handler({ context: SAMPLE_CONTEXT })).not.toHaveProperty('prompt');
+    });
   });
 });

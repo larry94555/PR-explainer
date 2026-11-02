@@ -73,3 +73,9 @@ code {
   border-radius: 3px;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
+
+label.check {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}

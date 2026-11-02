@@ -5,6 +5,7 @@ import { CACHE_STORAGE_KEY, createExplainCache } from './explain/explainCache';
 import { createExplainHandler } from './explain/explainHandler';
 import { buildExplainPrompt } from './explain/explainPrompt';
 import { SAMPLE_CONTEXT } from './explain/sampleContext';
+import { createContextSizer } from './llm/contextSize';
 import { createLlmClient } from './llm/createClient';
 import { detectPlatform } from './llm/describeLlmError';
 import { MessageRouter } from './messaging/router';
@@ -14,6 +15,9 @@ import { setupToolbarToggle } from './toolbarToggle';
 
 console.info('[PR Explainer] service worker started');
 
+// The model's context window, looked up once per model (src/llm/contextSize.ts).
+const contextTokens = createContextSizer(createLlmClient);
+
 const explain = createExplainHandler({
   getSettings,
   createClient: createLlmClient,
@@ -21,6 +25,7 @@ const explain = createExplainHandler({
   // Finished explanations are kept for the browser session, so clicking the
   // same line again answers at once (src/explain/explainCache.ts).
   cache: createExplainCache(chrome.storage.session),
+  contextTokens,
 });
 
 // Listeners must be added on the first run of the worker, before it goes idle,
@@ -41,6 +46,7 @@ listenForChatPorts(
     getSettings,
     createClient: createLlmClient,
     platform: detectPlatform(navigator.userAgent),
+    contextTokens,
   }),
 );
 

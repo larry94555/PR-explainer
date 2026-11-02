@@ -82,6 +82,10 @@ export const POPUP_STYLE = `
   }
   .ask:hover, .ask:focus-visible { background: #1a7f37; }
   .partial { padding-top: 8px; }
+  /* The Show prompt debug section (PR 6.2). */
+  .prompt { margin-top: 12px; border-top: 1px solid #eaeef2; padding-top: 8px; font-size: 12px; }
+  .prompt summary { cursor: pointer; color: #59636e; }
+  .prompt pre { white-space: pre-wrap; word-break: break-word; max-height: 240px; font-size: 11px; }
   /* A blinking caret after the newest text while the model is still writing. */
   .popup[data-state='streaming'] .partial > :last-child::after {
     content: '▍';

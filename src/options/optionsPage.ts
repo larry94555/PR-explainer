@@ -1,5 +1,6 @@
 // The settings page: the Ollama URL, a model dropdown filled from the server,
-// temperature, max response length, Save, and Test connection.
+// temperature, max response length, context size and the Show prompt debug
+// option (PR 6.2), Save, and Test connection.
 //
 // All page logic lives here and takes its dependencies as parameters, so the
 // tests can run it against options.html in jsdom with fakes. main.ts wires in
@@ -59,6 +60,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const temperatureInput = el<HTMLInputElement>(doc, 'temperature');
   const temperatureValue = el<HTMLOutputElement>(doc, 'temperature-value');
   const maxTokensInput = el<HTMLInputElement>(doc, 'maxResponseTokens');
+  const contextInput = el<HTMLInputElement>(doc, 'contextTokens');
+  const showPromptInput = el<HTMLInputElement>(doc, 'showPrompt');
   const refreshButton = el<HTMLButtonElement>(doc, 'refresh-models');
   const testButton = el<HTMLButtonElement>(doc, 'test-connection');
   const saveButton = el<HTMLButtonElement>(doc, 'save');
@@ -74,16 +77,23 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     temperatureInput.value = String(settings.temperature);
     temperatureValue.textContent = String(settings.temperature);
     maxTokensInput.value = String(settings.maxResponseTokens);
+    // Automatic (0) shows as an empty box with "Automatic" as its placeholder.
+    contextInput.value = settings.contextTokens > 0 ? String(settings.contextTokens) : '';
+    showPromptInput.checked = settings.showPrompt;
   }
 
   function readForm(): Settings {
     const maxTokens = maxTokensInput.value.trim();
+    const contextTokens = contextInput.value.trim();
     return {
       llmUrl: urlInput.value.trim().replace(/\/+$/, ''),
       model: modelSelect.value,
       temperature: Number(temperatureInput.value),
       // An empty box becomes NaN so validation reports it instead of using 0.
       maxResponseTokens: maxTokens === '' ? NaN : Number(maxTokens),
+      // An empty box means automatic.
+      contextTokens: contextTokens === '' ? 0 : Number(contextTokens),
+      showPrompt: showPromptInput.checked,
     };
   }
 
@@ -171,6 +181,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       const saved = await deps.saveSettings(readForm());
       showIssues([]);
       urlInput.value = saved.llmUrl;
+      contextInput.value = saved.contextTokens > 0 ? String(saved.contextTokens) : '';
       saveStatus.textContent = 'Saved.';
     } catch (error) {
       if (error instanceof SettingsValidationError) {

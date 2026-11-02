@@ -13,6 +13,8 @@ import { describeLlmError } from '../src/llm/describeLlmError';
 import type { ChatMessage } from '../src/llm/types';
 import { LlmError } from '../src/llm/types';
 import { openPopup } from '../src/popup/popup';
+import { buildFittedExplainPrompt, type PromptReport } from '../src/explain/fitPrompt';
+import { promptBudget } from '../src/llm/contextSize';
 import type { Explanation } from '../src/explain/parseExplanation';
 
 const MODEL = 'qwen2.5-coder:7b';
@@ -107,6 +109,46 @@ fillDiff(document.querySelector<HTMLTableElement>('#diff')!, 10);
 fillDiff(document.querySelector<HTMLTableElement>('#diff-bottom')!, 120);
 
 const status = document.querySelector('#status')!;
+// What Show prompt (PR 6.2) shows for the clicked line in a 2048-token
+// context: a long PR description and 30 lines on each side, trimmed to fit.
+function demoPrompt(row: Element): PromptReport {
+  const cells = (row as HTMLTableRowElement).cells;
+  const lineNumber = cells[0]!.textContent;
+  // The cell shows "+ code"; the prompt writes it "+code".
+  const clicked = (cells[1]!.textContent ?? '').replace(/^(.) /, '$1');
+  const nearby = (from: number) =>
+    Array.from({ length: 30 }, (_, i) => ` const step${from + i} = await load(${from + i});`);
+  const context = [
+    'File: src/llm/retry.ts (TypeScript)',
+    `Clicked line: line ${lineNumber} of the new file`,
+    clicked,
+    '',
+    'Surrounding diff (the clicked line starts with >):',
+    '@@ -1,12 +1,20 @@',
+    ...nearby(1),
+    `>${clicked}`,
+    ...nearby(31),
+  ].join('\n');
+  const description = Array.from(
+    { length: 60 },
+    () => 'The first request after Ollama starts often fails while the model loads, so retry it.',
+  ).join(' ');
+  const contextTokens = 2048;
+  const budget = promptBudget(contextTokens, 1024);
+  const fitted = buildFittedExplainPrompt(
+    context,
+    { title: 'Retry the first request while the model loads', description },
+    budget,
+  );
+  return {
+    text: fitted.messages.map((m) => `[${m.role}]\n${m.content}`).join('\n\n'),
+    tokens: fitted.tokens,
+    budget,
+    contextTokens,
+    trimmed: fitted.trimmed,
+  };
+}
+
 const chosen = () =>
   document.querySelector<HTMLInputElement>('input[name="state"]:checked')?.value ?? 'done';
 
@@ -143,6 +185,10 @@ document.addEventListener('click', (event) => {
       break;
     case 'done':
       popup.showExplanation(SAMPLE, MODEL);
+      break;
+    case 'prompt':
+      popup.showExplanation(SAMPLE, MODEL);
+      popup.showPrompt(demoPrompt(row));
       break;
     case 'slow':
       popup.showLoading(MODEL);

@@ -9,6 +9,7 @@
 // an LLM failure comes back as a result with a message and a fix (from
 // describeLlmError), not a thrown error, so the panel can show the fix.
 
+import type { ContextSizer } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
 import type { ChatMessage, LlmClient } from '../llm/types';
 import type { Settings } from '../settings';
@@ -33,6 +34,11 @@ export interface ChatDeps {
   getSettings(): Promise<Settings>;
   createClient(settings: Settings): LlmClient;
   platform: Platform;
+  /**
+   * The context window to run the model with (PR 6.2), the same one
+   * explanations use, so switching between them does not reload the model.
+   */
+  contextTokens?: ContextSizer;
 }
 
 const ROLES = new Set(['system', 'user', 'assistant']);
@@ -62,11 +68,13 @@ export function createChatHandler(deps: ChatDeps) {
       throw new Error('chat needs a list of messages that ends with a question');
     }
     const settings = await deps.getSettings();
+    const contextTokens = await deps.contextTokens?.(settings, signal);
     try {
       const stream = deps.createClient(settings).chatStream(payload.messages, {
         model: settings.model,
         temperature: settings.temperature,
         maxResponseTokens: settings.maxResponseTokens,
+        ...(contextTokens !== undefined && { contextTokens }),
         signal,
       });
       let answer = '';

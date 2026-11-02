@@ -48,6 +48,33 @@
           <p class="error" data-error-for="maxResponseTokens" role="alert"></p>
         </div>
 
+        <div class="field">
+          <label for="contextTokens">Context size (tokens)</label>
+          <input
+            id="contextTokens"
+            name="contextTokens"
+            type="number"
+            min="0"
+            max="131072"
+            step="1"
+            placeholder="Automatic"
+          />
+          <p class="hint">
+            How much the model can read at once, prompt and answer together. Leave empty to use the
+            model's own size, up to 4096. Long code is trimmed to fit.
+          </p>
+          <p class="error" data-error-for="contextTokens" role="alert"></p>
+        </div>
+
+        <div class="field">
+          <label class="check">
+            <input id="showPrompt" name="showPrompt" type="checkbox" />
+            Show prompt (debug)
+          </label>
+          <p class="hint">Shows the prompt sent to the model under each explanation.</p>
+          <p class="error" data-error-for="showPrompt" role="alert"></p>
+        </div>
+
         <div class="row">
           <button id="save" type="submit">Save</button>
           <button id="test-connection" type="button">Test connection</button>

@@ -20,9 +20,14 @@
 // how long the model took when it first wrote it. Only one popup
 // is open at a time: opening a new one closes the old one.
 //
+// With the Show prompt setting on (PR 6.2), a collapsed "Prompt sent" section
+// under the explanation shows the prompt, its estimated size against the
+// budget, and what was trimmed to fit.
+//
 // The content script opens it from its click handler (src/clickHandler.ts),
 // and the demo page (`npm run demo:popup`) shows it with fake data.
 
+import type { PromptReport } from '../explain/fitPrompt';
 import type { Explanation, SectionKey } from '../explain/parseExplanation';
 import { appendInline, renderMarkdown } from './renderMarkdown';
 import { POPUP_STYLE } from './popupStyle';
@@ -101,7 +106,19 @@ export interface Popup {
   /** `cached` is set when the answer came from the cache. */
   showExplanation(explanation: Explanation, model?: string, cached?: { elapsedMs: number }): void;
   showError(message: string, fix: string): void;
+  /** Adds the prompt that was sent under the explanation (the Show prompt setting). */
+  showPrompt(report: PromptReport): void;
   close(): void;
+}
+
+/** The summary line of the Prompt sent section. */
+export function promptSummary(report: PromptReport): string {
+  const size = `about ${report.tokens.toLocaleString('en-US')} of ${report.budget.toLocaleString('en-US')} tokens`;
+  const window = `${report.contextTokens.toLocaleString('en-US')}-token context`;
+  const trimmed = report.trimmed.length
+    ? `trimmed: ${report.trimmed.join(', ')}`
+    : 'nothing trimmed';
+  return `Prompt sent · ${size} (${window}) · ${trimmed}`;
 }
 
 /** Space between the line and the popup, and between the popup and the window edge. */
@@ -375,6 +392,17 @@ export function openPopup(
       appendInline(fixEl, fix);
       error.append(messageEl, fixEl);
       setBody('failed', error);
+    },
+    showPrompt(report) {
+      if (state !== 'done') return;
+      const details = doc.createElement('details');
+      details.className = 'prompt';
+      const summary = doc.createElement('summary');
+      summary.textContent = promptSummary(report);
+      const pre = doc.createElement('pre');
+      pre.textContent = report.text;
+      details.append(summary, pre);
+      body.append(details);
     },
     close() {
       if (state === 'closed') return;
