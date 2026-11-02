@@ -267,6 +267,7 @@ export function explainInPopup(
         if (result.status === 'done') {
           explanation = result.explanation;
           popup.showExplanation(result.explanation, result.model, result.cached);
+          if (result.prompt) popup.showPrompt(result.prompt);
         } else popup.showError(result.message, result.fix);
         report({
           status: result.status,

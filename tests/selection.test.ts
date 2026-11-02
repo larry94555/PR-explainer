@@ -238,6 +238,7 @@ function setup(isEnabled?: () => boolean) {
         showPartial: () => {},
         showExplanation: () => {},
         showError: () => {},
+        showPrompt: () => {},
         close: () => hooks.onClose(),
       } as Popup;
     },

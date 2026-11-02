@@ -12,7 +12,7 @@ Open a pull request on github.com, go to the **Files changed** tab, and click an
 Drag to select several lines (or a whole hunk) and get one explanation for the selection rather than for a single line.
 
 ## 3. Context-aware prompts
-Every request includes the surrounding context the model needs: the file path and language, the diff hunk around the clicked line (added, removed, and unchanged lines), and the PR title and description. Context is trimmed to fit the model's context window.
+Every request includes the surrounding context the model needs: the file path and language, the diff hunk around the clicked line (added, removed, and unchanged lines), and the PR title and description. Context is trimmed to fit the model's context window: the PR description first, then the lines farthest from the clicked code, which is never cut.
 
 ## 4. Chat box
 From any popup, open a chat panel to ask follow-up questions ("Is this thread safe?", "How would you test this?"). The chat keeps the code you clicked and the explanation as context, and keeps one conversation per PR while the tab is open. While the chat is open, clicking another line adds it to the same conversation, and **New chat** starts over.
@@ -24,7 +24,7 @@ Explanations and chat replies appear token by token as the local model generates
 Talks to a local LLM server (Ollama by default, at `http://localhost:11434`). No cloud API keys and no telemetry. The extension only makes network requests to github.com pages it runs on and to the local LLM address you configure.
 
 ## 7. Settings page
-An options page to set the LLM server URL, pick an installed model from a dropdown, test the connection, and adjust response length and temperature. Settings are saved in Chrome storage.
+An options page to set the LLM server URL, pick an installed model from a dropdown, test the connection, and adjust response length, temperature, and context size (automatic by default, read from the model). A **Show prompt** debug option shows the prompt sent under each explanation. Settings are saved in Chrome storage.
 
 ## 8. Clear error handling
 Friendly messages with fix-it hints when the LLM server is not running, the model is missing, the request is blocked by CORS, or a request times out.

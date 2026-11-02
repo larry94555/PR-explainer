@@ -16,6 +16,8 @@ const SAVED: Settings = {
   model: 'qwen2.5-coder:7b',
   temperature: 0.4,
   maxResponseTokens: 512,
+  contextTokens: 0,
+  showPrompt: false,
 };
 
 const MODELS: ModelInfo[] = [{ name: 'llama3.2:3b' }, { name: 'qwen2.5-coder:7b' }];
@@ -23,6 +25,7 @@ const MODELS: ModelInfo[] = [{ name: 'llama3.2:3b' }, { name: 'qwen2.5-coder:7b'
 function fakeClient(overrides: Partial<LlmClient> = {}): LlmClient {
   return {
     listModels: vi.fn(async () => MODELS),
+    modelContext: vi.fn(async () => ({})),
     chat: vi.fn(async (_messages, options) => ({ content: 'OK', model: options.model })),
     chatStream: vi.fn(),
     ...overrides,
@@ -68,6 +71,37 @@ describe('options page', () => {
     expect($<HTMLInputElement>('temperature').value).toBe('0.4');
     expect(text('temperature-value')).toBe('0.4');
     expect($<HTMLInputElement>('maxResponseTokens').value).toBe('512');
+    // Automatic shows as an empty box with a placeholder.
+    expect($<HTMLInputElement>('contextTokens').value).toBe('');
+    expect($<HTMLInputElement>('contextTokens').placeholder).toBe('Automatic');
+    expect($<HTMLInputElement>('showPrompt').checked).toBe(false);
+  });
+
+  it('loads and saves a set context size and Show prompt (PR 6.2)', async () => {
+    const deps = fakeDeps(fakeClient());
+    await deps.saveSettings({ contextTokens: 8192, showPrompt: true });
+    const page = await initOptionsPage(document, deps);
+    expect($<HTMLInputElement>('contextTokens').value).toBe('8192');
+    expect($<HTMLInputElement>('showPrompt').checked).toBe(true);
+
+    $<HTMLInputElement>('contextTokens').value = '2048';
+    $<HTMLInputElement>('showPrompt').checked = false;
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ contextTokens: 2048, showPrompt: false });
+
+    // An empty box goes back to automatic.
+    $<HTMLInputElement>('contextTokens').value = '';
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ contextTokens: 0 });
+  });
+
+  it('shows a bad context size next to its box and does not save', async () => {
+    const deps = fakeDeps(fakeClient());
+    const page = await initOptionsPage(document, deps);
+    $<HTMLInputElement>('contextTokens').value = '100';
+    await page.save();
+    expect(errorFor('contextTokens')).toContain('or 0 for automatic');
+    expect(text('save-status')).toBe('Not saved. Fix the problems above.');
   });
 
   it('fills the model dropdown from the server', async () => {
@@ -195,6 +229,8 @@ describe('options page', () => {
       model: 'llama3.2:3b',
       temperature: 1.5,
       maxResponseTokens: 2048,
+      contextTokens: 0,
+      showPrompt: false,
     });
     expect(text('save-status')).toBe('Saved.');
     expect(await deps.getSettings()).toMatchObject({ model: 'llama3.2:3b' });

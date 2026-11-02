@@ -89,6 +89,40 @@ describe('OllamaClient.listModels', () => {
   });
 });
 
+describe('OllamaClient.modelContext', () => {
+  const SHOW = {
+    parameters: 'num_ctx 8192\nstop "<|im_end|>"',
+    model_info: { 'general.architecture': 'qwen2', 'qwen2.context_length': 32768 },
+  };
+
+  it('reads the trained size and the Modelfile num_ctx from /api/show', async () => {
+    const fetch = fakeFetch(() => jsonResponse(SHOW));
+    const client = new OllamaClient({ baseUrl: BASE, fetch });
+    expect(await client.modelContext('qwen2.5-coder:7b')).toEqual({
+      maxTokens: 32768,
+      configuredTokens: 8192,
+    });
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe(`${BASE}/api/show`);
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(init!.body as string)).toEqual({ model: 'qwen2.5-coder:7b' });
+  });
+
+  it('returns what it can when the server leaves things out', async () => {
+    const fetch = fakeFetch(() => jsonResponse({ model_info: { 'llama.context_length': 'big' } }));
+    expect(await new OllamaClient({ baseUrl: BASE, fetch }).modelContext('m')).toEqual({});
+  });
+
+  it('reports a missing model like chat does', async () => {
+    const fetch = fakeFetch(() => jsonResponse({ error: "model 'm' not found" }, 404));
+    await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).modelContext('m'),
+      'model-not-found',
+      404,
+    );
+  });
+});
+
 describe('buildChatBody', () => {
   it('asks for a non-streaming reply with the model options Ollama expects', () => {
     expect(
@@ -112,6 +146,12 @@ describe('buildChatBody', () => {
       messages: [{ role: 'user', content: 'Hi' }],
       stream: false,
       options: {},
+    });
+  });
+
+  it('sends the context size as num_ctx (PR 6.2)', () => {
+    expect(buildChatBody([], { model: 'm', contextTokens: 2048 }).options).toEqual({
+      num_ctx: 2048,
     });
   });
 

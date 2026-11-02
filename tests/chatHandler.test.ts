@@ -24,7 +24,12 @@ function setup(pieces: string[], error?: Error) {
     if (error) throw error;
     return { model: SETTINGS.model, doneReason: 'stop' };
   });
-  const client: LlmClient = { listModels: vi.fn(), chat: vi.fn(), chatStream };
+  const client: LlmClient = {
+    listModels: vi.fn(),
+    modelContext: vi.fn(),
+    chat: vi.fn(),
+    chatStream,
+  };
   const handler = createChatHandler({
     getSettings: async () => SETTINGS,
     createClient: () => client,
@@ -76,5 +81,23 @@ describe('chat handler', () => {
     expect(isChatMessages('hello')).toBe(false);
     expect(isChatMessages([{ role: 'user', content: 3 }])).toBe(false);
     expect(isChatMessages([null])).toBe(false);
+  });
+
+  it('runs the model with the same context size as explanations (PR 6.2)', async () => {
+    const { chatStream } = setup(['OK']);
+    const client: LlmClient = {
+      listModels: vi.fn(),
+      modelContext: vi.fn(),
+      chat: vi.fn(),
+      chatStream,
+    };
+    const handler = createChatHandler({
+      getSettings: async () => SETTINGS,
+      createClient: () => client,
+      platform: 'other',
+      contextTokens: async () => 2048,
+    });
+    await handler({ messages: MESSAGES });
+    expect(chatStream.mock.calls[0]![1].contextTokens).toBe(2048);
   });
 });

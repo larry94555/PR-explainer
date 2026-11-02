@@ -151,7 +151,12 @@ describe('explain handler with the cache', () => {
       yield REPLY;
       return { model: settings.model, doneReason: 'stop' };
     });
-    const client: LlmClient = { listModels: vi.fn(), chat: vi.fn(), chatStream };
+    const client: LlmClient = {
+      listModels: vi.fn(),
+      modelContext: vi.fn(),
+      chat: vi.fn(),
+      chatStream,
+    };
     let current = settings;
     const handler = createExplainHandler({
       getSettings: async () => current,
@@ -200,7 +205,7 @@ describe('explain handler with the cache', () => {
     await handler(payload);
     useSettings({ ...SETTINGS, temperature: 0.8 });
     expect(await handler(payload)).not.toHaveProperty('cached');
-    useSettings({ ...SETTINGS, maxResponseTokens: 4096 });
+    useSettings({ ...SETTINGS, maxResponseTokens: 2048 });
     expect(await handler(payload)).not.toHaveProperty('cached');
     expect(chatStream).toHaveBeenCalledTimes(3);
     // Back to the first settings (a fresh copy): the first answer is still there.

@@ -45,6 +45,8 @@ describe('settings', () => {
         model: '',
         temperature: 0.2,
         maxResponseTokens: 1024,
+        contextTokens: 0,
+        showPrompt: false,
       });
       expect(validateSettings(DEFAULT_SETTINGS)).toEqual([]);
     });
@@ -73,6 +75,8 @@ describe('settings', () => {
         model: 'qwen2.5-coder:7b',
         temperature: 0.7,
         maxResponseTokens: 2048,
+        contextTokens: 8192,
+        showPrompt: true,
       };
       await expect(saveSettings(update, storage)).resolves.toEqual(update);
       await expect(getSettings(storage)).resolves.toEqual(update);
@@ -179,6 +183,33 @@ describe('settings', () => {
       await expectRejectedFields(saveSettings({ maxResponseTokens }, fakeStorage()), [
         'maxResponseTokens',
       ]);
+    });
+
+    it.each([0, 512, 2048, 131072])(
+      'accepts context size %s (0 is automatic)',
+      async (contextTokens) => {
+        await expect(saveSettings({ contextTokens }, fakeStorage())).resolves.toMatchObject({
+          contextTokens,
+        });
+      },
+    );
+
+    it.each([100, 511, 131073, 2048.5, NaN])('rejects context size %s', async (contextTokens) => {
+      const promise = saveSettings({ contextTokens }, fakeStorage());
+      await expectRejectedFields(promise, ['contextTokens']);
+      await expect(promise).rejects.toThrow(
+        'Context size must be a whole number from 512 to 131072, or 0 for automatic.',
+      );
+    });
+
+    it('accepts Show prompt on or off and nothing else', async () => {
+      await expect(saveSettings({ showPrompt: true }, fakeStorage())).resolves.toMatchObject({
+        showPrompt: true,
+      });
+      await expectRejectedFields(
+        saveSettings({ showPrompt: 'yes' as unknown as boolean }, fakeStorage()),
+        ['showPrompt'],
+      );
     });
 
     it('reports every bad field at once with a readable message', async () => {

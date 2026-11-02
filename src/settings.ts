@@ -22,6 +22,14 @@ export interface Settings {
   temperature: number;
   /** Upper limit on the length of a reply, in tokens. */
   maxResponseTokens: number;
+  /**
+   * The model's context window, in tokens: prompt and reply together (PR 6.2).
+   * 0 means automatic: the model's own size from the server, up to
+   * AUTO_CONTEXT_TOKENS (see src/llm/contextSize.ts).
+   */
+  contextTokens: number;
+  /** Debug option: show the prompt sent to the model under each explanation. */
+  showPrompt: boolean;
 }
 
 export type SettingsField = keyof Settings;
@@ -31,6 +39,8 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   model: '',
   temperature: 0.2,
   maxResponseTokens: 1024,
+  contextTokens: 0,
+  showPrompt: false,
 });
 
 /** The chrome.storage key that holds one field, for example "settings.model". */
@@ -40,6 +50,8 @@ export function storageKey(field: SettingsField): string {
 
 export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
 export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
+/** A set context size must be in this range; 0 means automatic. */
+export const CONTEXT_TOKENS_RANGE = { min: 512, max: 131072 } as const;
 
 // Code never leaves the laptop, so only loopback addresses are accepted.
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -78,6 +90,16 @@ function checkField(field: SettingsField, value: unknown): string | null {
       return checkNumber(value, TEMPERATURE_RANGE, false, 'Temperature');
     case 'maxResponseTokens':
       return checkNumber(value, MAX_RESPONSE_TOKENS_RANGE, true, 'Max response length');
+    case 'contextTokens':
+      if (value === 0) return null;
+      return (
+        checkNumber(value, CONTEXT_TOKENS_RANGE, true, 'Context size')?.replace(
+          /\.$/,
+          ', or 0 for automatic.',
+        ) ?? null
+      );
+    case 'showPrompt':
+      return typeof value === 'boolean' ? null : 'Show prompt must be on or off.';
   }
 }
 

@@ -1,5 +1,6 @@
 // LlmClient for Ollama's HTTP API (https://github.com/ollama/ollama/blob/main/docs/api.md):
-// GET /api/tags lists installed models, POST /api/chat answers a conversation,
+// GET /api/tags lists installed models, POST /api/show describes one (its
+// context window, PR 6.2), POST /api/chat answers a conversation,
 // either all at once (chat) or as a stream of newline-delimited JSON objects
 // (chatStream).
 //
@@ -14,6 +15,7 @@ import {
   type ChatReply,
   type ChatStreamEnd,
   type LlmClient,
+  type ModelContext,
   type ModelInfo,
 } from './types';
 
@@ -45,6 +47,23 @@ export class OllamaClient implements LlmClient {
       if (typeof name !== 'string') throw badResponse('/api/tags', 'a model has no name');
       return typeof size === 'number' ? { name, sizeBytes: size } : { name };
     });
+  }
+
+  async modelContext(model: string, options: { signal?: AbortSignal } = {}): Promise<ModelContext> {
+    const name = requireModel({ model });
+    const body = await this.request('/api/show', chatInit({ model: name }, options.signal), name);
+    const { model_info, parameters } = body as { model_info?: unknown; parameters?: unknown };
+    const result: ModelContext = {};
+    // model_info holds "<architecture>.context_length", such as "qwen2.context_length".
+    if (typeof model_info === 'object' && model_info !== null) {
+      for (const [key, value] of Object.entries(model_info)) {
+        if (key.endsWith('.context_length') && isPositiveInteger(value)) result.maxTokens = value;
+      }
+    }
+    // parameters is the Modelfile's PARAMETER lines as text, such as "num_ctx 8192\nstop ...".
+    const numCtx = typeof parameters === 'string' && /^\s*num_ctx\s+(\d+)\s*$/m.exec(parameters);
+    if (numCtx && isPositiveInteger(Number(numCtx[1]))) result.configuredTokens = Number(numCtx[1]);
+    return result;
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatReply> {
@@ -168,7 +187,11 @@ export class OllamaClient implements LlmClient {
   }
 }
 
-function requireModel(options: ChatOptions): string {
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+function requireModel(options: Pick<ChatOptions, 'model'>): string {
   const model = options.model.trim();
   if (!model) throw new LlmError('no-model', 'No model selected. Pick one in the settings.');
   return model;
@@ -238,9 +261,10 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 
 /** The JSON body for POST /api/chat. Exported for tests. */
 export function buildChatBody(messages: ChatMessage[], options: ChatOptions) {
-  const modelOptions: { temperature?: number; num_predict?: number } = {};
+  const modelOptions: { temperature?: number; num_predict?: number; num_ctx?: number } = {};
   if (options.temperature !== undefined) modelOptions.temperature = options.temperature;
   if (options.maxResponseTokens !== undefined) modelOptions.num_predict = options.maxResponseTokens;
+  if (options.contextTokens !== undefined) modelOptions.num_ctx = options.contextTokens;
   return {
     model: options.model,
     messages: messages.map(({ role, content }) => ({ role, content })),
