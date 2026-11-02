@@ -1,6 +1,7 @@
 // The settings page: the Ollama URL, a model dropdown filled from the server,
-// temperature, max response length, context size and the Show prompt debug
-// option (PR 6.2), Save, and Test connection.
+// temperature, max response length, context size, how long to keep the model
+// loaded (PR 8.3) and the Show prompt debug option (PR 6.2), Save, and Test
+// connection.
 //
 // All page logic lives here and takes its dependencies as parameters, so the
 // tests can run it against options.html in jsdom with fakes. main.ts wires in
@@ -61,6 +62,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const temperatureValue = el<HTMLOutputElement>(doc, 'temperature-value');
   const maxTokensInput = el<HTMLInputElement>(doc, 'maxResponseTokens');
   const contextInput = el<HTMLInputElement>(doc, 'contextTokens');
+  const keepAliveInput = el<HTMLInputElement>(doc, 'keepAliveMinutes');
   const showPromptInput = el<HTMLInputElement>(doc, 'showPrompt');
   const refreshButton = el<HTMLButtonElement>(doc, 'refresh-models');
   const testButton = el<HTMLButtonElement>(doc, 'test-connection');
@@ -79,12 +81,14 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     maxTokensInput.value = String(settings.maxResponseTokens);
     // Automatic (0) shows as an empty box with "Automatic" as its placeholder.
     contextInput.value = settings.contextTokens > 0 ? String(settings.contextTokens) : '';
+    keepAliveInput.value = String(settings.keepAliveMinutes);
     showPromptInput.checked = settings.showPrompt;
   }
 
   function readForm(): Settings {
     const maxTokens = maxTokensInput.value.trim();
     const contextTokens = contextInput.value.trim();
+    const keepAlive = keepAliveInput.value.trim();
     return {
       llmUrl: urlInput.value.trim().replace(/\/+$/, ''),
       model: modelSelect.value,
@@ -93,6 +97,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       maxResponseTokens: maxTokens === '' ? NaN : Number(maxTokens),
       // An empty box means automatic.
       contextTokens: contextTokens === '' ? 0 : Number(contextTokens),
+      keepAliveMinutes: keepAlive === '' ? NaN : Number(keepAlive),
       showPrompt: showPromptInput.checked,
     };
   }
@@ -197,7 +202,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
 
   // Uses what is in the form, saved or not, so a setup can be tried before saving.
   async function testConnection(): Promise<void> {
-    const values = validForm(['llmUrl', 'temperature', 'maxResponseTokens']);
+    const values = validForm(['llmUrl', 'temperature', 'maxResponseTokens', 'keepAliveMinutes']);
     if (!values) {
       testStatus.textContent = 'Fix the problems above, then test again.';
       return;
@@ -214,6 +219,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
         model: values.model,
         temperature: values.temperature,
         maxResponseTokens: Math.min(values.maxResponseTokens, TEST_MAX_TOKENS),
+        keepAliveMinutes: values.keepAliveMinutes,
       });
       const ms = Math.round(now() - started);
       testStatus.textContent = `Reply from ${reply.model} in ${ms} ms: "${shorten(reply.content)}"`;

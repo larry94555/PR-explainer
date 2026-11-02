@@ -225,6 +225,7 @@ export function createExplainHandler(deps: ExplainDeps) {
         temperature: settings.temperature,
         maxResponseTokens: settings.maxResponseTokens,
         contextTokens,
+        keepAliveMinutes: settings.keepAliveMinutes,
         signal,
       });
       let content = '';

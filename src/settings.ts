@@ -28,6 +28,12 @@ export interface Settings {
    * AUTO_CONTEXT_TOKENS (see src/llm/contextSize.ts).
    */
   contextTokens: number;
+  /**
+   * How long Ollama keeps the model in memory after each request, in minutes
+   * (PR 8.3), so clicks while reviewing do not wait for it to load again.
+   * 0 unloads it as soon as each answer is done, and turns off warm-up.
+   */
+  keepAliveMinutes: number;
   /** Debug option: show the prompt sent to the model under each explanation. */
   showPrompt: boolean;
 }
@@ -40,6 +46,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   temperature: 0.2,
   maxResponseTokens: 1024,
   contextTokens: 0,
+  keepAliveMinutes: 30,
   showPrompt: false,
 });
 
@@ -50,6 +57,8 @@ export function storageKey(field: SettingsField): string {
 
 export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
 export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
+/** Up to a day; 0 unloads the model after each answer. */
+export const KEEP_ALIVE_MINUTES_RANGE = { min: 0, max: 1440 } as const;
 /** A set context size must be in this range; 0 means automatic. */
 export const CONTEXT_TOKENS_RANGE = { min: 512, max: 131072 } as const;
 
@@ -103,6 +112,8 @@ function checkField(field: SettingsField, value: unknown): string | null {
           ', or 0 for automatic.',
         ) ?? null
       );
+    case 'keepAliveMinutes':
+      return checkNumber(value, KEEP_ALIVE_MINUTES_RANGE, true, 'Keep model loaded');
     case 'showPrompt':
       return typeof value === 'boolean' ? null : 'Show prompt must be on or off.';
   }

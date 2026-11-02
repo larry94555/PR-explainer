@@ -67,6 +67,24 @@
         </div>
 
         <div class="field">
+          <label for="keepAliveMinutes">Keep model loaded (minutes)</label>
+          <input
+            id="keepAliveMinutes"
+            name="keepAliveMinutes"
+            type="number"
+            min="0"
+            max="1440"
+            step="1"
+          />
+          <p class="hint">
+            How long Ollama keeps the model in memory after each explanation, so the next click does
+            not wait for it to load. Opening a PR's Files changed tab also loads it ahead of the
+            first click. 0 frees the memory after each answer and turns that off.
+          </p>
+          <p class="error" data-error-for="keepAliveMinutes" role="alert"></p>
+        </div>
+
+        <div class="field">
           <label class="check">
             <input id="showPrompt" name="showPrompt" type="checkbox" />
             Show prompt (debug)

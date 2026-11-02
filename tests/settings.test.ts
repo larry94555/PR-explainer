@@ -39,13 +39,14 @@ async function expectRejectedFields(
 
 describe('settings', () => {
   describe('defaults', () => {
-    it('uses the Ollama default URL, no model, temperature 0.2', () => {
+    it('uses the Ollama default URL, no model, temperature 0.2, keep loaded 30 minutes', () => {
       expect(DEFAULT_SETTINGS).toEqual({
         llmUrl: 'http://localhost:11434',
         model: '',
         temperature: 0.2,
         maxResponseTokens: 1024,
         contextTokens: 0,
+        keepAliveMinutes: 30,
         showPrompt: false,
       });
       expect(validateSettings(DEFAULT_SETTINGS)).toEqual([]);
@@ -76,6 +77,7 @@ describe('settings', () => {
         temperature: 0.7,
         maxResponseTokens: 2048,
         contextTokens: 8192,
+        keepAliveMinutes: 90,
         showPrompt: true,
       };
       await expect(saveSettings(update, storage)).resolves.toEqual(update);
@@ -201,6 +203,26 @@ describe('settings', () => {
         'Context size must be a whole number from 512 to 131072, or 0 for automatic.',
       );
     });
+
+    it.each([0, 1, 30, 1440])(
+      'accepts keep model loaded for %s minutes (0 unloads after each answer)',
+      async (keepAliveMinutes) => {
+        await expect(saveSettings({ keepAliveMinutes }, fakeStorage())).resolves.toMatchObject({
+          keepAliveMinutes,
+        });
+      },
+    );
+
+    it.each([-1, 1441, 2.5, NaN])(
+      'rejects keep model loaded for %s minutes',
+      async (keepAliveMinutes) => {
+        const promise = saveSettings({ keepAliveMinutes }, fakeStorage());
+        await expectRejectedFields(promise, ['keepAliveMinutes']);
+        await expect(promise).rejects.toThrow(
+          'Keep model loaded must be a whole number from 0 to 1440.',
+        );
+      },
+    );
 
     it('accepts Show prompt on or off and nothing else', async () => {
       await expect(saveSettings({ showPrompt: true }, fakeStorage())).resolves.toMatchObject({

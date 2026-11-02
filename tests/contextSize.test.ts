@@ -12,6 +12,8 @@ const SETTINGS: Settings = { ...DEFAULT_SETTINGS, model: 'qwen2.5-coder:7b' };
 function setup(modelContext: () => Promise<ModelContext>) {
   const client: LlmClient = {
     listModels: vi.fn(),
+    loadedModels: vi.fn(),
+    loadModel: vi.fn(),
     modelContext: vi.fn(modelContext),
     chat: vi.fn(),
     chatStream: vi.fn(),

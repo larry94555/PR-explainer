@@ -1,6 +1,7 @@
 // LlmClient for Ollama's HTTP API (https://github.com/ollama/ollama/blob/main/docs/api.md):
-// GET /api/tags lists installed models, POST /api/show describes one (its
-// context window, PR 6.2), POST /api/chat answers a conversation,
+// GET /api/tags lists installed models, GET /api/ps lists the loaded ones
+// (PR 8.3), POST /api/show describes one (its context window, PR 6.2),
+// POST /api/chat answers a conversation,
 // either all at once (chat) or as a stream of newline-delimited JSON objects
 // (chatStream).
 //
@@ -12,6 +13,10 @@
 //
 // A finished reply carries Ollama's timing fields (PR 8.1), read by
 // readTimings and converted from nanoseconds to milliseconds.
+//
+// Every chat request says how long to keep the model loaded afterwards
+// (keep_alive, PR 8.3); Ollama's own default unloads it after 5 idle minutes.
+// A chat request with no messages only loads the model (loadModel).
 
 import {
   LlmError,
@@ -53,6 +58,32 @@ export class OllamaClient implements LlmClient {
       if (typeof name !== 'string') throw badResponse('/api/tags', 'a model has no name');
       return typeof size === 'number' ? { name, sizeBytes: size } : { name };
     });
+  }
+
+  async loadedModels(options: { signal?: AbortSignal } = {}): Promise<string[]> {
+    const body = await this.request('/api/ps', { method: 'GET', signal: options.signal });
+    const models = (body as { models?: unknown }).models;
+    if (!Array.isArray(models)) throw badResponse('/api/ps', 'missing "models" list');
+    return models.flatMap((m: unknown) => {
+      const { name, model } = (m ?? {}) as { name?: unknown; model?: unknown };
+      const found = typeof name === 'string' ? name : model;
+      return typeof found === 'string' ? [found] : [];
+    });
+  }
+
+  async loadModel(
+    model: string,
+    options: { keepAliveMinutes?: number; signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const name = requireModel({ model });
+    // Ollama loads the model and answers at once when there are no messages.
+    const body = {
+      model: name,
+      messages: [],
+      stream: false,
+      ...keepAlive(options.keepAliveMinutes),
+    };
+    await this.request('/api/chat', chatInit(body, options.signal), name);
   }
 
   async modelContext(model: string, options: { signal?: AbortSignal } = {}): Promise<ModelContext> {
@@ -312,8 +343,14 @@ export function buildChatBody(messages: ChatMessage[], options: ChatOptions) {
     model: options.model,
     messages: messages.map(({ role, content }) => ({ role, content })),
     stream: false,
+    ...keepAlive(options.keepAliveMinutes),
     options: modelOptions,
   };
+}
+
+/** Ollama's keep_alive field, such as "30m", or nothing to use its default. */
+function keepAlive(minutes: number | undefined): { keep_alive?: string } {
+  return minutes === undefined ? {} : { keep_alive: `${minutes}m` };
 }
 
 // Checks the name rather than `instanceof DOMException`, which is not

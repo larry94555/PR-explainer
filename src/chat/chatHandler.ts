@@ -75,6 +75,7 @@ export function createChatHandler(deps: ChatDeps) {
         temperature: settings.temperature,
         maxResponseTokens: settings.maxResponseTokens,
         ...(contextTokens !== undefined && { contextTokens }),
+        keepAliveMinutes: settings.keepAliveMinutes,
         signal,
       });
       let answer = '';

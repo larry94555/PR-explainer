@@ -24,6 +24,8 @@ function streamOf(pieces: string[], error?: Error, model = 'qwen2.5-coder:7b') {
 function setup(chatStream: LlmClient['chatStream'], settings: Settings = SETTINGS) {
   const client: LlmClient = {
     listModels: vi.fn(),
+    loadedModels: vi.fn(),
+    loadModel: vi.fn(),
     modelContext: vi.fn(),
     chat: vi.fn(),
     chatStream: vi.fn(chatStream),
@@ -68,6 +70,8 @@ describe('explain handler', () => {
       maxResponseTokens: SETTINGS.maxResponseTokens,
       // Automatic context size with no sizer: Ollama's usual default (PR 6.2).
       contextTokens: 4096,
+      // Keeps the model loaded between clicks (PR 8.3).
+      keepAliveMinutes: SETTINGS.keepAliveMinutes,
       signal,
     });
   });

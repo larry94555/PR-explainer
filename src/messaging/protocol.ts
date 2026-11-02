@@ -7,11 +7,14 @@
 
 import type { ChatPayload, ChatResult } from '../chat/chatHandler';
 import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
+import type { WarmupPayload, WarmupResult } from '../llm/warmup';
 
 // Each request type maps to the payload it takes and the result it returns.
 // Later PRs add entries here. Explanations stream over a port instead (below).
 export interface RequestMap {
   ping: { payload: undefined; result: { receivedAt: number } };
+  // Loads the model ahead of the first click on a PR's diffs (PR 8.3).
+  warmup: { payload: WarmupPayload; result: WarmupResult };
 }
 
 export type RequestType = keyof RequestMap;
@@ -39,6 +42,8 @@ export type ResponseEnvelope<T extends RequestType = RequestType> =
 // reading the global) lets the tests use a fake.
 export interface MessageSenderLike {
   id?: string;
+  /** The tab a content script message came from. */
+  tab?: { id?: number };
 }
 
 export type MessageListener = (

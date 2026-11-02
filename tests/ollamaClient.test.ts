@@ -155,6 +155,16 @@ describe('buildChatBody', () => {
     });
   });
 
+  it('sends keep_alive in minutes, and leaves it to Ollama when not given (PR 8.3)', () => {
+    expect(buildChatBody([], { model: 'm', keepAliveMinutes: 30 })).toMatchObject({
+      keep_alive: '30m',
+    });
+    expect(buildChatBody([], { model: 'm', keepAliveMinutes: 0 })).toMatchObject({
+      keep_alive: '0m',
+    });
+    expect(buildChatBody([], { model: 'm' })).not.toHaveProperty('keep_alive');
+  });
+
   it('keeps a temperature of 0', () => {
     expect(buildChatBody([], { model: 'm', temperature: 0 }).options).toEqual({ temperature: 0 });
   });
@@ -363,6 +373,70 @@ describe('OllamaClient timings (PR 8.1)', () => {
     let next = await stream.next();
     while (!next.done) next = await stream.next();
     expect(next.value).toEqual({ model: 'm' });
+  });
+});
+
+describe('OllamaClient.loadedModels (PR 8.3)', () => {
+  it('GETs /api/ps and returns the loaded model names', async () => {
+    const fetch = fakeFetch(() =>
+      jsonResponse({
+        models: [
+          { name: 'qwen2.5-coder:7b', model: 'qwen2.5-coder:7b', size_vram: 5 },
+          { model: 'llama3.2:latest' },
+          { size: 1 },
+        ],
+      }),
+    );
+    const loaded = await new OllamaClient({ baseUrl: BASE, fetch }).loadedModels();
+    expect(loaded).toEqual(['qwen2.5-coder:7b', 'llama3.2:latest']);
+    expect(fetch).toHaveBeenCalledWith(
+      `${BASE}/api/ps`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('raises bad-response when the reply has no models list', async () => {
+    const fetch = fakeFetch(() => jsonResponse({}));
+    await expectLlmError(new OllamaClient({ baseUrl: BASE, fetch }).loadedModels(), 'bad-response');
+  });
+});
+
+describe('OllamaClient.loadModel (PR 8.3)', () => {
+  it('POSTs /api/chat with no messages and the keep-alive, which only loads the model', async () => {
+    const fetch = fakeFetch(() =>
+      jsonResponse({
+        ...CHAT_REPLY,
+        message: { role: 'assistant', content: '' },
+        done_reason: 'load',
+      }),
+    );
+    await new OllamaClient({ baseUrl: BASE, fetch }).loadModel(' qwen2.5-coder:7b ', {
+      keepAliveMinutes: 30,
+    });
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe(`${BASE}/api/chat`);
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(init?.body as string)).toEqual({
+      model: 'qwen2.5-coder:7b',
+      messages: [],
+      stream: false,
+      keep_alive: '30m',
+    });
+  });
+
+  it('reports a missing model like chat does', async () => {
+    const fetch = fakeFetch(() => jsonResponse({ error: "model 'x' not found" }, 404));
+    await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).loadModel('x'),
+      'model-not-found',
+      404,
+    );
+  });
+
+  it('raises no-model without calling the server when no model is set', async () => {
+    const fetch = fakeFetch(() => jsonResponse(CHAT_REPLY));
+    await expectLlmError(new OllamaClient({ baseUrl: BASE, fetch }).loadModel(' '), 'no-model');
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

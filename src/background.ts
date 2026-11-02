@@ -8,6 +8,7 @@ import { SAMPLE_CONTEXT } from './explain/sampleContext';
 import { createContextSizer } from './llm/contextSize';
 import { createLlmClient } from './llm/createClient';
 import { detectPlatform } from './llm/describeLlmError';
+import { createWarmup } from './llm/warmup';
 import { MessageRouter } from './messaging/router';
 import { listenForChatPorts, listenForExplainPorts } from './messaging/streamPort';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from './settings';
@@ -28,6 +29,10 @@ const explain = createExplainHandler({
   contextTokens,
 });
 
+// Loads the model when a PR's diffs open, before the first click (PR 8.3).
+const warmup = createWarmup({ getSettings, createClient: createLlmClient });
+chrome.tabs.onRemoved.addListener((tabId) => warmup.forgetTab(tabId));
+
 // Listeners must be added on the first run of the worker, before it goes idle,
 // so Chrome can wake it for later messages.
 new MessageRouter()
@@ -35,6 +40,7 @@ new MessageRouter()
     console.info('[PR Explainer] ping received');
     return { receivedAt: Date.now() };
   })
+  .on('warmup', (payload, sender) => warmup.warmUp(sender.tab?.id, payload))
   .listen();
 // Explanations stream over a port, so the popup can show the reply as it
 // arrives and stop it midway (see src/messaging/streamPort.ts).
@@ -72,6 +78,7 @@ if (import.meta.env.MODE === 'development') {
           model: settings.model,
           temperature: settings.temperature,
           maxResponseTokens: settings.maxResponseTokens,
+          keepAliveMinutes: settings.keepAliveMinutes,
         });
       },
       // Streams the sample explanation, piece by piece:
@@ -83,6 +90,7 @@ if (import.meta.env.MODE === 'development') {
           model: settings.model,
           temperature: settings.temperature,
           maxResponseTokens: settings.maxResponseTokens,
+          keepAliveMinutes: settings.keepAliveMinutes,
           signal,
         });
       },

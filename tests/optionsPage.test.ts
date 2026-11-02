@@ -17,6 +17,7 @@ const SAVED: Settings = {
   temperature: 0.4,
   maxResponseTokens: 512,
   contextTokens: 0,
+  keepAliveMinutes: 30,
   showPrompt: false,
 };
 
@@ -26,6 +27,8 @@ function fakeClient(overrides: Partial<LlmClient> = {}): LlmClient {
   return {
     listModels: vi.fn(async () => MODELS),
     modelContext: vi.fn(async () => ({})),
+    loadedModels: vi.fn(async () => []),
+    loadModel: vi.fn(async () => {}),
     chat: vi.fn(async (_messages, options) => ({ content: 'OK', model: options.model })),
     chatStream: vi.fn(),
     ...overrides,
@@ -74,8 +77,35 @@ describe('options page', () => {
     // Automatic shows as an empty box with a placeholder.
     expect($<HTMLInputElement>('contextTokens').value).toBe('');
     expect($<HTMLInputElement>('contextTokens').placeholder).toBe('Automatic');
+    expect($<HTMLInputElement>('keepAliveMinutes').value).toBe('30');
     expect($<HTMLInputElement>('showPrompt').checked).toBe(false);
   });
+
+  it('loads and saves how long to keep the model loaded (PR 8.3)', async () => {
+    const deps = fakeDeps(fakeClient());
+    await deps.saveSettings({ keepAliveMinutes: 90 });
+    const page = await initOptionsPage(document, deps);
+    expect($<HTMLInputElement>('keepAliveMinutes').value).toBe('90');
+
+    $<HTMLInputElement>('keepAliveMinutes').value = '0';
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ keepAliveMinutes: 0 });
+  });
+
+  it.each(['', '-1', '1441', '2.5'])(
+    'shows a bad keep-loaded time "%s" next to its box and does not save',
+    async (value) => {
+      const deps = fakeDeps(fakeClient());
+      const page = await initOptionsPage(document, deps);
+      $<HTMLInputElement>('keepAliveMinutes').value = value;
+      await page.save();
+      expect(errorFor('keepAliveMinutes')).toBe(
+        'Keep model loaded must be a whole number from 0 to 1440.',
+      );
+      expect(text('save-status')).toBe('Not saved. Fix the problems above.');
+      expect(await deps.getSettings()).toMatchObject({ keepAliveMinutes: 30 });
+    },
+  );
 
   it('loads and saves a set context size and Show prompt (PR 6.2)', async () => {
     const deps = fakeDeps(fakeClient());
@@ -230,6 +260,7 @@ describe('options page', () => {
       temperature: 1.5,
       maxResponseTokens: 2048,
       contextTokens: 0,
+      keepAliveMinutes: 30,
       showPrompt: false,
     });
     expect(text('save-status')).toBe('Saved.');
@@ -272,6 +303,7 @@ describe('options page', () => {
       model: 'llama3.2:3b',
       temperature: 0.4,
       maxResponseTokens: 32,
+      keepAliveMinutes: 30,
     });
     expect(text('test-status')).toBe('Reply from llama3.2:3b in 250 ms: "OK"');
     expect($<HTMLButtonElement>('test-connection').disabled).toBe(false);
