@@ -7,11 +7,12 @@
 // code into a chunk loaded with `import`, which fails in a content script.
 // Type-only imports (such as src/messaging/protocol.ts) are fine.
 import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
-import { createClickHandler } from './clickHandler';
+import { createClickHandler, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
 import { openExplainStream, sendRequest } from './messaging/client';
 import { currentPopup, openPopup } from './popup/popup';
 import { parsePrUrl } from './prUrl';
+import { installSelection } from './selection';
 
 /** "owner/repo#17" for the PR on this page, or undefined (no caching). */
 function prName(url: string): string | undefined {
@@ -60,33 +61,34 @@ window.addEventListener('popstate', update);
 // Click a diff line to explain it: a popup opens next to the line and the
 // model's answer streams into it (see src/clickHandler.ts). There is no
 // timeout: the popup's Stop button ends a request that takes too long.
-document.addEventListener(
-  'click',
-  createClickHandler({
-    isEnabled: () => enabled.current() === true,
-    // The PR names the cache entry, so the same code in two PRs is asked
-    // separately (src/explain/explainCache.ts).
-    explain: (context, onChunk, { fresh }) =>
-      openExplainStream({ context, pr: prName(location.href), fresh }, onChunk),
-    openPopup: (anchor, options) => openPopup(anchor, options),
-    // Dev builds also log the context block sent to the model.
-    onContext:
-      import.meta.env.MODE === 'development'
-        ? (context) => console.log(`[PR Explainer] context for the model:\n${context}`)
-        : undefined,
-    // Every build logs how long each explanation took, to track the local
-    // model's latency.
-    onTiming: ({ elapsedMs, status, model, firstChunkMs, cached }) => {
-      const verb = { done: 'explained', failed: 'failed', stopped: 'stopped' }[status];
-      const details = [
-        model,
-        firstChunkMs === undefined ? '' : `first text after ${(firstChunkMs / 1000).toFixed(1)} s`,
-        cached ? 'from cache' : '',
-      ].filter(Boolean);
-      console.info(
-        `[PR Explainer] ${verb} in ${(elapsedMs / 1000).toFixed(1)} s` +
-          (details.length ? ` (${details.join(', ')})` : ''),
-      );
-    },
-  }),
-);
+const explainDeps: ClickHandlerDeps = {
+  isEnabled: () => enabled.current() === true,
+  // The PR names the cache entry, so the same code in two PRs is asked
+  // separately (src/explain/explainCache.ts).
+  explain: (context, onChunk, { fresh }) =>
+    openExplainStream({ context, pr: prName(location.href), fresh }, onChunk),
+  openPopup: (anchor, options) => openPopup(anchor, options),
+  // Dev builds also log the context block sent to the model.
+  onContext:
+    import.meta.env.MODE === 'development'
+      ? (context) => console.log(`[PR Explainer] context for the model:\n${context}`)
+      : undefined,
+  // Every build logs how long each explanation took, to track the local
+  // model's latency.
+  onTiming: ({ elapsedMs, status, model, firstChunkMs, cached }) => {
+    const verb = { done: 'explained', failed: 'failed', stopped: 'stopped' }[status];
+    const details = [
+      model,
+      firstChunkMs === undefined ? '' : `first text after ${(firstChunkMs / 1000).toFixed(1)} s`,
+      cached ? 'from cache' : '',
+    ].filter(Boolean);
+    console.info(
+      `[PR Explainer] ${verb} in ${(elapsedMs / 1000).toFixed(1)} s` +
+        (details.length ? ` (${details.join(', ')})` : ''),
+    );
+  },
+};
+document.addEventListener('click', createClickHandler(explainDeps));
+// Drag across lines, or click one and Shift-click another, to explain the
+// block as a whole (src/selection.ts).
+installSelection(explainDeps);

@@ -1,4 +1,5 @@
-// The prompt that asks the model to explain one diff line. The content script
+// The prompt that asks the model to explain one diff line, or a block of
+// selected lines (PR 4.4). The content script
 // sends the plain-text context block (formatContext in src/lineContext.ts) and
 // this file wraps it in a system prompt and a user message.
 //
@@ -16,31 +17,63 @@ export const SECTION_HEADINGS = {
   concerns: 'Concerns',
 } as const;
 
-export const EXPLAIN_SYSTEM_PROMPT = [
-  'You are a senior software engineer helping a colleague review a GitHub pull request.',
+function systemPrompt(given: string, task: string, subject: string): string {
+  return [
+    'You are a senior software engineer helping a colleague review a GitHub pull request.',
+    given,
+    task,
+    '',
+    'Answer in Markdown with exactly these three level-2 headings, in this order:',
+    `## ${SECTION_HEADINGS.what}`,
+    `One to three sentences on what the ${subject} does.`,
+    `## ${SECTION_HEADINGS.why}`,
+    'One to three sentences on why the change needs it.',
+    `## ${SECTION_HEADINGS.concerns}`,
+    'A short bulleted list of real problems: bugs, edge cases, security, or performance.',
+    'If there are none, write "None found."',
+    '',
+    'Be concise and specific. Do not repeat the code back. Do not add other headings.',
+  ].join('\n');
+}
+
+export const EXPLAIN_SYSTEM_PROMPT = systemPrompt(
   'You are given one line from the diff, the lines around it, and the file it is in.',
   'Explain the clicked line in the context of the change.',
-  '',
-  'Answer in Markdown with exactly these three level-2 headings, in this order:',
-  `## ${SECTION_HEADINGS.what}`,
-  'One to three sentences on what the line does.',
-  `## ${SECTION_HEADINGS.why}`,
-  'One to three sentences on why the change needs it.',
-  `## ${SECTION_HEADINGS.concerns}`,
-  'A short bulleted list of real problems: bugs, edge cases, security, or performance.',
-  'If there are none, write "None found."',
-  '',
-  'Be concise and specific. Do not repeat the code back. Do not add other headings.',
-].join('\n');
+  'line',
+);
 
-// The messages for one explain request. `contextText` is formatContext output.
+// For a block of lines the user selected (PR 4.4).
+export const EXPLAIN_SELECTION_SYSTEM_PROMPT = systemPrompt(
+  'You are given a block of lines selected from the diff, the lines around it, and the file it is in.',
+  'Explain the selected block as a whole in the context of the change, not line by line.',
+  'block',
+);
+
+// formatSelection (src/lineContext.ts) starts its second line with this. The
+// content script cannot share code with the service worker, so the text is
+// kept in both files and a test checks they agree.
+export const SELECTION_LINE_PREFIX = 'Selection: ';
+
+/** True when `contextText` is a selected block rather than one clicked line. */
+export function isSelectionContext(contextText: string): boolean {
+  return contextText.split('\n', 2)[1]?.startsWith(SELECTION_LINE_PREFIX) === true;
+}
+
+// The messages for one explain request. `contextText` is formatContext or
+// formatSelection output.
 export function buildExplainPrompt(contextText: string): ChatMessage[] {
+  const selection = isSelectionContext(contextText);
   return [
-    { role: 'system', content: EXPLAIN_SYSTEM_PROMPT },
+    {
+      role: 'system',
+      content: selection ? EXPLAIN_SELECTION_SYSTEM_PROMPT : EXPLAIN_SYSTEM_PROMPT,
+    },
     {
       role: 'user',
       content: [
-        'Explain the clicked line in this pull request diff.',
+        selection
+          ? 'Explain the selected lines in this pull request diff.'
+          : 'Explain the clicked line in this pull request diff.',
         '',
         '```',
         contextText.trimEnd(),

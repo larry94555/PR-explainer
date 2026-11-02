@@ -1,0 +1,362 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import type { ClickHandlerDeps } from '../src/clickHandler';
+import { locateRange, type DiffRange } from '../src/diffDom';
+import {
+  buildExplainPrompt,
+  EXPLAIN_SELECTION_SYSTEM_PROMPT,
+  EXPLAIN_SYSTEM_PROMPT,
+  isSelectionContext,
+} from '../src/explain/explainPrompt';
+import type { ExplainResult } from '../src/explain/explainHandler';
+import {
+  describeSelection,
+  extractContext,
+  formatContext,
+  formatSelection,
+  MAX_SELECTED_LINES,
+  selectionContext,
+} from '../src/lineContext';
+import type { Popup, PopupAnchor } from '../src/popup/popup';
+import {
+  installSelection,
+  NOTE_MS,
+  OTHER_FILE_NOTE,
+  SELECTED_ATTR,
+  SELECTION_UI_ID,
+  TOO_MANY_NOTE,
+} from '../src/selection';
+
+function fixture(name: string): string {
+  return readFileSync(resolve(import.meta.dirname, 'fixtures', name), 'utf8');
+}
+
+const ANCHOR = 'diff-6a17656d764b8e1930354f341cf7f47960b63845c3046edcd8bbf282aaa2f464';
+const HEADER =
+  "@@ -41,7 +41,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.";
+
+// The one hunk in both fixtures, written diff style.
+const HUNK = [
+  ' | 2.1 | Settings storage | Small | ✅ Done ([#7](https://github.com/larry94555/PR-explainer/pull/7)) |',
+  ' | 2.2 | Ollama client: list models and non-streaming chat | Medium | ✅ Done ([#8](https://github.com/larry94555/PR-explainer/pull/8)) |',
+  ' | 2.3 | Settings page UI | Medium | ✅ Done ([#9](https://github.com/larry94555/PR-explainer/pull/9)) |',
+  '-| 2.4 | Friendly LLM error messages | Small | Not started |',
+  '+| 2.4 | Friendly LLM error messages | Small | ✅ Done ([#10](https://github.com/larry94555/PR-explainer/pull/10)) |',
+  ' | 3.1 | Diff line locator | Medium | Not started |',
+  ' | 3.2 | Hunk context extractor | Small | Not started |',
+  ' | 3.3 | Explanation prompt and response parser | Medium | Not started |',
+];
+
+const DONE: ExplainResult = {
+  status: 'done',
+  explanation: { what: 'Marks 2.4 as done.', why: 'It merged.', concerns: 'None found.' },
+  model: 'qwen2.5-coder:7b',
+};
+
+const layouts = [
+  {
+    name: 'classic',
+    file: 'github-diff-classic.html',
+    code: (id: string, root: ParentNode = document) =>
+      root
+        .querySelector(`[id="${ANCHOR}${id}"]`)!
+        .closest('tr')!
+        .querySelector('.blob-code-inner')!,
+    headerRow: () => document.querySelector('td.blob-code-hunk')!.closest('tr')!,
+    /** Adds a second file to the page and returns its root. */
+    addFile: () => {
+      const copy = document.querySelector('[data-file-path]')!.cloneNode(true) as Element;
+      copy.setAttribute('data-file-path', 'docs/features.md');
+      copy
+        .querySelector('[data-tagsearch-path]')
+        ?.setAttribute('data-tagsearch-path', 'docs/features.md');
+      document.body.append(copy);
+      return copy;
+    },
+  },
+  {
+    name: 'new (React)',
+    file: 'github-diff-new.html',
+    code: (id: string, root: ParentNode = document) =>
+      root.querySelector(`td[data-line-anchor="${ANCHOR}${id}"] .diff-text-inner`)!,
+    headerRow: () => document.querySelector('td.diff-hunk-cell')!.closest('tr')!,
+    addFile: () => {
+      const copy = document.querySelector('table[data-diff-anchor]')!.cloneNode(true) as Element;
+      copy.setAttribute('aria-label', 'Diff for: docs/features.md');
+      const wrapper = document.createElement('div');
+      wrapper.append(copy);
+      document.body.append(wrapper);
+      return wrapper;
+    },
+  },
+];
+
+function lineTexts(range: DiffRange): string[] {
+  return range.items.map((item) =>
+    'line' in item ? `${item.line.side}:${item.line.lineNumber}` : item.header,
+  );
+}
+
+/** Selects text from the start of `from` to the end of `to`, like a drag. */
+function dragSelect(from: Element, to: Element): void {
+  const range = document.createRange();
+  range.setStart(from.firstChild ?? from, 0);
+  range.setEnd(to.firstChild ?? to, (to.firstChild ?? to).textContent!.length);
+  const selection = document.getSelection()!;
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function mouse(type: string, target: Element, init: MouseEventInit = {}): void {
+  target.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, ...init }));
+}
+
+/** A full click: mousedown, mouseup, click. */
+function click(target: Element, init: MouseEventInit = {}): void {
+  mouse('mousedown', target, init);
+  mouse('mouseup', target, init);
+  mouse('click', target, init);
+}
+
+const ui = () => document.getElementById(SELECTION_UI_ID);
+const uiText = () => ui()?.shadowRoot?.querySelector('.bar')?.textContent ?? null;
+const uiButton = () => ui()?.shadowRoot?.querySelector('button') ?? null;
+const highlighted = () => [...document.querySelectorAll(`tr[${SELECTED_ATTR}]`)];
+
+afterEach(() => {
+  document.getSelection()?.removeAllRanges();
+  document.body.innerHTML = '';
+  document.head.innerHTML = '';
+});
+
+describe.each(layouts)('locateRange on the $name layout', ({ file, code, headerRow, addFile }) => {
+  beforeEach(() => {
+    document.body.innerHTML = fixture(file);
+  });
+
+  it('collects every line from the first to the last row, with mixed added and removed lines', () => {
+    const range = locateRange(code('R43'), code('R45')) as DiffRange;
+    expect(lineTexts(range)).toEqual(['context:43', 'removed:44', 'added:44', 'context:45']);
+    expect(range.rows).toEqual(['R43', 'L44', 'R44', 'R45'].map((id) => code(id).closest('tr')));
+  });
+
+  it('gives the same range when selected bottom to top', () => {
+    expect(locateRange(code('R45'), code('R43'))).toEqual(locateRange(code('R43'), code('R45')));
+  });
+
+  it('keeps the hunk header of a hunk the range crosses', () => {
+    const second = headerRow().cloneNode(true) as Element;
+    second.querySelector('.blob-code-hunk, .diff-text-inner')!.textContent = '@@ -46,2 +46,2 @@';
+    code('R46').closest('tr')!.before(second);
+    const range = locateRange(code('R45'), code('R46')) as DiffRange;
+    expect(lineTexts(range)).toEqual(['context:45', '@@ -46,2 +46,2 @@', 'context:46']);
+    expect(range.rows).toHaveLength(2);
+  });
+
+  it('rejects a range across two files', () => {
+    const other = addFile();
+    expect(locateRange(code('R43'), code('R45', other))).toBe('other-file');
+  });
+
+  it('returns null when either end is not on a code line', () => {
+    expect(locateRange(headerRow(), code('R45'))).toBeNull();
+    expect(locateRange(code('R45'), document.body)).toBeNull();
+  });
+});
+
+describe('formatSelection', () => {
+  beforeEach(() => {
+    document.body.innerHTML = fixture('github-diff-classic.html');
+  });
+  const code = layouts[0]!.code;
+
+  it('describes the block and puts the lines around it before and after', () => {
+    const range = locateRange(code('R43'), code('R45')) as DiffRange;
+    const text = formatSelection(selectionContext(range, { before: 1, after: 1 }));
+    expect(text).toBe(
+      [
+        'File: docs/roadmap.md (Markdown)',
+        'Selection: 4 lines (1 added, 1 removed, 2 unchanged); lines 43 to 45 of the new file, line 44 of the old file',
+        '',
+        'Lines before the selection:',
+        HEADER,
+        HUNK[1],
+        '',
+        'Selected lines:',
+        ...HUNK.slice(2, 6),
+        '',
+        'Lines after the selection:',
+        HUNK[6],
+      ].join('\n'),
+    );
+  });
+
+  it('describes a block of added lines only', () => {
+    const line = (lineNumber: number) =>
+      ({ filePath: 'a.ts', lineNumber, side: 'added', text: '' }) as const;
+    expect(describeSelection([line(3), line(4), line(5)])).toBe(
+      '3 lines (3 added); lines 3 to 5 of the new file',
+    );
+  });
+
+  it('is asked about as a block, while a single line keeps the line prompt', () => {
+    const range = locateRange(code('R43'), code('R45')) as DiffRange;
+    const block = formatSelection(selectionContext(range));
+    expect(isSelectionContext(block)).toBe(true);
+    const [system, user] = buildExplainPrompt(block);
+    expect(system!.content).toBe(EXPLAIN_SELECTION_SYSTEM_PROMPT);
+    expect(system!.content).toContain('as a whole');
+    expect(user!.content).toMatch(/^Explain the selected lines/);
+
+    const single = formatContext(extractContext(code('R44'))!);
+    expect(isSelectionContext(single)).toBe(false);
+    expect(buildExplainPrompt(single)[0]!.content).toBe(EXPLAIN_SYSTEM_PROMPT);
+  });
+});
+
+function setup(isEnabled?: () => boolean) {
+  const contexts: string[] = [];
+  const popups: Array<{
+    anchor: PopupAnchor;
+    hooks: Parameters<ClickHandlerDeps['openPopup']>[1];
+  }> = [];
+  const deps = {
+    isEnabled,
+    explain: vi.fn((context: string) => {
+      contexts.push(context);
+      return { result: Promise.resolve(DONE), stop: vi.fn() };
+    }),
+    openPopup: (anchor: PopupAnchor, hooks: Parameters<ClickHandlerDeps['openPopup']>[1]) => {
+      popups.push({ anchor, hooks });
+      return {
+        host: document.createElement('div'),
+        state: 'loading',
+        elapsedMs: 0,
+        showLoading: () => {},
+        showPartial: () => {},
+        showExplanation: () => {},
+        showError: () => {},
+        close: () => hooks.onClose(),
+      } as Popup;
+    },
+  };
+  const uninstall = installSelection(deps);
+  return { deps, contexts, popups, uninstall };
+}
+
+describe.each(layouts)('selecting lines on the $name layout', ({ code, file, addFile }) => {
+  let env: ReturnType<typeof setup>;
+  const row = (id: string) => code(id).closest('tr')!;
+
+  beforeEach(() => {
+    document.body.innerHTML = fixture(file);
+    // jsdom has no layout: give each row a box at its line number.
+    for (const id of ['R41', 'R42', 'R43', 'L44', 'R44', 'R45', 'R46', 'R47']) {
+      const n = Number(id.slice(1));
+      row(id).getBoundingClientRect = () => ({ top: n, bottom: n, left: 0 }) as DOMRect;
+    }
+  });
+  afterEach(() => env?.uninstall());
+
+  it('highlights a dragged range and explains it as one block', () => {
+    env = setup();
+    dragSelect(code('R42'), code('R45'));
+    mouse('mouseup', code('R45'));
+    expect(highlighted()).toEqual(['R42', 'R43', 'L44', 'R44', 'R45'].map(row));
+    expect(uiButton()?.textContent).toBe('Explain selection (5 lines)');
+    expect(env.deps.explain).not.toHaveBeenCalled();
+
+    uiButton()!.click();
+    expect(env.deps.explain).toHaveBeenCalledTimes(1);
+    expect(env.contexts[0]).toContain('Selection: 5 lines');
+    expect(env.contexts[0]).toContain(`Selected lines:\n${HUNK.slice(1, 6).join('\n')}`);
+    expect(env.popups[0]!.anchor.getBoundingClientRect()).toEqual({ top: 42, bottom: 45, left: 0 });
+    expect(ui()).toBeNull();
+    // The highlight stays while the popup is open and goes when it closes.
+    expect(highlighted()).toHaveLength(5);
+    env.popups[0]!.hooks.onClose();
+    expect(highlighted()).toEqual([]);
+  });
+
+  it('selects from a clicked line to a Shift-clicked one, in either direction', () => {
+    env = setup();
+    click(code('R46'));
+    click(code('R43'), { shiftKey: true });
+    expect(highlighted()).toEqual(['R43', 'L44', 'R44', 'R45', 'R46'].map(row));
+    uiButton()!.click();
+    expect(env.contexts[0]).toContain('Selection: 5 lines');
+    // The popup points at the whole block, not the clicked line.
+    expect(env.popups[0]!.anchor.getBoundingClientRect()).toEqual({ top: 43, bottom: 46, left: 0 });
+  });
+
+  it('ignores a text selection inside one line', () => {
+    env = setup();
+    dragSelect(code('R44'), code('R44'));
+    mouse('mouseup', code('R44'));
+    expect(ui()).toBeNull();
+    expect(highlighted()).toEqual([]);
+  });
+
+  it('shows a note instead of a button for a range across two files', () => {
+    vi.useFakeTimers();
+    try {
+      env = setup();
+      const other = addFile();
+      click(code('R43'));
+      click(code('R45', other), { shiftKey: true });
+      expect(uiText()).toBe(OTHER_FILE_NOTE);
+      expect(uiButton()).toBeNull();
+      expect(highlighted()).toEqual([]);
+      vi.advanceTimersByTime(NOTE_MS);
+      expect(ui()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('asks for a smaller selection past the line limit', () => {
+    env = setup();
+    const extra = row('R45');
+    for (let i = 0; i < MAX_SELECTED_LINES; i++) extra.after(extra.cloneNode(true));
+    dragSelect(code('R41'), code('R47'));
+    mouse('mouseup', code('R47'));
+    expect(uiText()).toBe(TOO_MANY_NOTE);
+  });
+
+  it('clears the highlight on Esc and on a click elsewhere', () => {
+    env = setup();
+    dragSelect(code('R42'), code('R44'));
+    mouse('mouseup', code('R44'));
+    expect(highlighted()).toHaveLength(4);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(highlighted()).toEqual([]);
+    expect(ui()).toBeNull();
+
+    dragSelect(code('R42'), code('R44'));
+    mouse('mouseup', code('R44'));
+    mouse('mousedown', document.body);
+    expect(highlighted()).toEqual([]);
+    expect(ui()).toBeNull();
+  });
+
+  it('does nothing while click-to-explain is off', () => {
+    env = setup(() => false);
+    dragSelect(code('R42'), code('R45'));
+    mouse('mouseup', code('R45'));
+    expect(ui()).toBeNull();
+    expect(highlighted()).toEqual([]);
+  });
+
+  it('replaces the highlight when a new block is selected', () => {
+    env = setup();
+    dragSelect(code('R41'), code('R42'));
+    mouse('mouseup', code('R42'));
+    uiButton()!.click();
+    dragSelect(code('R45'), code('R46'));
+    mouse('mouseup', code('R46'));
+    expect(highlighted()).toEqual(['R45', 'R46'].map(row));
+    // Closing the first block's popup leaves the new highlight alone.
+    env.popups[0]!.hooks.onClose();
+    expect(highlighted()).toEqual(['R45', 'R46'].map(row));
+  });
+});
