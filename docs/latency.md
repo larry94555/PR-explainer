@@ -39,6 +39,19 @@ The floor on this laptop is **24.8 s**: Short TypeScript line, an answer of at m
 
 Next step: The model runs on 100% CPU, so a GPU (or freeing video memory so all of it fits) would write the answer several times faster. Without one, a smaller model (1.5B or 3B) writes faster.
 
+<<<<<<< HEAD
+=======
+### Notes on this run
+
+Added by hand after the run, from the tables below.
+
+- **Writing the answer is nearly all of the time.** deepseek-r1:7b writes about 6.4 tokens per second on this CPU, in every step. Reading the prompt takes well under a second, and so does loading once the model is in memory. At that speed even 60 tokens take about 9 seconds, so no prompt or setting change can get this model under 10 seconds on this laptop.
+- **Most of the gain came from shorter answers (8.4).** The median dropped from 94.2 s to 53.2 s, and the slowest run from 206.3 s to 95.7 s, because answers are now capped at 300 tokens instead of running to 400 to 1,000. The smaller prompts from 8.5 cut about 30 to 70 prompt tokens per sample. At this prompt speed that saves only a fraction of a second, which is lost in run-to-run noise. 8.3 shows no gain in back-to-back runs, as expected: the model never had time to unload.
+- **deepseek-r1 is a reasoning model, and that hurts here.** It writes a hidden `<think>` section before the answer. From 8.4 on, many runs show no first token ("–") and all of them hit the 300-token limit, which means Ollama sent no answer text at all: the model spent the whole limit thinking, and the popup would show every section as cut off. So the 53 s explanations are often cut off, and a model that answers directly would be faster and more useful.
+- **The GPU is not used.** Intel Iris Xe graphics is not used by Ollama on Windows by default, so the model ran 100% on the CPU. That makes a smaller model the practical next step: a 1.5B coding model such as `qwen2.5-coder:1.5b` usually writes four to five times faster than a 7B model on a laptop CPU. That would put a 150 to 300-token answer at about 5 to 15 seconds. The way to check is `ollama pull qwen2.5-coder:1.5b` and then `npm run bench -- qwen2.5-coder:1.5b`, or the **Speed test** on the settings page.
+- **Defaults are unchanged.** The run supports the defaults already in place: the 300-token answer limit (8.4) and keeping the model loaded (8.3). It gives no evidence for a different answer limit, keep-alive or number of context lines. A lower answer limit would cut a reasoning model off before it answers at all, and the model is picked from what is installed, so it has no default to change.
+
+>>>>>>> 0699bbe932931c0cb7dff535654fc3876571804f
 ### Baseline (8.2)
 
 #### 2026-11-02 03:49 · deepseek-r1:7b

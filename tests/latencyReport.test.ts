@@ -12,6 +12,7 @@ import {
   lastSection,
   nextStep,
   parseDuration,
+  parseRuns,
   parseSection,
   timeParts,
   type FloorResult,
@@ -95,6 +96,8 @@ describe('reading what npm run bench wrote', () => {
         medianMs: 13_000,
         slowestMs: 14_000,
         tokensPerSecond: 19.2,
+        runs: 3,
+        failed: 0,
       },
       {
         model: 'qwen2.5-coder:1.5b',
@@ -102,13 +105,51 @@ describe('reading what npm run bench wrote', () => {
         medianMs: 4000,
         slowestMs: 5000,
         tokensPerSecond: 62.5,
+        runs: 3,
+        failed: 0,
       },
     ]);
   });
 
   it('reads a section where every run failed as a model with no times', () => {
     const section = benchSection([{ model: 'm', totals: [] }]);
-    expect(parseSection(section)).toEqual([{ model: 'm' }]);
+    expect(parseSection(section)).toEqual([{ model: 'm', runs: 0, failed: 0 }]);
+  });
+
+  it('reads how many runs failed from the Runs column', () => {
+    expect(parseRuns('15')).toEqual({ runs: 15, failed: 0 });
+    expect(parseRuns('13 of 15 (2 failed)')).toEqual({ runs: 15, failed: 2 });
+    expect(parseRuns('0 of 3 (3 failed)')).toEqual({ runs: 3, failed: 3 });
+    expect(parseRuns('many')).toBeUndefined();
+  });
+
+  it('does not call the goal met when most runs timed out, even if the one that finished was fast', () => {
+    // One fast short line, then five timeouts, including every long selection.
+    const timeout: BenchRun = { ok: false, error: 'The model took too long to answer.' };
+    const report: BenchReport = {
+      startedAt: new Date(2026, 10, 2, 9, 30),
+      machine: { os: 'Windows 11 Pro', cpu: 'CPU', ramBytes: 16 * 1024 ** 3, gpus: [] },
+      llmUrl: 'http://localhost:11434',
+      runsPerSample: 3,
+      temperature: 0.2,
+      maxResponseTokens: 300,
+      models: [
+        {
+          model: 'flaky',
+          rows: [
+            { sample: 'Short TypeScript line', runs: [run(1000), timeout, timeout] },
+            { sample: 'Long TypeScript selection', runs: [timeout, timeout, timeout] },
+          ],
+        },
+      ],
+    };
+    const [flaky] = parseSection(formatReport(report));
+    expect(flaky).toMatchObject({ model: 'flaky', medianMs: 1000, runs: 6, failed: 5 });
+    const text = conclusion([flaky!], []);
+    expect(text).not.toMatch(/Goal met/);
+    expect(text).toMatch(
+      /^\*\*No conclusion\.\*\* No model finished every run at the last step: flaky \(5 of 6 runs failed\)/,
+    );
   });
 });
 
@@ -160,32 +201,58 @@ describe('the conclusion', () => {
     ],
   });
 
-  it('picks the model with the lowest median', () => {
+  it('picks the model with the lowest median among those that finished every run', () => {
     expect(
-      fastest([{ model: 'a', medianMs: 9000 }, { model: 'b', medianMs: 4000 }, { model: 'c' }])
-        ?.model,
+      fastest([
+        { model: 'a', medianMs: 9000, failed: 0 },
+        { model: 'b', medianMs: 4000, failed: 0 },
+        { model: 'c' },
+      ])?.model,
     ).toBe('b');
+    expect(
+      fastest([
+        { model: 'a', medianMs: 9000, failed: 0 },
+        { model: 'b', medianMs: 1000, runs: 15, failed: 4 },
+      ])?.model,
+    ).toBe('a');
     expect(fastest([{ model: 'c' }])).toBeUndefined();
+  });
+
+  it('names a faster model left out because some of its runs failed', () => {
+    const text = conclusion(
+      [
+        { model: 'steady', medianMs: 8000, failed: 0 },
+        { model: 'flaky', medianMs: 2000, runs: 15, failed: 4 },
+      ],
+      [],
+    );
+    expect(text).toMatch(
+      /^\*\*Goal met\.\*\* With the default settings, steady explains in 8\.0 s/,
+    );
+    expect(text).toMatch(/Left out because some runs failed.*: flaky \(4 of 15 runs failed\)\./);
   });
 
   it('says the goal is met by the fastest model, and warns when its slowest run passes 10 s', () => {
     const text = conclusion(
       [
-        { model: 'big', medianMs: 14_000 },
-        { model: 'small', medianMs: 6200, slowestMs: 11_000, ranOn: '100% GPU' },
+        { model: 'big', medianMs: 14_000, failed: 0 },
+        { model: 'small', medianMs: 6200, slowestMs: 11_000, ranOn: '100% GPU', failed: 0 },
       ],
       [],
     );
     expect(text).toMatch(/^\*\*Goal met\.\*\* With the default settings, small explains in 6\.2 s/);
     expect(text).toMatch(/on 100% GPU/);
     expect(text).toMatch(/slowest run took 11\.0 s/);
-    expect(conclusion([{ model: 'small', medianMs: 6200, slowestMs: 8000 }], [])).not.toMatch(
-      /slowest/,
-    );
+    expect(
+      conclusion([{ model: 'small', medianMs: 6200, slowestMs: 8000, failed: 0 }], []),
+    ).not.toMatch(/slowest/);
   });
 
   it('gives the floor, the part that limits it and the next step when the goal is not met', () => {
-    const text = conclusion([{ model: 'm', medianMs: 18_000, ranOn: '100% CPU' }], [floor('m')]);
+    const text = conclusion(
+      [{ model: 'm', medianMs: 18_000, ranOn: '100% CPU', failed: 0 }],
+      [floor('m')],
+    );
     expect(text).toMatch(/^\*\*Goal not met\.\*\* The fastest model, m, takes 18\.0 s/);
     expect(text).toMatch(
       /The floor on this laptop is \*\*11\.5 s\*\*: Short TypeScript line, an answer of at most 150 tokens/,
@@ -195,7 +262,10 @@ describe('the conclusion', () => {
   });
 
   it('says there is no conclusion when nothing finished', () => {
-    expect(conclusion([{ model: 'm' }], [])).toMatch(/no conclusion/);
+    expect(conclusion([], [])).toMatch(/no conclusion/);
+    expect(conclusion([{ model: 'm', runs: 3, failed: 3 }], [])).toMatch(
+      /^\*\*No conclusion\.\*\* No model finished every run at the last step: m \(3 of 3 runs failed\)/,
+    );
   });
 });
 

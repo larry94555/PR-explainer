@@ -51,6 +51,17 @@ export interface StepResult {
   tokensPerSecond?: number;
   /** "ran on 100% GPU" and the like, from the model's heading. */
   ranOn?: string;
+  /** How many runs there were, and how many failed, from the Runs column. */
+  runs?: number;
+  failed?: number;
+}
+
+/** Reads the Runs column back: "15", or "13 of 15 (2 failed)". */
+export function parseRuns(text: string): { runs: number; failed: number } | undefined {
+  const all = /^\s*(\d+)\s*$/.exec(text);
+  if (all) return { runs: Number(all[1]), failed: 0 };
+  const some = /^\s*(\d+) of (\d+) \((\d+) failed\)\s*$/.exec(text);
+  return some ? { runs: Number(some[2]), failed: Number(some[3]) } : undefined;
 }
 
 /** Each model's "All samples" row in a section written by `npm run bench` (any version since 8.2). */
@@ -71,6 +82,8 @@ export function parseSection(section: string): StepResult[] {
     const median = parseDuration(cells[3] ?? '');
     const slowest = parseDuration(cells[4] ?? '');
     const rate = Number(cells[9]);
+    const runs = parseRuns(cells[2] ?? '');
+    if (runs) Object.assign(current, runs);
     if (median !== undefined) current.medianMs = median;
     if (slowest !== undefined) current.slowestMs = slowest;
     if (cells[9] && Number.isFinite(rate)) current.tokensPerSecond = rate;
@@ -163,17 +176,45 @@ export function demote(section: string): string {
   return section.replace(/^(#{2,5}) /gm, '#$1 ');
 }
 
-/** The fastest model by its "Now" median, or undefined when none finished. */
+/** Whether every run of the model finished, so its median stands for every sample. */
+export function finishedEveryRun(result: StepResult): boolean {
+  return result.medianMs !== undefined && result.failed === 0;
+}
+
+/**
+ * The fastest model by its "Now" median, among those that finished every
+ * run: a model whose long samples time out would otherwise look fast on the
+ * short ones alone. Undefined when none finished every run.
+ */
 export function fastest(results: readonly StepResult[]): StepResult | undefined {
   return results
-    .filter((r) => r.medianMs !== undefined)
+    .filter(finishedEveryRun)
     .reduce<StepResult | undefined>((a, b) => (a && a.medianMs! <= b.medianMs! ? a : b), undefined);
+}
+
+/** "m (2 of 15 runs failed)" for each model that did not finish every run. */
+function failedRuns(results: readonly StepResult[]): string {
+  return results
+    .filter((r) => !finishedEveryRun(r))
+    .map((r) =>
+      r.runs === undefined ? r.model : `${r.model} (${r.failed} of ${r.runs} runs failed)`,
+    )
+    .join(', ');
 }
 
 /** The conclusion: goal met with which model, or the floor and what limits it. */
 export function conclusion(now: readonly StepResult[], floors: readonly FloorResult[]): string {
   const best = fastest(now);
-  if (!best) return 'No run finished at the last step, so there is no conclusion.';
+  const unfinished = failedRuns(now);
+  if (!best) {
+    return now.length
+      ? `**No conclusion.** No model finished every run at the last step: ${unfinished}. ` +
+          'Its times leave out the runs that failed, so they do not show whether the goal is met.'
+      : 'No run finished at the last step, so there is no conclusion.';
+  }
+  const leftOut = unfinished
+    ? ` Left out because some runs failed, so their times do not cover every sample: ${unfinished}.`
+    : '';
   if (best.medianMs! < GOAL_MS) {
     const slow =
       best.slowestMs !== undefined && best.slowestMs >= GOAL_MS
@@ -181,14 +222,14 @@ export function conclusion(now: readonly StepResult[], floors: readonly FloorRes
         : '';
     return (
       `**Goal met.** With the default settings, ${best.model} explains in ${fmt(best.medianMs)} ` +
-      `(median of every sample${best.ranOn ? `, on ${best.ranOn}` : ''}).${slow}`
+      `(median of every sample${best.ranOn ? `, on ${best.ranOn}` : ''}).${slow}${leftOut}`
     );
   }
   const floor = floors.find((f) => f.model === best.model);
   const parts = floor && timeParts(floor.runs);
   const lines = [
     `**Goal not met.** The fastest model, ${best.model}, takes ${fmt(best.medianMs)} ` +
-      `(median of every sample${best.ranOn ? `, on ${best.ranOn}` : ''}).`,
+      `(median of every sample${best.ranOn ? `, on ${best.ranOn}` : ''}).${leftOut}`,
   ];
   if (floor && parts) {
     const total = median(floor.runs.flatMap((r) => (r.ok ? [r.totalMs] : [])));
