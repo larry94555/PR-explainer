@@ -59,9 +59,38 @@ export function isSelectionContext(contextText: string): boolean {
   return contextText.split('\n', 2)[1]?.startsWith(SELECTION_LINE_PREFIX) === true;
 }
 
+/** The PR's title and description (PR 6.1), as read by src/prMetadata.ts. */
+export interface PrInfo {
+  title: string;
+  description: string;
+}
+
+// The part of the user message that says what the PR is for. Empty when
+// neither the title nor the description is known. The description is the
+// PR author's text, so it is fenced off as something to read, not obey.
+function prSection(pr: PrInfo | undefined): string[] {
+  const title = pr?.title.trim() ?? '';
+  const description = pr?.description.trim() ?? '';
+  if (!title && !description) return [];
+  return [
+    "Use the pull request's title and description to explain why the change needs this code.",
+    '',
+    ...(title ? [`Pull request title: ${title}`] : []),
+    ...(description
+      ? [
+          'Pull request description:',
+          '<description>',
+          description.replaceAll('</description>', ''),
+          '</description>',
+        ]
+      : ['Pull request description: (none)']),
+    '',
+  ];
+}
+
 // The messages for one explain request. `contextText` is formatContext or
-// formatSelection output.
-export function buildExplainPrompt(contextText: string): ChatMessage[] {
+// formatSelection output; `pr` is the PR's title and description, when known.
+export function buildExplainPrompt(contextText: string, pr?: PrInfo): ChatMessage[] {
   const selection = isSelectionContext(contextText);
   return [
     {
@@ -75,6 +104,7 @@ export function buildExplainPrompt(contextText: string): ChatMessage[] {
           ? 'Explain the selected lines in this pull request diff.'
           : 'Explain the clicked line in this pull request diff.',
         '',
+        ...prSection(pr),
         '```',
         contextText.trimEnd(),
         '```',

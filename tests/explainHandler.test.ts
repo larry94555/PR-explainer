@@ -1,4 +1,4 @@
-import { createExplainHandler } from '../src/explain/explainHandler';
+import { createExplainHandler, toPrInfo } from '../src/explain/explainHandler';
 import { EXPLAIN_SYSTEM_PROMPT } from '../src/explain/explainPrompt';
 import { SAMPLE_CONTEXT } from '../src/explain/sampleContext';
 import {
@@ -66,6 +66,33 @@ describe('explain handler', () => {
       temperature: SETTINGS.temperature,
       maxResponseTokens: SETTINGS.maxResponseTokens,
       signal,
+    });
+  });
+
+  it('adds the PR title and description to the prompt (PR 6.1)', async () => {
+    const { handler, client } = setup(streamOf(['## What it does\nA.']));
+    await handler({
+      context: SAMPLE_CONTEXT,
+      prInfo: { title: 'Add retries', description: 'Retry failed calls to the LLM.' },
+    });
+    const [messages] = vi.mocked(client.chatStream).mock.calls[0] as [ChatMessage[], ChatOptions];
+    expect(messages[1]!.content).toContain('Pull request title: Add retries');
+    expect(messages[1]!.content).toContain('Retry failed calls to the LLM.');
+    expect(messages[1]!.content).toContain(SAMPLE_CONTEXT);
+  });
+
+  it('ignores PR info that is not a title and a description', async () => {
+    const { handler, client } = setup(streamOf(['## What it does\nA.']));
+    await handler({
+      context: SAMPLE_CONTEXT,
+      prInfo: { title: 7, description: null } as unknown as { title: string; description: string },
+    });
+    const [messages] = vi.mocked(client.chatStream).mock.calls[0] as [ChatMessage[], ChatOptions];
+    expect(messages[1]!.content).not.toContain('Pull request title');
+    expect(toPrInfo('text')).toBeUndefined();
+    expect(toPrInfo({ title: 'T', description: 'D', extra: 1 })).toEqual({
+      title: 'T',
+      description: 'D',
     });
   });
 

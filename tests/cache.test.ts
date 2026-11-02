@@ -223,6 +223,15 @@ describe('explain handler with the cache', () => {
     expect(chatStream).toHaveBeenCalledTimes(2);
   });
 
+  it('misses when the PR description changed, and hits when it did not (PR 6.1)', async () => {
+    const { handler, chatStream } = setup();
+    const prInfo = { title: 'Add retries', description: 'Retry failed calls.' };
+    await handler({ ...payload, prInfo });
+    expect(await handler({ ...payload, prInfo: { ...prInfo } })).toHaveProperty('cached');
+    await handler({ ...payload, prInfo: { ...prInfo, description: 'Retry twice.' } });
+    expect(chatStream).toHaveBeenCalledTimes(2);
+  });
+
   it('Regenerate (fresh) skips the cache and saves the new answer', async () => {
     const { handler, chatStream } = setup();
     await handler(payload);

@@ -41,3 +41,53 @@ Surrounding diff:
   },
 ]
 `;
+
+exports[`buildExplainPrompt > with the PR title and description (PR 6.1) > puts them before the code and asks to use them for why the change needs it 1`] = `
+[
+  {
+    "content": "You are a senior software engineer helping a colleague review a GitHub pull request.
+You are given one line from the diff, the lines around it, and the file it is in.
+Explain the clicked line in the context of the change.
+
+Answer in Markdown with exactly these three level-2 headings, in this order:
+## What it does
+One to three sentences on what the line does.
+## Why it's needed
+One to three sentences on why the change needs it.
+## Concerns
+A short bulleted list of real problems: bugs, edge cases, security, or performance.
+If there are none, write "None found."
+
+Be concise and specific. Do not repeat the code back. Do not add other headings.",
+    "role": "system",
+  },
+  {
+    "content": "Explain the clicked line in this pull request diff.
+
+Use the pull request's title and description to explain why the change needs this code.
+
+Pull request title: Add a feature flag for the new checkout
+Pull request description:
+<description>
+Roll out the new checkout to 10% of users behind \`newCheckout\`.
+</description>
+
+\`\`\`
+File: src/settings.ts (TypeScript)
+Clicked line: added, line 42 of the new file
++const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+Surrounding diff:
+@@ -38,6 +38,9 @@ export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
+ export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
+ 
++// Code never leaves the laptop, so only loopback addresses are accepted.
++const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
++
+ export interface SettingsIssue {
+   field: SettingsField;
+\`\`\`",
+    "role": "user",
+  },
+]
+`;

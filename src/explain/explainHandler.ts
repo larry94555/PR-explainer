@@ -11,12 +11,16 @@
 // Finished explanations are cached (src/explain/explainCache.ts) when the
 // request names its PR. A cached answer comes back at once, marked `cached`,
 // unless the request asks for a `fresh` one (the popup's Regenerate button).
+//
+// The PR's title and description, when the content script sends them, go
+// into the prompt (and so into the cache key) so "Why it's needed" can refer
+// to the PR's stated goal (PR 6.1).
 
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
 import type { LlmClient } from '../llm/types';
 import type { Settings } from '../settings';
 import { explainCacheKey, type ExplainCache } from './explainCache';
-import { buildExplainPrompt } from './explainPrompt';
+import { buildExplainPrompt, type PrInfo } from './explainPrompt';
 import { parseExplanation, type Explanation } from './parseExplanation';
 
 export interface ExplainPayload {
@@ -29,6 +33,16 @@ export interface ExplainPayload {
   pr?: string;
   /** Skip the cache and ask the model again (the Regenerate button). */
   fresh?: boolean;
+  /** The PR's title and description (PR 6.1), added to the prompt. */
+  prInfo?: PrInfo;
+}
+
+/** `value` as a PrInfo, or undefined when it is not one (it is never trusted). */
+export function toPrInfo(value: unknown): PrInfo | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { title, description } = value as Partial<Record<keyof PrInfo, unknown>>;
+  if (typeof title !== 'string' || typeof description !== 'string') return undefined;
+  return { title, description };
 }
 
 /** Set on an answer that came from the cache instead of the model. */
@@ -71,7 +85,7 @@ export function createExplainHandler(deps: ExplainDeps) {
     const settings = await deps.getSettings();
     const now = deps.now ?? Date.now;
     const { cache } = deps;
-    const messages = buildExplainPrompt(payload.context);
+    const messages = buildExplainPrompt(payload.context, toPrInfo(payload.prInfo));
     // Everything that shapes the answer is in the key, so changing the model,
     // the temperature, the response limit, or the prompt is a miss.
     const key =
