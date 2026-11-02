@@ -1,13 +1,32 @@
 import { createExplainHandler } from '../src/explain/explainHandler';
 import { EXPLAIN_SYSTEM_PROMPT } from '../src/explain/explainPrompt';
 import { SAMPLE_CONTEXT } from '../src/explain/sampleContext';
-import { LlmError, type ChatMessage, type ChatOptions, type LlmClient } from '../src/llm/types';
+import {
+  LlmError,
+  type ChatMessage,
+  type ChatOptions,
+  type ChatStreamEnd,
+  type LlmClient,
+} from '../src/llm/types';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 const SETTINGS: Settings = { ...DEFAULT_SETTINGS, model: 'qwen2.5-coder:7b' };
 
-function setup(chat: LlmClient['chat']) {
-  const client: LlmClient = { listModels: vi.fn(), chat: vi.fn(chat), chatStream: vi.fn() };
+/** A chatStream that yields `pieces`, or throws `error` after them. */
+function streamOf(pieces: string[], error?: Error, model = 'qwen2.5-coder:7b') {
+  return async function* (): AsyncGenerator<string, ChatStreamEnd, undefined> {
+    for (const piece of pieces) yield piece;
+    if (error) throw error;
+    return { model, doneReason: 'stop' };
+  };
+}
+
+function setup(chatStream: LlmClient['chatStream']) {
+  const client: LlmClient = {
+    listModels: vi.fn(),
+    chat: vi.fn(),
+    chatStream: vi.fn(chatStream),
+  };
   const createClient = vi.fn(() => client);
   const handler = createExplainHandler({
     getSettings: async () => SETTINGS,
@@ -18,13 +37,16 @@ function setup(chat: LlmClient['chat']) {
 }
 
 describe('explain handler', () => {
-  it('sends the prompt with the saved settings and parses the reply', async () => {
-    const { handler, client, createClient } = setup(async () => ({
-      content: "## What it does\nA.\n## Why it's needed\nB.\n## Concerns\nC.",
-      model: 'qwen2.5-coder:7b',
-    }));
+  it('streams the prompt with the saved settings, passes each piece on, and parses the reply', async () => {
+    const pieces = ['## What it does\nA.', "\n## Why it's needed\nB.", '\n## Concerns\nC.'];
+    const { handler, client, createClient } = setup(streamOf(pieces));
+    const chunks: string[] = [];
+    const signal = new AbortController().signal;
 
-    const result = await handler({ context: SAMPLE_CONTEXT });
+    const result = await handler(
+      { context: SAMPLE_CONTEXT },
+      { onChunk: (text) => chunks.push(text), signal },
+    );
 
     expect(result).toEqual({
       status: 'done',
@@ -32,7 +54,8 @@ describe('explain handler', () => {
       model: 'qwen2.5-coder:7b',
     });
     expect(createClient).toHaveBeenCalledWith(SETTINGS);
-    const [messages, options] = vi.mocked(client.chat).mock.calls[0] as [
+    expect(chunks).toEqual(pieces);
+    const [messages, options] = vi.mocked(client.chatStream).mock.calls[0] as [
       ChatMessage[],
       ChatOptions,
     ];
@@ -42,13 +65,33 @@ describe('explain handler', () => {
       model: 'qwen2.5-coder:7b',
       temperature: SETTINGS.temperature,
       maxResponseTokens: SETTINGS.maxResponseTokens,
+      signal,
     });
   });
 
-  it('returns a friendly message and fix when the LLM call fails', async () => {
-    const { handler } = setup(async () => {
-      throw new LlmError('origin-blocked', 'HTTP 403');
+  it('works without onChunk', async () => {
+    const { handler } = setup(streamOf(['## What it does\nA.'], undefined, 'llama3'));
+    await expect(handler({ context: SAMPLE_CONTEXT })).resolves.toMatchObject({
+      status: 'done',
+      model: 'llama3',
     });
+  });
+
+  it('returns a friendly message when the stream breaks midway', async () => {
+    const chunks: string[] = [];
+    const { handler } = setup(
+      streamOf(['## What'], new LlmError('connection', 'stream ended early')),
+    );
+    const result = await handler(
+      { context: SAMPLE_CONTEXT },
+      { onChunk: (text) => chunks.push(text) },
+    );
+    expect(chunks).toEqual(['## What']);
+    expect(result).toMatchObject({ status: 'failed', message: expect.stringContaining('Ollama') });
+  });
+
+  it('returns a friendly message and fix when the LLM call fails', async () => {
+    const { handler } = setup(streamOf([], new LlmError('origin-blocked', 'HTTP 403')));
 
     const result = await handler({ context: SAMPLE_CONTEXT });
 
@@ -59,9 +102,7 @@ describe('explain handler', () => {
   });
 
   it('names the model in the fix when it is not installed', async () => {
-    const { handler } = setup(async () => {
-      throw new LlmError('model-not-found', 'model not found');
-    });
+    const { handler } = setup(streamOf([], new LlmError('model-not-found', 'model not found')));
     const result = await handler({ context: SAMPLE_CONTEXT });
     expect(result).toMatchObject({
       status: 'failed',
@@ -70,8 +111,8 @@ describe('explain handler', () => {
   });
 
   it('rejects an empty context without calling the model', async () => {
-    const { handler, client } = setup(async () => ({ content: '', model: 'm' }));
+    const { handler, client } = setup(streamOf([]));
     await expect(handler({ context: '  ' })).rejects.toThrow('non-empty context');
-    expect(client.chat).not.toHaveBeenCalled();
+    expect(client.chatStream).not.toHaveBeenCalled();
   });
 });

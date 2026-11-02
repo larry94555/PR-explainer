@@ -6,6 +6,7 @@ import { SAMPLE_CONTEXT } from './explain/sampleContext';
 import { createLlmClient } from './llm/createClient';
 import { detectPlatform } from './llm/describeLlmError';
 import { MessageRouter } from './messaging/router';
+import { listenForExplainPorts } from './messaging/streamPort';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from './settings';
 import { setupToolbarToggle } from './toolbarToggle';
 
@@ -24,8 +25,10 @@ new MessageRouter()
     console.info('[PR Explainer] ping received');
     return { receivedAt: Date.now() };
   })
-  .on('explain', explain)
   .listen();
+// Explanations stream over a port, so the popup can show the reply as it
+// arrives and stop it midway (see src/messaging/streamPort.ts).
+listenForExplainPorts(chrome.runtime, explain);
 
 // The toolbar button turns click-to-explain on and off for every tab.
 setupToolbarToggle({ action: chrome.action, storage: chrome.storage.local });
