@@ -44,7 +44,12 @@ function fakePopup(anchor: Element, hooks: PopupHooks) {
   const calls: string[] = [];
   let state: Popup['state'] = 'loading';
   const finished = () => state === 'closed' || state === 'stopped';
-  const popup: Popup & { anchor: Element; calls: string[]; pressStop(): void } = {
+  const popup: Popup & {
+    anchor: Element;
+    calls: string[];
+    pressStop(): void;
+    pressRegenerate(): void;
+  } = {
     anchor,
     calls,
     host: document.createElement('div'),
@@ -58,10 +63,12 @@ function fakePopup(anchor: Element, hooks: PopupHooks) {
       state = 'streaming';
       calls.push(`partial:${markdown}`);
     },
-    showExplanation: (explanation, model) => {
+    showExplanation: (explanation, model, cached) => {
       if (finished()) return;
       state = 'done';
-      calls.push(`done:${model}:${explanation.what}`);
+      calls.push(
+        `done:${model}:${explanation.what}${cached ? ` (cached ${cached.elapsedMs})` : ''}`,
+      );
     },
     showError: (message, fix) => {
       if (finished()) return;
@@ -77,12 +84,18 @@ function fakePopup(anchor: Element, hooks: PopupHooks) {
       state = 'stopped';
       hooks.onStop();
     },
+    // Like the real Regenerate button: back to loading, then the hook.
+    pressRegenerate: () => {
+      state = 'loading';
+      calls.push('loading');
+      hooks.onRegenerate();
+    },
   };
   return popup;
 }
 
 /** What a test's `explain` gets: the chunk callback, to stream text into the popup. */
-type Answer = (onChunk: (text: string) => void) => Promise<ExplainResult>;
+type Answer = (onChunk: (text: string) => void, fresh: boolean) => Promise<ExplainResult>;
 
 function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => boolean) {
   const contexts: string[] = [];
@@ -91,12 +104,14 @@ function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => b
   const stops: Array<ReturnType<typeof vi.fn>> = [];
   const deps: ClickHandlerDeps = {
     isEnabled,
-    explain: vi.fn((context: string, onChunk: (text: string) => void) => {
-      contexts.push(context);
-      const stop = vi.fn();
-      stops.push(stop);
-      return { result: answer(onChunk), stop };
-    }),
+    explain: vi.fn(
+      (context: string, onChunk: (text: string) => void, { fresh }: { fresh: boolean }) => {
+        contexts.push(context);
+        const stop = vi.fn();
+        stops.push(stop);
+        return { result: answer(onChunk, fresh), stop };
+      },
+    ),
     openPopup: (anchor, hooks) => {
       popups.at(-1)?.close();
       const popup = fakePopup(anchor, hooks);
@@ -308,6 +323,75 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(env.popups[0]!.calls).toEqual(['partial:Marks 2.4']);
     expect(env.popups[0]!.state).toBe('stopped');
     expect(env.timings).toHaveLength(1);
+  });
+
+  it('asks for a cached answer first and says when it came from the cache', async () => {
+    env = setup(() => Promise.resolve({ ...DONE, cached: { elapsedMs: 9800, savedAt: 1 } }));
+    click(code('R44'));
+    expect(env.deps.explain).toHaveBeenCalledWith(expect.any(String), expect.any(Function), {
+      fresh: false,
+    });
+    await flush();
+    expect(env.popups[0]!.calls).toEqual([
+      `done:${DONE.model}:${DONE.explanation.what} (cached 9800)`,
+    ]);
+    expect(env.timings).toEqual([
+      { elapsedMs: 1234, status: 'done', model: DONE.model, cached: true },
+    ]);
+  });
+
+  it('Regenerate asks again without the cache and shows the new answer', async () => {
+    const second = deferred<ExplainResult>();
+    let send!: (text: string) => void;
+    env = setup((onChunk, fresh) => {
+      if (!fresh) return Promise.resolve({ ...DONE, cached: { elapsedMs: 9800, savedAt: 1 } });
+      send = onChunk;
+      return second.promise;
+    });
+    click(code('R44'));
+    await flush();
+    env.popups[0]!.pressRegenerate();
+    expect(env.deps.explain).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(env.deps.explain).mock.calls[1]![2]).toEqual({ fresh: true });
+    expect(env.contexts[1]).toBe(env.contexts[0]);
+    expect(env.stops[0]).toHaveBeenCalledOnce();
+
+    send('New');
+    second.resolve({ ...DONE, explanation: { ...DONE.explanation, what: 'New answer.' } });
+    await flush();
+    expect(env.popups[0]!.calls).toEqual([
+      `done:${DONE.model}:${DONE.explanation.what} (cached 9800)`,
+      'loading',
+      'partial:New',
+      `done:${DONE.model}:New answer.`,
+    ]);
+    expect(env.timings[1]).toEqual({
+      elapsedMs: 1234,
+      status: 'done',
+      model: DONE.model,
+      firstChunkMs: 1234,
+    });
+  });
+
+  it('Regenerate after Stop ignores what the stopped request sends later', async () => {
+    const first = deferred<ExplainResult>();
+    const second = deferred<ExplainResult>();
+    const senders: Array<(text: string) => void> = [];
+    env = setup((onChunk, fresh) => {
+      senders.push(onChunk);
+      return fresh ? second.promise : first.promise;
+    });
+    click(code('R44'));
+    senders[0]!('Old');
+    env.popups[0]!.pressStop();
+    env.popups[0]!.pressRegenerate();
+    senders[0]!(' text');
+    first.resolve(DONE);
+    await flush();
+    expect(env.popups[0]!.state).toBe('loading');
+    second.resolve({ ...DONE, explanation: { ...DONE.explanation, what: 'Fresh.' } });
+    await flush();
+    expect(env.popups[0]!.calls.at(-1)).toBe(`done:${DONE.model}:Fresh.`);
   });
 
   it('closing the popup stops the request', async () => {

@@ -108,9 +108,16 @@ describe('explain stream over a port', () => {
     listenForExplainPorts(runtime, model.explain);
 
     const chunks: string[] = [];
-    const stream = openExplainStream('the context', (text) => chunks.push(text), runtime);
+    const stream = openExplainStream(
+      { context: 'the context' },
+      (text) => chunks.push(text),
+      runtime,
+    );
     await flush();
-    expect(model.explain).toHaveBeenCalledWith({ context: 'the context' }, expect.anything());
+    expect(model.explain).toHaveBeenCalledWith(
+      { context: 'the context', fresh: false },
+      expect.anything(),
+    );
 
     model.chunk('## What');
     model.chunk(' it does');
@@ -120,13 +127,43 @@ describe('explain stream over a port', () => {
     expect(chunks).toEqual(['## What', ' it does', '\nA.']);
   });
 
+  it('passes the PR and the Regenerate flag to the service worker, and a cached answer back', async () => {
+    const { runtime } = fakeRuntime();
+    const model = controllableExplain();
+    listenForExplainPorts(runtime, model.explain);
+
+    const stream = openExplainStream(
+      { context: 'ctx', pr: 'owner/repo#17', fresh: true },
+      () => {},
+      runtime,
+    );
+    await flush();
+    expect(model.explain).toHaveBeenCalledWith(
+      { context: 'ctx', pr: 'owner/repo#17', fresh: true },
+      expect.anything(),
+    );
+    const cached: ExplainResult = { ...DONE, cached: { elapsedMs: 9800, savedAt: 1 } };
+    model.resolve(cached);
+    await expect(stream.result).resolves.toEqual(cached);
+  });
+
+  it('ignores a PR or Regenerate flag of the wrong type', async () => {
+    const { runtime, workerPorts } = fakeRuntime();
+    const model = controllableExplain();
+    listenForExplainPorts(runtime, model.explain);
+    runtime.connect({ name: EXPLAIN_PORT });
+    await flush();
+    workerPorts[0]!.emitMessage({ type: 'start', context: 'ctx', pr: 17, fresh: 'yes' });
+    expect(model.explain).toHaveBeenCalledWith({ context: 'ctx', fresh: false }, expect.anything());
+  });
+
   it('Stop disconnects the port, which aborts the request in the service worker', async () => {
     const { runtime, workerPorts } = fakeRuntime();
     const model = controllableExplain();
     listenForExplainPorts(runtime, model.explain);
 
     const chunks: string[] = [];
-    const stream = openExplainStream('ctx', (text) => chunks.push(text), runtime);
+    const stream = openExplainStream({ context: 'ctx' }, (text) => chunks.push(text), runtime);
     await flush();
     model.chunk('first');
     await flush();
@@ -151,7 +188,7 @@ describe('explain stream over a port', () => {
     const model = controllableExplain();
     listenForExplainPorts(runtime, model.explain);
 
-    const stream = openExplainStream('ctx', () => {}, runtime);
+    const stream = openExplainStream({ context: 'ctx' }, () => {}, runtime);
     await flush();
     model.reject(new TypeError('explain needs a non-empty context'));
     const error = await stream.result.catch((e: unknown) => e);
@@ -167,7 +204,7 @@ describe('explain stream over a port', () => {
     const model = controllableExplain();
     listenForExplainPorts(runtime, model.explain);
 
-    const stream = openExplainStream('ctx', () => {}, runtime);
+    const stream = openExplainStream({ context: 'ctx' }, () => {}, runtime);
     await flush();
     model.resolve(DONE);
     await stream.result;
@@ -216,7 +253,7 @@ describe('serveExplainPort', () => {
     port.emitMessage({ type: 'start', context: 'one' });
     port.emitMessage({ type: 'start', context: 'two' });
     expect(model.explain).toHaveBeenCalledOnce();
-    expect(model.explain).toHaveBeenCalledWith({ context: 'one' }, expect.anything());
+    expect(model.explain).toHaveBeenCalledWith({ context: 'one', fresh: false }, expect.anything());
   });
 });
 
@@ -229,7 +266,7 @@ describe('openExplainStream', () => {
         throw new Error('Extension context invalidated.');
       },
     };
-    await expect(openExplainStream('ctx', () => {}, runtime).result).rejects.toThrow(
+    await expect(openExplainStream({ context: 'ctx' }, () => {}, runtime).result).rejects.toThrow(
       'Could not reach the service worker: Extension context invalidated.',
     );
   });
@@ -238,7 +275,7 @@ describe('openExplainStream', () => {
     const { runtime, workerPorts } = fakeRuntime();
     listenForExplainPorts(runtime, controllableExplain().explain);
     const chunks: string[] = [];
-    const stream = openExplainStream('ctx', (text) => chunks.push(text), runtime);
+    const stream = openExplainStream({ context: 'ctx' }, (text) => chunks.push(text), runtime);
     await flush();
     runtime.lastError = { message: 'Receiving end does not exist.' };
     workerPorts[0]!.disconnect();
@@ -253,7 +290,7 @@ describe('openExplainStream', () => {
     const unhandled = vi.fn();
     process.on('unhandledRejection', unhandled);
     try {
-      openExplainStream('ctx', () => {}, runtime).stop();
+      openExplainStream({ context: 'ctx' }, () => {}, runtime).stop();
       await flush();
       await flush();
       expect(unhandled).not.toHaveBeenCalled();
@@ -265,7 +302,7 @@ describe('openExplainStream', () => {
   it('gives a default reason when Chrome does not say why the port closed', async () => {
     const { runtime, workerPorts } = fakeRuntime();
     listenForExplainPorts(runtime, controllableExplain().explain);
-    const stream = openExplainStream('ctx', () => {}, runtime);
+    const stream = openExplainStream({ context: 'ctx' }, () => {}, runtime);
     await flush();
     workerPorts[0]!.disconnect();
     await expect(stream.result).rejects.toThrow('closed before the answer arrived');

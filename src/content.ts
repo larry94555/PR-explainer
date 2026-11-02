@@ -11,6 +11,13 @@ import { createClickHandler } from './clickHandler';
 import { trackEnabled } from './enabledState';
 import { openExplainStream, sendRequest } from './messaging/client';
 import { currentPopup, openPopup } from './popup/popup';
+import { parsePrUrl } from './prUrl';
+
+/** "owner/repo#17" for the PR on this page, or undefined (no caching). */
+function prName(url: string): string | undefined {
+  const pr = parsePrUrl(url);
+  return pr ? `${pr.owner}/${pr.repo}#${pr.number}` : undefined;
+}
 
 let workerStatus = 'Service worker: checking…';
 // The toolbar button turns click-to-explain on and off for every tab (see
@@ -57,7 +64,10 @@ document.addEventListener(
   'click',
   createClickHandler({
     isEnabled: () => enabled.current() === true,
-    explain: (context, onChunk) => openExplainStream(context, onChunk),
+    // The PR names the cache entry, so the same code in two PRs is asked
+    // separately (src/explain/explainCache.ts).
+    explain: (context, onChunk, { fresh }) =>
+      openExplainStream({ context, pr: prName(location.href), fresh }, onChunk),
     openPopup: (anchor, options) => openPopup(anchor, options),
     // Dev builds also log the context block sent to the model.
     onContext:
@@ -66,11 +76,12 @@ document.addEventListener(
         : undefined,
     // Every build logs how long each explanation took, to track the local
     // model's latency.
-    onTiming: ({ elapsedMs, status, model, firstChunkMs }) => {
+    onTiming: ({ elapsedMs, status, model, firstChunkMs, cached }) => {
       const verb = { done: 'explained', failed: 'failed', stopped: 'stopped' }[status];
       const details = [
         model,
         firstChunkMs === undefined ? '' : `first text after ${(firstChunkMs / 1000).toFixed(1)} s`,
+        cached ? 'from cache' : '',
       ].filter(Boolean);
       console.info(
         `[PR Explainer] ${verb} in ${(elapsedMs / 1000).toFixed(1)} s` +

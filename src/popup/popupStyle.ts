@@ -41,7 +41,7 @@ export const POPUP_STYLE = `
     cursor: pointer;
   }
   .close:hover, .close:focus-visible { background: #e6eaef; color: #1f2328; }
-  .stop {
+  .stop, .regenerate {
     border: 1px solid #d0d7de;
     background: #ffffff;
     color: #1f2328;
@@ -55,6 +55,9 @@ export const POPUP_STYLE = `
   .stop:hover, .stop:focus-visible { background: #ffebe9; border-color: #d1242f; color: #d1242f; }
   /* Stop only makes sense while the model is working. */
   .popup:not([data-state='loading']):not([data-state='streaming']) .stop { display: none; }
+  .regenerate:hover, .regenerate:focus-visible { background: #ddf4ff; border-color: #0969da; color: #0969da; }
+  /* Regenerate only makes sense once the model has stopped working. */
+  .popup:not([data-state='done']):not([data-state='failed']):not([data-state='stopped']) .regenerate { display: none; }
   .partial { padding-top: 8px; }
   /* A blinking caret after the newest text while the model is still writing. */
   .popup[data-state='streaming'] .partial > :last-child::after {

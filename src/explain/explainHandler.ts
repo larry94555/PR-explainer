@@ -7,20 +7,40 @@
 // describeLlmError) instead of a thrown error, because the messaging layer
 // only carries an error's name and message, and the popup (PR 3.4) needs the
 // fix too.
+//
+// Finished explanations are cached (src/explain/explainCache.ts) when the
+// request names its PR. A cached answer comes back at once, marked `cached`,
+// unless the request asks for a `fresh` one (the popup's Regenerate button).
 
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
 import type { LlmClient } from '../llm/types';
 import type { Settings } from '../settings';
+import { explainCacheKey, type ExplainCache } from './explainCache';
 import { buildExplainPrompt } from './explainPrompt';
 import { parseExplanation, type Explanation } from './parseExplanation';
 
 export interface ExplainPayload {
   /** The context block from formatContext (src/lineContext.ts). */
   context: string;
+  /**
+   * The PR the line is in, such as "owner/repo#17". Without it the answer is
+   * neither looked up in nor saved to the cache.
+   */
+  pr?: string;
+  /** Skip the cache and ask the model again (the Regenerate button). */
+  fresh?: boolean;
+}
+
+/** Set on an answer that came from the cache instead of the model. */
+export interface CachedInfo {
+  /** How long the model took to write it the first time. */
+  elapsedMs: number;
+  /** When it was saved (Date.now()). */
+  savedAt: number;
 }
 
 export type ExplainResult =
-  | { status: 'done'; explanation: Explanation; model: string }
+  | { status: 'done'; explanation: Explanation; model: string; cached?: CachedInfo }
   | { status: 'failed'; message: string; fix: string };
 
 export interface ExplainStreamOptions {
@@ -34,6 +54,10 @@ export interface ExplainDeps {
   getSettings(): Promise<Settings>;
   createClient(settings: Settings): LlmClient;
   platform: Platform;
+  /** Leaving it out turns caching off. */
+  cache?: ExplainCache;
+  /** Clock in milliseconds. Tests pass a fake one. */
+  now?: () => number;
 }
 
 export function createExplainHandler(deps: ExplainDeps) {
@@ -45,8 +69,35 @@ export function createExplainHandler(deps: ExplainDeps) {
       throw new Error('explain needs a non-empty context');
     }
     const settings = await deps.getSettings();
+    const now = deps.now ?? Date.now;
+    const { cache } = deps;
+    const messages = buildExplainPrompt(payload.context);
+    // Everything that shapes the answer is in the key, so changing the model,
+    // the temperature, the response limit, or the prompt is a miss.
+    const key =
+      cache && typeof payload.pr === 'string' && payload.pr && settings.model
+        ? await explainCacheKey({
+            pr: payload.pr,
+            model: settings.model,
+            temperature: settings.temperature,
+            maxResponseTokens: settings.maxResponseTokens,
+            messages,
+          })
+        : null;
+    if (cache && key && payload.fresh !== true) {
+      const hit = await cache.get(key).catch(() => null);
+      if (hit) {
+        return {
+          status: 'done',
+          explanation: hit.explanation,
+          model: hit.model,
+          cached: { elapsedMs: hit.elapsedMs, savedAt: hit.savedAt },
+        };
+      }
+    }
+    const startedAt = now();
     try {
-      const stream = deps.createClient(settings).chatStream(buildExplainPrompt(payload.context), {
+      const stream = deps.createClient(settings).chatStream(messages, {
         model: settings.model,
         temperature: settings.temperature,
         maxResponseTokens: settings.maxResponseTokens,
@@ -59,7 +110,15 @@ export function createExplainHandler(deps: ExplainDeps) {
         onChunk?.(next.value);
         next = await stream.next();
       }
-      return { status: 'done', explanation: parseExplanation(content), model: next.value.model };
+      const explanation = parseExplanation(content);
+      const model = next.value.model;
+      if (cache && key) {
+        // A failed save only means the next click asks the model again.
+        await cache
+          .set(key, { explanation, model, elapsedMs: now() - startedAt, savedAt: now() })
+          .catch(() => {});
+      }
+      return { status: 'done', explanation, model };
     } catch (error) {
       const { message, fix } = describeLlmError(error, {
         url: settings.llmUrl,

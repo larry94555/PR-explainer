@@ -1,7 +1,7 @@
 // Content script side: send a typed request to the service worker and wait
 // for its answer, or stream an explanation over a port.
 
-import type { ExplainResult } from '../explain/explainHandler';
+import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
 import type {
   ExplainPortMessage,
   ExplainPortName,
@@ -96,12 +96,13 @@ function isPortMessage(value: unknown): value is ExplainPortMessage {
 }
 
 /**
- * Asks the service worker to explain `context` over a port, calling `onChunk`
+ * Asks the service worker to explain `payload.context` over a port (from the
+ * cache when it has the answer, unless `payload.fresh`), calling `onChunk`
  * with each piece of the reply as it arrives. No chunk arrives after the
  * result settles or after stop().
  */
 export function openExplainStream(
-  context: string,
+  payload: ExplainPayload,
   onChunk: (text: string) => void,
   runtime: PortRuntime = chrome.runtime,
 ): ExplainStream {
@@ -142,7 +143,7 @@ export function openExplainStream(
     port.onDisconnect.addListener(() =>
       unreachable(runtime.lastError?.message ?? 'the connection closed before the answer arrived.'),
     );
-    const request: ExplainPortRequest = { type: 'start', context };
+    const request: ExplainPortRequest = { type: 'start', ...payload };
     port.postMessage(request);
   } catch (error) {
     unreachable(error instanceof Error ? error.message : String(error));

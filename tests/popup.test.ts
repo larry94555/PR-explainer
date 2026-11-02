@@ -220,6 +220,56 @@ describe('popup', () => {
     });
   });
 
+  describe('Regenerate', () => {
+    const regenerateButton = () => shadow().querySelector<HTMLButtonElement>('button.regenerate')!;
+    const style = () => shadow().querySelector('style')!.textContent!;
+
+    it('is only shown once the model has finished, failed, or been stopped', () => {
+      openPopup(ANCHOR);
+      // The button's visibility comes from the popup's state (see popupStyle.ts).
+      expect(style()).toContain(
+        ".popup:not([data-state='done']):not([data-state='failed']):not([data-state='stopped']) .regenerate { display: none; }",
+      );
+      expect(regenerateButton().textContent).toBe('Regenerate');
+    });
+
+    it.each([
+      ['done', (p: ReturnType<typeof openPopup>) => p.showExplanation(SAMPLE, 'qwen2.5-coder:7b')],
+      ['failed', (p: ReturnType<typeof openPopup>) => p.showError('Broke.', 'Fix it.')],
+      ['stopped', () => shadow().querySelector<HTMLButtonElement>('button.stop')!.click()],
+    ])('goes back to loading and calls onRegenerate when %s', (_state, finish) => {
+      const onRegenerate = vi.fn();
+      const popup = openPopup(ANCHOR, { onRegenerate });
+      popup.showPartial('Adds');
+      finish(popup);
+      regenerateButton().click();
+      expect(onRegenerate).toHaveBeenCalledOnce();
+      expect(popup.state).toBe('loading');
+      expect(shadow().querySelector('.spinner')).not.toBeNull();
+      // A new answer can arrive after regenerating, even after a Stop.
+      popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+      expect(popup.state).toBe('done');
+    });
+
+    it('keeps the model name while asking again', () => {
+      const popup = openPopup(ANCHOR, {});
+      popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+      regenerateButton().click();
+      expect(shadow().querySelector('.model')!.textContent).toBe('qwen2.5-coder:7b');
+      expect(shadow().querySelector('.loading')!.textContent).toBe('Asking qwen2.5-coder:7b…');
+    });
+
+    it('does nothing while the model is still working', () => {
+      const onRegenerate = vi.fn();
+      const popup = openPopup(ANCHOR, { onRegenerate });
+      regenerateButton().click();
+      popup.showPartial('Adds');
+      regenerateButton().click();
+      expect(onRegenerate).not.toHaveBeenCalled();
+      expect(popup.state).toBe('streaming');
+    });
+  });
+
   describe('does not run code from the model', () => {
     const UNSAFE: Explanation = {
       what: 'Look: <img src=x onerror="window.__pwned = 1"> <script>window.__pwned = 2</script>',
@@ -360,6 +410,32 @@ describe('elapsed time', () => {
     expect(vi.getTimerCount()).toBe(0);
     clock += 3000;
     expect(popup.elapsedMs).toBe(4200);
+  });
+
+  it('says an answer came from the cache and how long the model took the first time', () => {
+    const popup = openPopup(ANCHOR, { now });
+    clock += 30;
+    popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b', { elapsedMs: 9800 });
+    expect(elapsedText()).toBe('From cache · took 9.8 s');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(popup.elapsedMs).toBe(30);
+  });
+
+  it('starts the timer again from zero on Regenerate', () => {
+    const popup = openPopup(ANCHOR, { now });
+    popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b', { elapsedMs: 9800 });
+    clock += 5000;
+    document
+      .getElementById(POPUP_ID)!
+      .shadowRoot!.querySelector<HTMLButtonElement>('button.regenerate')!
+      .click();
+    expect(elapsedText()).toBe('0.0 s');
+    clock += 1500;
+    vi.advanceTimersByTime(TICK_MS);
+    expect(elapsedText()).toBe('1.5 s');
+    clock += 1500;
+    popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+    expect(elapsedText()).toBe('Answered in 3.0 s');
   });
 
   it('says how long it took to fail', () => {
