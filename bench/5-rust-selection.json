@@ -1,0 +1,32 @@
+{
+  "name": "Rust selection",
+  "pr": {
+    "title": "Parse config values with units",
+    "description": "Lets timeouts in the config file be written as \"30s\" or \"5m\" instead of a bare number of milliseconds."
+  },
+  "context": [
+    "File: src/config/duration.rs (Rust)",
+    "Selection: 9 lines (9 added); lines 3 to 11 of the new file",
+    "",
+    "Lines before the selection:",
+    "@@ -0,0 +1,22 @@",
+    "+use std::time::Duration;",
+    "+",
+    "",
+    "Selected lines:",
+    "+pub fn parse_duration(text: &str) -> Result<Duration, String> {",
+    "+    let text = text.trim();",
+    "+    let split = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());",
+    "+    let (number, unit) = text.split_at(split);",
+    "+    let value: u64 = number.parse().map_err(|_| format!(\"not a number: {text}\"))?;",
+    "+    match unit {",
+    "+        \"\" | \"ms\" => Ok(Duration::from_millis(value)),",
+    "+        \"s\" => Ok(Duration::from_secs(value)),",
+    "+        \"m\" => Ok(Duration::from_secs(value * 60)),",
+    "",
+    "Lines after the selection:",
+    "+        _ => Err(format!(\"unknown unit {unit:?} in {text}\")),",
+    "+    }",
+    "+}"
+  ]
+}

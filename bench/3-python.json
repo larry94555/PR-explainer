@@ -1,0 +1,48 @@
+{
+  "name": "Python line",
+  "pr": {
+    "title": "Cache exchange rates for an hour",
+    "description": "The price page called the rates API on every request and hit its rate limit at busy times. Rates now come from a cache that is refreshed once an hour."
+  },
+  "context": [
+    "File: billing/rates.py (Python)",
+    "Clicked line: added, line 27 of the new file",
+    "+    if cached and time.monotonic() - cached.fetched_at < CACHE_SECONDS:",
+    "",
+    "Surrounding diff (the clicked line starts with >):",
+    "@@ -18,9 +18,14 @@ CACHE_SECONDS = 3600",
+    " ",
+    " def get_rate(currency: str) -> Decimal:",
+    "     \"\"\"Returns how many euros one unit of `currency` is worth.\"\"\"",
+    "-    return _fetch_rate(currency)",
+    "+    with _lock:",
+    "+        cached = _cache.get(currency)",
+    ">+    if cached and time.monotonic() - cached.fetched_at < CACHE_SECONDS:",
+    "+        return cached.rate",
+    "+    rate = _fetch_rate(currency)",
+    "+    with _lock:",
+    "+        _cache[currency] = _Entry(rate=rate, fetched_at=time.monotonic())",
+    "+    return rate",
+    " ",
+    " "
+  ],
+  "fileContext": {
+    "kind": "block",
+    "startLine": 20,
+    "focusStart": 27,
+    "focusEnd": 27,
+    "headerLines": 1,
+    "lines": [
+      "def get_rate(currency: str) -> Decimal:",
+      "    \"\"\"Returns how many euros one unit of `currency` is worth.\"\"\"",
+      "    with _lock:",
+      "        cached = _cache.get(currency)",
+      "    if cached and time.monotonic() - cached.fetched_at < CACHE_SECONDS:",
+      "        return cached.rate",
+      "    rate = _fetch_rate(currency)",
+      "    with _lock:",
+      "        _cache[currency] = _Entry(rate=rate, fetched_at=time.monotonic())",
+      "    return rate"
+    ]
+  }
+}

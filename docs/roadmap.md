@@ -65,7 +65,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 7.3 | Theme support and accessibility | Medium | ✅ Done ([#30](https://github.com/larry94555/PR-explainer/pull/30)) |
 | 7.4 | Privacy check and packaging | Medium | ✅ Done ([#32](https://github.com/larry94555/PR-explainer/pull/32)) |
 | 8.1 | Latency breakdown in the popup | Small | ✅ Done ([#33](https://github.com/larry94555/PR-explainer/pull/33)) |
-| 8.2 | Latency benchmark script and baseline | Medium | Not started |
+| 8.2 | Latency benchmark script and baseline | Medium | ✅ Done ([#34](https://github.com/larry94555/PR-explainer/pull/34)) |
 | 8.3 | Keep the model loaded and warm it up | Small | Not started |
 | 8.4 | Shorter answers | Small | Not started |
 | 8.5 | Smaller, cache-friendly prompts | Medium | Not started |
@@ -611,15 +611,18 @@ This milestone comes last because it builds on streaming (4.1, 4.2), caching (4.
   7. Click the first line again (it comes from the cache) and confirm the popup says "From cache" and has no **Details** button. Click **Regenerate** and confirm **Details** disappears while it works and comes back with new numbers.
   8. Click **Ask a question**, type a question and press Enter. Confirm a time ticks under "Thinking…" and keeps ticking while the answer is written, then says "Answered in … s". Ask another question and press **Stop** while it is being written; confirm it says "Stopped after … s".
 
-### PR 8.2: Latency benchmark script and baseline (Medium)
+### PR 8.2: Latency benchmark script and baseline (Medium) ✅ Done
+- **Status:** Done ([#34](https://github.com/larry94555/PR-explainer/pull/34)).
 - **Why it's needed:** Clicking lines by hand gives noisy numbers. Each later PR needs a repeatable before and after measurement.
-- **Problem it solves:** Adds `npm run bench`, a Node script (`scripts/bench.ts`) that sends the real explain prompt for 5 fixed sample contexts (short, long, and a few languages, stored in `bench/`) to the local Ollama, 3 runs each, for each model named on the command line (or the first installed model when none is named, since Node cannot read the extension's settings). It prints and saves a markdown table to `docs/latency.md` with median and slowest total time, load, prompt and answer tokens, tokens per second, and time to first token. It records the machine (CPU, RAM, GPU name if Ollama reports it) so results from different laptops are not mixed up. The first run is committed as the baseline.
-- **Unit tests added:** `benchStats.test.ts` covers median and slowest-run math, table formatting, and handling a failed run (marked, not dropped). The script itself talks to a real Ollama and is tested by hand.
+- **Problem it solves:** Adds `npm run bench -- [model ...] [--runs N] [--url URL] [--no-save]`, a Node script (`scripts/bench.ts`) that sends the real explain prompt for 5 fixed sample contexts in `bench/` (a short TypeScript line, a long TypeScript selection with a PR description and file context, and a Python line, a Go line and a Rust selection) to the local Ollama, 3 runs each, for each model named on the command line (or the first installed model when none is named, since Node cannot read the extension's settings; every other setting is the extension's default). It goes through the extension's own `createExplainHandler` (loaded with Vite's `runnerImport`, because the source's import paths have no `.ts`), so the prompt is cut to the same budget and the model runs with the same context window and answer limit as on a click. It first checks Ollama answers and the named models are installed, prints progress for each sample and run, then prints and adds to the end of `docs/latency.md` a dated section with a markdown table per model: median and slowest total time, time to first token, load, prompt and answer tokens, and tokens per second, plus an "All samples" row and a list of failed runs (marked, not dropped). The section records the machine (OS, CPU, RAM, the GPU name from the system since Ollama's API does not name it, Ollama's version, and how much of the model sat on the GPU from `/api/ps`) so results from different laptops are not mixed up. If every run fails, `docs/latency.md` is left alone. The baseline is the first run on the laptop the extension is used on (a cloud machine has no Ollama), committed to `docs/latency.md`.
+- **Unit tests added:** `benchStats.test.ts` covers median and slowest-run math, tokens per second, the summary of a sample's runs (a failed run is counted and listed, not dropped; all failed gives no times), table formatting (right-aligned numbers, dashes for unknowns, pipes escaped), the dated report section (machine, GPU share, settings, "All samples" row, failed runs), appending to `docs/latency.md`, the command-line options, and that each sample in `bench/` is valid and fits the default prompt budget without trimming. The script itself talks to a real Ollama and is tested by hand.
 - **How to test (Windows 11, Command Prompt):**
-  1. Run `npm test` and confirm `benchStats` passes.
-  2. Make sure Ollama is running, then run `npm run bench -- qwen2.5-coder:7b`.
-  3. Confirm progress prints for each sample and run, and the table appears at the end.
-  4. Open `docs/latency.md` and confirm the table and your machine details were added under a dated heading.
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass (905 tests in 40 files, including `benchStats`). Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Make sure Ollama is running (its icon is in the system tray), then run `npm run bench -- qwen2.5-coder:7b` (or a model you have; `ollama list` shows them).
+  3. Confirm a line prints for each sample and run, such as `qwen2.5-coder:7b · Go line · run 2/3 … 9.4 s (first token 1.1 s, load 3 ms, 212 answer tokens)`, and the table appears at the end. The first run is usually slower because it includes **Load**.
+  4. Open `docs/latency.md` and confirm the table and your machine details (Windows version, CPU, RAM, GPU, Ollama version, and "ran on … GPU") were added at the end under a dated heading.
+  5. Run `npm run bench -- not-a-model` and confirm it stops at once with "Not installed: not-a-model" and the list of installed models. Quit Ollama from the system tray, run `npm run bench`, and confirm it says "Could not reach Ollama at http://localhost:11434. Is it running?" Open Ollama again.
+  6. Commit the `docs/latency.md` section from step 4 as the baseline (or send it to Claude to commit).
 
 ### PR 8.3: Keep the model loaded and warm it up (Small)
 - **Why it's needed:** Ollama unloads a model after 5 idle minutes, and loading a 7B model can take 5 to 20 seconds. That alone can blow the 10 second goal on the first click.
