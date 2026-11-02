@@ -161,26 +161,39 @@ export function createClickHandler(deps: ClickHandlerDeps): (event: MouseEvent) 
     if (isInteractive(target)) return;
     const doc = target instanceof Node ? (target.ownerDocument ?? document) : document;
     if (hasTextSelection(doc)) return;
-
-    const row = locateRow(target);
-    const context = row && extractContext(target);
-    if (!row || !context) return;
-
-    const { filePath, lineNumber, side, text } = context.line;
-    const code =
-      side === 'removed'
-        ? undefined
-        : { filePath, startLine: lineNumber, endLine: lineNumber, text };
-    explainCode(
-      deps,
-      {
-        text: formatContext(context),
-        subject: { filePath, startLine: lineNumber },
-        ...(code && { code }),
-      },
-      row,
-    );
+    explainLineAt(deps, target);
   };
+}
+
+/**
+ * Explains the diff line `target` is on (a click's target, or the focused
+ * line for Alt+E, PR 7.3): in the open chat if there is one, otherwise in a
+ * popup next to the line. Returns false when `target` is not on a code line.
+ */
+export function explainLineAt(
+  deps: Pick<
+    ClickHandlerDeps,
+    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat'
+  >,
+  target: EventTarget | null,
+): boolean {
+  const row = locateRow(target);
+  const context = row && extractContext(target);
+  if (!row || !context) return false;
+
+  const { filePath, lineNumber, side, text } = context.line;
+  const code =
+    side === 'removed' ? undefined : { filePath, startLine: lineNumber, endLine: lineNumber, text };
+  explainCode(
+    deps,
+    {
+      text: formatContext(context),
+      subject: { filePath, startLine: lineNumber },
+      ...(code && { code }),
+    },
+    row,
+  );
+  return true;
 }
 
 /**

@@ -13,6 +13,8 @@ import { describeLlmError } from '../src/llm/describeLlmError';
 import type { ChatMessage } from '../src/llm/types';
 import { LlmError } from '../src/llm/types';
 import { openPopup } from '../src/popup/popup';
+import { isExplainShortcut } from '../src/a11y';
+import { resolveTheme, watchTheme } from '../src/theme';
 import { buildFittedExplainPrompt, type PromptReport } from '../src/explain/fitPrompt';
 import { promptBudget } from '../src/llm/contextSize';
 import type { Explanation } from '../src/explain/parseExplanation';
@@ -102,8 +104,21 @@ function fillDiff(table: HTMLTableElement, start: number): void {
     row.insertCell().textContent = String(start + i);
     row.cells[0]!.className = 'num';
     row.insertCell().textContent = `${marker} ${code}`;
+    // Like the cells of GitHub's newer diff view, so Tab and Alt+E work here.
+    row.cells[1]!.tabIndex = 0;
   });
 }
+
+// The Theme buttons set the attribute GitHub uses (PR 7.3); the popup and
+// chat follow it, and the page's own colors follow resolveTheme.
+const html = document.documentElement;
+const paintPage = () => (html.dataset.demoTheme = resolveTheme(document));
+for (const input of document.querySelectorAll<HTMLInputElement>('input[name="theme"]')) {
+  input.addEventListener('change', () => (html.dataset.colorMode = input.value));
+}
+html.dataset.colorMode = 'auto';
+paintPage();
+watchTheme(document, paintPage);
 
 fillDiff(document.querySelector<HTMLTableElement>('#diff')!, 10);
 fillDiff(document.querySelector<HTMLTableElement>('#diff-bottom')!, 120);
@@ -217,7 +232,17 @@ let activeChat: ActiveChat | undefined;
 
 document.addEventListener('click', (event) => {
   const row = (event.target as Element).closest?.('table.diff tr');
-  if (!row) return;
+  if (row) explainRow(row);
+});
+// Alt+E on a focused line does what a click does (PR 7.3).
+document.addEventListener('keydown', (event) => {
+  const row = (event.target as Element).closest?.('table.diff tr');
+  if (!row || !isExplainShortcut(event)) return;
+  event.preventDefault();
+  explainRow(row);
+});
+
+function explainRow(row: Element): void {
   const code = `File: src/llm/retry.ts\n${row.textContent}`;
   if (activeChat?.addCode(code, subjectOf(row))) {
     status.textContent = 'Last event: line added to the chat';
@@ -267,4 +292,4 @@ document.addEventListener('click', (event) => {
       popup.showExplanation(UNSAFE, MODEL);
       break;
   }
-});
+}

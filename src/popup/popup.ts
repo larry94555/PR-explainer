@@ -20,6 +20,13 @@
 // how long the model took when it first wrote it. Only one popup
 // is open at a time: opening a new one closes the old one.
 //
+// It follows GitHub's light or dark mode, and changes with it while open
+// (src/theme.ts). Opening it moves keyboard focus into it, so Tab reaches its
+// buttons and screen readers announce it; closing it while focus is inside
+// gives focus back to what had it before, such as the diff line explained
+// with Alt+E (PR 7.3). While the model is working the panel is marked
+// aria-busy.
+//
 // With the Show prompt setting on (PR 6.2), a collapsed "Prompt sent" section
 // under the explanation shows the prompt, its estimated size against the
 // budget, and what was trimmed to fit.
@@ -31,6 +38,8 @@ import type { PromptReport } from '../explain/fitPrompt';
 import type { Explanation, SectionKey } from '../explain/parseExplanation';
 import { appendInline, renderMarkdown } from './renderMarkdown';
 import { POPUP_STYLE } from './popupStyle';
+import { restoreFocus } from '../a11y';
+import { followTheme } from '../theme';
 
 export const POPUP_ID = 'pr-explainer-popup';
 
@@ -170,6 +179,8 @@ export function openPopup(
 ): Popup {
   current?.close();
   const win = doc.defaultView!;
+  // Where keyboard focus goes back to when the popup closes.
+  const returnFocus = doc.activeElement;
 
   const host = doc.createElement('div');
   host.id = POPUP_ID;
@@ -181,6 +192,8 @@ export function openPopup(
   panel.className = 'popup';
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-label', 'PR Explainer');
+  // Focusable from code only, so focus can move into the popup when it opens.
+  panel.tabIndex = -1;
 
   const header = doc.createElement('div');
   header.className = 'header';
@@ -232,6 +245,7 @@ export function openPopup(
   panel.append(header, body, footer);
   shadow.append(style, panel);
   doc.body.append(host);
+  const stopFollowingTheme = followTheme(host, doc);
 
   let state: PopupState = 'loading';
 
@@ -283,9 +297,13 @@ export function openPopup(
     host.style.setProperty('z-index', '2147483647');
   };
 
-  const setBody = (next: PopupState, ...children: Node[]) => {
+  const setState = (next: PopupState) => {
     state = next;
     panel.dataset.state = next;
+    panel.setAttribute('aria-busy', String(next === 'loading' || next === 'streaming'));
+  };
+  const setBody = (next: PopupState, ...children: Node[]) => {
+    setState(next);
     body.replaceChildren(...children);
     place();
   };
@@ -313,10 +331,7 @@ export function openPopup(
       note.className = 'stopped-note';
       note.textContent = STOPPED_EMPTY;
       setBody('stopped', note);
-    } else {
-      state = 'stopped';
-      panel.dataset.state = 'stopped';
-    }
+    } else setState('stopped');
     options.onStop?.();
   });
   regenerateButton.addEventListener('click', () => {
@@ -406,11 +421,15 @@ export function openPopup(
     },
     close() {
       if (state === 'closed') return;
+      // Focus inside a shadow root shows as its host on the page.
+      const hadFocus = doc.activeElement === host;
       state = 'closed';
       clearInterval(ticker);
+      stopFollowingTheme();
       doc.removeEventListener('keydown', onKeyDown, true);
       doc.removeEventListener('mousedown', onMouseDown, true);
       host.remove();
+      if (hadFocus) restoreFocus(returnFocus);
       if (current === popup) current = null;
       options.onClose?.();
     },
@@ -418,5 +437,6 @@ export function openPopup(
 
   current = popup;
   popup.showLoading();
+  panel.focus({ preventScroll: true });
   return popup;
 }

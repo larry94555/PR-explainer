@@ -14,8 +14,14 @@
 // The highlight and the button go away on Esc or the next mousedown anywhere
 // else; while the block's popup is open the highlight stays, and it is
 // cleared when that popup closes.
+//
+// Alt+E (PR 7.3, see src/a11y.ts) does the same from the keyboard: it
+// explains the block when one is selected (pressing Explain selection for
+// it), and otherwise the line that has keyboard focus or holds the text
+// cursor (explainLineAt in src/clickHandler.ts).
 
-import { explainCode, isInteractive, type ClickHandlerDeps } from './clickHandler';
+import { isEditable, isExplainShortcut, shortcutTarget } from './a11y';
+import { explainCode, explainLineAt, isInteractive, type ClickHandlerDeps } from './clickHandler';
 import type { CodeSpan } from './fileContext';
 import { locateRange, locateRow, type DiffRange } from './diffDom';
 import {
@@ -26,6 +32,7 @@ import {
 } from './lineContext';
 import type { ChatSubject } from './chat/chatPanel';
 import type { AnchorRect, PopupAnchor } from './popup/popup';
+import { followTheme, THEME_VARS } from './theme';
 
 /** Set on each highlighted row. GitHub's own markup never uses it. */
 export const SELECTED_ATTR = 'data-pr-explainer-selected';
@@ -48,31 +55,35 @@ const PAGE_STYLE = `
   }
 `;
 
+// The bar uses the popup's theme colors, so it matches GitHub's light or dark
+// mode, and changes with it while shown (src/theme.ts, PR 7.3).
 const UI_STYLE = `
   :host { all: initial; }
+  ${THEME_VARS}
   .bar {
     display: inline-flex;
     align-items: center;
     gap: 8px;
     padding: 4px;
-    background: #ffffff;
-    border: 1px solid #d0d7de;
+    background: var(--pe-bg);
+    border: 1px solid var(--pe-border);
     border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(140, 149, 159, 0.3);
+    box-shadow: 0 4px 12px var(--pe-shadow);
     font: 12px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
-    color: #1f2328;
+    color: var(--pe-fg);
   }
   button {
     font: inherit;
     font-weight: 600;
-    color: #ffffff;
-    background: #1f883d;
-    border: 1px solid rgba(31, 35, 40, 0.15);
+    color: var(--pe-on-success);
+    background: var(--pe-success);
+    border: 1px solid var(--pe-success);
     border-radius: 6px;
     padding: 3px 10px;
     cursor: pointer;
   }
-  button:hover { background: #1a7f37; }
+  button:hover { background: var(--pe-success-hover); }
+  button:focus-visible { outline: 2px solid var(--pe-focus); outline-offset: 1px; }
   .note { padding: 2px 6px; }
 `;
 
@@ -179,8 +190,12 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
   let anchorAt: Node | null = null;
   let rows: Element[] = [];
   let ui: HTMLElement | null = null;
+  // Stops the shown bar following GitHub's theme (PR 7.3).
+  let stopFollowingTheme: (() => void) | null = null;
   let noteTimer: ReturnType<typeof setTimeout> | undefined;
   let explaining = false;
+  // Presses the shown Explain selection button, while one is shown.
+  let explainSelected: (() => void) | null = null;
   // The text selection when the current gesture's mousedown happened. A drag
   // that ends with the browser still showing this same selection (for
   // example a click on blank space after an earlier drag) made no new one.
@@ -198,6 +213,9 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
     clearTimeout(noteTimer);
     ui?.remove();
     ui = null;
+    stopFollowingTheme?.();
+    stopFollowingTheme = null;
+    explainSelected = null;
   };
   const clearHighlight = () => {
     for (const row of rows) row.removeAttribute(SELECTED_ATTR);
@@ -224,6 +242,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
     host.style.setProperty('top', `${y}px`);
     host.style.setProperty('left', `${x}px`);
     host.style.setProperty('z-index', '2147483646');
+    stopFollowingTheme = followTheme(host, doc);
     doc.body.append(host);
     ui = host;
   };
@@ -252,7 +271,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
     button.type = 'button';
     // A split view row can hold two lines (removed and added).
     button.textContent = `Explain selection (${lineCount(range)} lines)`;
-    button.addEventListener('click', () => {
+    const explainBlock = () => {
       removeUi();
       explaining = true;
       const selected = rows;
@@ -270,8 +289,51 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
           clearHighlight();
         }
       });
-    });
+    };
+    button.addEventListener('click', explainBlock);
     showUi(x + win.scrollX, box.bottom + win.scrollY + 4, button);
+    explainSelected = explainBlock;
+  };
+
+  /**
+   * Shows the bar for the range between `ends` (the button, or a note when
+   * the range cannot be explained) at window position `x`, under the row
+   * `endRow`. Returns false when `ends` are not two rows of one range.
+   */
+  const offer = (ends: [unknown, unknown], x: number, endRow: Element | null): boolean => {
+    const range = locateRange(ends[0] as Node, ends[1] as Node);
+    if (!range || (range !== 'other-file' && range.rows.length < 2)) return false;
+    const y = (endRow?.getBoundingClientRect().bottom ?? 0) + win.scrollY + 4;
+    if (range === 'other-file') showNote(x + win.scrollX, y, OTHER_FILE_NOTE);
+    else if (lineCount(range) > MAX_SELECTED_LINES) showNote(x + win.scrollX, y, TOO_MANY_NOTE);
+    else select(range, x);
+    return true;
+  };
+
+  /** Alt+E: the selected block, or else the focused or cursor line. */
+  const explainFromKeyboard = (): boolean => {
+    if (explainSelected) {
+      explainSelected();
+      return true;
+    }
+    const ends = selectionEnds(doc);
+    if (
+      ends &&
+      locateRow(ends[0]) &&
+      locateRow(ends[1]) &&
+      locateRow(ends[0]) !== locateRow(ends[1])
+    ) {
+      const endRow = locateRow(ends[1]);
+      if (!offer(ends, endRow?.getBoundingClientRect().left ?? 0, endRow)) return false;
+      // A note (two files, too many lines) stays up; a block is explained at once.
+      // (A cast, since TypeScript cannot see that offer may have set it.)
+      (explainSelected as (() => void) | null)?.();
+      return true;
+    }
+    return explainLineAt(
+      deps,
+      shortcutTarget(doc, (node) => locateRow(node) !== null),
+    );
   };
 
   const onMouseUp = (event: MouseEvent) => {
@@ -298,15 +360,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
       }
       return;
     }
-    const range = locateRange(ends[0], ends[1]);
-    if (!range || (range !== 'other-file' && range.rows.length < 2)) return;
-    const endRow = locateRow(ends[1]) ?? locateRow(target);
-    const box = endRow?.getBoundingClientRect();
-    const y = (box?.bottom ?? event.clientY) + win.scrollY + 4;
-    const x = event.clientX + win.scrollX;
-    if (range === 'other-file') showNote(x, y, OTHER_FILE_NOTE);
-    else if (lineCount(range) > MAX_SELECTED_LINES) showNote(x, y, TOO_MANY_NOTE);
-    else select(range, event.clientX);
+    offer(ends, event.clientX, locateRow(ends[1]) ?? locateRow(target));
   };
 
   const onMouseDown = (event: MouseEvent) => {
@@ -316,6 +370,15 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') clear();
+    else if (
+      isExplainShortcut(event) &&
+      deps.isEnabled?.() !== false &&
+      !isEditable(event.target) &&
+      explainFromKeyboard()
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   };
 
   doc.addEventListener('mouseup', onMouseUp);

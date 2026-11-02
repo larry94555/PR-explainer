@@ -56,13 +56,29 @@
       .hint {
         color: #59636e;
       }
+      /* The page itself in GitHub's dark colors (PR 7.3), so the popup can be checked against it. */
+      html[data-demo-theme='dark'] body {
+        background: #0d1117;
+        color: #f0f6fc;
+      }
+      html[data-demo-theme='dark'] .hint,
+      html[data-demo-theme='dark'] .diff .num {
+        color: #9198a1;
+      }
+      html[data-demo-theme='dark'] .diff tr.added {
+        background: rgba(46, 160, 67, 0.15);
+      }
+      html[data-demo-theme='dark'] .diff tr.removed {
+        background: rgba(248, 81, 73, 0.1);
+      }
     </style>
   </head>
   <body>
     <h1>Popup demo</h1>
     <p class="hint">
-      Pick a state, then click any line of the fake diff. Press Esc or click outside to close. Lines
-      near the bottom of the window open the popup above the line.
+      Pick a state and a theme, then click any line of the fake diff (or Tab to a line and press
+      Alt+E). Press Esc or click outside to close. Lines near the bottom of the window open the
+      popup above the line.
     </p>
     <div class="controls" role="radiogroup" aria-label="Popup state">
       <label><input type="radio" name="state" value="loading" /> Loading</label>
@@ -74,6 +90,11 @@
       >
       <label><input type="radio" name="state" value="failed" /> Error</label>
       <label><input type="radio" name="state" value="unsafe" /> Unsafe model output</label>
+    </div>
+    <div class="controls" role="radiogroup" aria-label="GitHub theme">
+      <label><input type="radio" name="theme" value="auto" checked /> System theme</label>
+      <label><input type="radio" name="theme" value="light" /> Light</label>
+      <label><input type="radio" name="theme" value="dark" /> Dark</label>
     </div>
     <p id="status" class="hint">Last event: none</p>
     <table class="diff" id="diff"></table>

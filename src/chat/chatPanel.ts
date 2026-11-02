@@ -17,6 +17,11 @@
 // answer that failed shows the message and fix in red (showError), and a
 // stopped one keeps its text with a "Stopped" note (showStopped).
 //
+// It follows GitHub's light or dark mode (src/theme.ts). Esc closes it, and
+// closing it while focus is inside gives focus back to what had it before it
+// opened. The message list is marked aria-busy while an answer is being
+// written (PR 7.3).
+//
 // The panel does not talk to the LLM or keep the conversation: it reports
 // each question through onSend, and the caller adds the answer with
 // addMessage and fills it in with update. src/chat/chatFlow.ts does that with
@@ -25,6 +30,8 @@
 
 import { appendInline, renderMarkdown } from '../popup/renderMarkdown';
 import { CHAT_PANEL_STYLE } from './chatPanelStyle';
+import { restoreFocus } from '../a11y';
+import { followTheme } from '../theme';
 
 export const CHAT_PANEL_ID = 'pr-explainer-chat';
 
@@ -122,6 +129,8 @@ export function currentChatPanel(): ChatPanel | null {
 /** Opens the chat panel, closing any other one. */
 export function openChatPanel(options: ChatPanelOptions, doc: Document = document): ChatPanel {
   current?.close();
+  // Where keyboard focus goes back to when the panel closes.
+  const returnFocus = doc.activeElement;
 
   const host = doc.createElement('div');
   host.id = CHAT_PANEL_ID;
@@ -196,6 +205,7 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   panel.append(header, list, form);
   shadow.append(style, panel);
   doc.body.append(host);
+  const stopFollowingTheme = followTheme(host, doc);
 
   let open = true;
   let busy = false;
@@ -210,6 +220,7 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   const syncSend = () => {
     sendButton.disabled = !canSend();
     panel.dataset.busy = String(busy);
+    list.setAttribute('aria-busy', String(busy));
   };
 
   const render = (role: ChatRole, el: HTMLElement, text: string) => {
@@ -306,6 +317,10 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   for (const type of ['keydown', 'keypress', 'keyup'] as const) {
     host.addEventListener(type, (event) => event.stopPropagation());
   }
+  // isComposing: Esc that cancels an input method (IME) word keeps the panel open.
+  panel.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !event.isComposing) chat.close();
+  });
 
   for (const message of options.messages ?? []) {
     if (message.role === 'note') addNote(message.text, true);
@@ -344,8 +359,12 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
     },
     close() {
       if (!open) return;
+      // Focus inside a shadow root shows as its host on the page.
+      const hadFocus = doc.activeElement === host;
       open = false;
+      stopFollowingTheme();
       host.remove();
+      if (hadFocus) restoreFocus(returnFocus);
       if (current === chat) current = null;
       options.onClose?.();
     },
