@@ -6,6 +6,7 @@ import {
   type SessionStorageLike,
 } from '../src/explain/explainCache';
 import { createExplainHandler } from '../src/explain/explainHandler';
+import { buildExplainPrompt } from '../src/explain/explainPrompt';
 import type { ChatStreamEnd, LlmClient } from '../src/llm/types';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
@@ -32,7 +33,13 @@ function entry(what: string, model = 'qwen2.5-coder:7b'): CachedExplanation {
 }
 
 describe('explainCacheKey', () => {
-  const parts = { pr: 'owner/repo#17', model: 'qwen2.5-coder:7b', context: 'File: a.ts\n+x' };
+  const parts = {
+    pr: 'owner/repo#17',
+    model: 'qwen2.5-coder:7b',
+    temperature: 0.2,
+    maxResponseTokens: 1024,
+    messages: buildExplainPrompt('File: a.ts\n+x'),
+  };
 
   it('is a fixed-length hex hash that stays the same for the same input', async () => {
     const key = await explainCacheKey(parts);
@@ -40,16 +47,27 @@ describe('explainCacheKey', () => {
     expect(await explainCacheKey({ ...parts })).toBe(key);
   });
 
-  it('changes with the PR, the model, or the code around the line', async () => {
+  it('changes with the PR, the model, the generation settings, or the prompt', async () => {
     const key = await explainCacheKey(parts);
-    expect(await explainCacheKey({ ...parts, pr: 'owner/repo#18' })).not.toBe(key);
-    expect(await explainCacheKey({ ...parts, model: 'llama3.2:3b' })).not.toBe(key);
-    expect(await explainCacheKey({ ...parts, context: 'File: a.ts\n+y' })).not.toBe(key);
+    const others = [
+      { ...parts, pr: 'owner/repo#18' },
+      { ...parts, model: 'llama3.2:3b' },
+      { ...parts, temperature: 0.7 },
+      { ...parts, maxResponseTokens: 2048 },
+      // New code around the line (a new commit).
+      { ...parts, messages: buildExplainPrompt('File: a.ts\n+y') },
+      // Same code, new instructions (a later build changed the prompt).
+      {
+        ...parts,
+        messages: [{ role: 'system' as const, content: 'New rules.' }, ...parts.messages.slice(1)],
+      },
+    ];
+    for (const other of others) expect(await explainCacheKey(other)).not.toBe(key);
   });
 
   it('does not mix up parts that run together', async () => {
-    expect(await explainCacheKey({ pr: 'a', model: 'bc', context: 'd' })).not.toBe(
-      await explainCacheKey({ pr: 'ab', model: 'c', context: 'd' }),
+    expect(await explainCacheKey({ ...parts, pr: 'a', model: 'bc' })).not.toBe(
+      await explainCacheKey({ ...parts, pr: 'ab', model: 'c' }),
     );
   });
 });
@@ -175,6 +193,20 @@ describe('explain handler with the cache', () => {
     const result = await handler(payload);
     expect(chatStream).toHaveBeenCalledTimes(2);
     expect(result).not.toHaveProperty('cached');
+  });
+
+  it('misses when the temperature or response limit changed, and hits when they did not', async () => {
+    const { handler, chatStream, useSettings } = setup();
+    await handler(payload);
+    useSettings({ ...SETTINGS, temperature: 0.8 });
+    expect(await handler(payload)).not.toHaveProperty('cached');
+    useSettings({ ...SETTINGS, maxResponseTokens: 4096 });
+    expect(await handler(payload)).not.toHaveProperty('cached');
+    expect(chatStream).toHaveBeenCalledTimes(3);
+    // Back to the first settings (a fresh copy): the first answer is still there.
+    useSettings({ ...SETTINGS });
+    expect(await handler(payload)).toHaveProperty('cached');
+    expect(chatStream).toHaveBeenCalledTimes(3);
   });
 
   it('misses when the code around the line changed (a new commit)', async () => {

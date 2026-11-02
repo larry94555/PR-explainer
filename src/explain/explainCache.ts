@@ -7,14 +7,17 @@
 // there are more than `maxEntries`, the oldest are dropped. A hit moves the
 // entry to the end, so lines the user keeps coming back to stay longest.
 //
-// An entry's key is a SHA-256 hash of the PR, the model, and the context
-// block sent to the model (the file, the line, and the code around it). Any
-// change to the code around the line, such as a new commit that edits it,
-// gives a new key, so a stale explanation is never shown for changed code.
+// An entry's key is a SHA-256 hash of everything that shapes the answer: the
+// PR, the model, the temperature and response limit from the settings, and
+// the full prompt sent to the model (the instructions plus the file, the
+// line, and the code around it). Any change to those, such as a new commit
+// that edits the code around the line, a new setting, or a new prompt in a
+// later build, gives a new key, so a stale explanation is never shown.
 //
 // The cache must never break an explanation: callers treat a failing read as
 // a miss and ignore a failing write.
 
+import type { ChatMessage } from '../llm/types';
 import type { Explanation } from './parseExplanation';
 
 /** The parts of chrome.storage.session the cache uses. */
@@ -50,13 +53,19 @@ export interface CacheKeyParts {
   /** The PR, such as "larry94555/PR-explainer#17". */
   pr: string;
   model: string;
-  /** The context block from formatContext (src/lineContext.ts). */
-  context: string;
+  temperature: number;
+  maxResponseTokens: number;
+  /** The prompt sent to the model (buildExplainPrompt). */
+  messages: ChatMessage[];
 }
 
 /** A short, fixed-length key for one explanation (hex SHA-256). */
-export async function explainCacheKey({ pr, model, context }: CacheKeyParts): Promise<string> {
-  const data = new TextEncoder().encode(JSON.stringify([pr, model, context]));
+export async function explainCacheKey(parts: CacheKeyParts): Promise<string> {
+  const { pr, model, temperature, maxResponseTokens, messages } = parts;
+  const prompt = messages.map(({ role, content }) => [role, content]);
+  const data = new TextEncoder().encode(
+    JSON.stringify([pr, model, temperature, maxResponseTokens, prompt]),
+  );
   const digest = await crypto.subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }

@@ -71,9 +71,18 @@ export function createExplainHandler(deps: ExplainDeps) {
     const settings = await deps.getSettings();
     const now = deps.now ?? Date.now;
     const { cache } = deps;
+    const messages = buildExplainPrompt(payload.context);
+    // Everything that shapes the answer is in the key, so changing the model,
+    // the temperature, the response limit, or the prompt is a miss.
     const key =
       cache && typeof payload.pr === 'string' && payload.pr && settings.model
-        ? await explainCacheKey({ pr: payload.pr, model: settings.model, context: payload.context })
+        ? await explainCacheKey({
+            pr: payload.pr,
+            model: settings.model,
+            temperature: settings.temperature,
+            maxResponseTokens: settings.maxResponseTokens,
+            messages,
+          })
         : null;
     if (cache && key && payload.fresh !== true) {
       const hit = await cache.get(key).catch(() => null);
@@ -88,7 +97,7 @@ export function createExplainHandler(deps: ExplainDeps) {
     }
     const startedAt = now();
     try {
-      const stream = deps.createClient(settings).chatStream(buildExplainPrompt(payload.context), {
+      const stream = deps.createClient(settings).chatStream(messages, {
         model: settings.model,
         temperature: settings.temperature,
         maxResponseTokens: settings.maxResponseTokens,
