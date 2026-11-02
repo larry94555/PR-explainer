@@ -299,7 +299,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
       return;
     }
     const range = locateRange(ends[0], ends[1]);
-    if (!range || (range !== 'other-file' && range.rows.length < 2)) return;
+    if (!range || (range !== 'other-file' && lineCount(range) < 2)) return;
     const endRow = locateRow(ends[1]) ?? locateRow(target);
     const box = endRow?.getBoundingClientRect();
     const y = (box?.bottom ?? event.clientY) + win.scrollY + 4;

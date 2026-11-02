@@ -490,4 +490,23 @@ describe.each([
     // Removed before added, as in the unified view.
     expect(env.contexts[0]).toMatch(/^-.*injects one content script[^\n]*\n\+/m);
   });
+
+  it('selects both lines of one changed row for a Shift-click from its old half to its new half', () => {
+    env = setup();
+    // Row 3 of the first hunk: removed line 46 on the left, added line 48 on the right.
+    click(cell(3, 'left'));
+    click(cell(3, 'right'), { shiftKey: true });
+    expect(highlighted()).toHaveLength(1);
+    expect(uiButton()?.textContent).toBe('Explain selection (2 lines)');
+    uiButton()!.click();
+    expect(env.contexts[0]).toContain('Selection: 2 lines (1 added, 1 removed)');
+  });
+
+  it('does not select one line for a Shift-click on the same half of a row', () => {
+    env = setup();
+    click(cell(3, 'right'));
+    click(cell(3, 'right'), { shiftKey: true });
+    expect(highlighted()).toEqual([]);
+    expect(ui()).toBeNull();
+  });
 });
