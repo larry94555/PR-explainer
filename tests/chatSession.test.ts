@@ -1,6 +1,7 @@
 import {
   CHAT_SYSTEM_PROMPT,
   ChatSession,
+  codeNote,
   ChatSessions,
   EXPLANATION_HEADINGS,
   formatExplanation,
@@ -112,6 +113,87 @@ describe('ChatSession', () => {
     turns[0]!.answer = 'changed';
     turns.push({ question: 'x', answer: 'y' });
     expect(session.turns).toEqual([{ question: 'Q', answer: 'A' }]);
+  });
+});
+
+const OTHER = 'File: src/settings.ts\n  42 + return LOCAL_HOSTS.has(url.hostname);';
+
+describe('ChatSession with code moved on to (PR 5.4)', () => {
+  it('sends added code with the next question, after the earlier turns', () => {
+    const session = new ChatSession(SEED);
+    session.addTurn('What does this do?', 'It lists local hosts.');
+    expect(session.addCode({ context: OTHER, about: '`src/settings.ts` line 42' })).toBe(true);
+
+    const messages = session.messagesFor('How does this relate to the previous line?');
+    expect(messages.slice(3)).toEqual([
+      { role: 'user', content: 'What does this do?' },
+      { role: 'assistant', content: 'It lists local hosts.' },
+      {
+        role: 'user',
+        content: [
+          'Now looking at `src/settings.ts` line 42 in the diff:',
+          '',
+          '```',
+          OTHER,
+          '```',
+          '',
+          'How does this relate to the previous line?',
+        ].join('\n'),
+      },
+    ]);
+    expect(session.currentContext).toBe(OTHER);
+  });
+
+  it('keeps added code in the history, so later questions still see it', () => {
+    const session = new ChatSession(SEED);
+    session.addCode({ context: OTHER, about: 'line 42' });
+    session.addTurn('Why?', 'Because.');
+    const messages = session.messagesFor('And then?');
+    expect(messages[3]!.content).toContain(OTHER);
+    expect(messages[3]!.content.endsWith('Why?')).toBe(true);
+    expect(messages.at(-1)).toEqual({ role: 'user', content: 'And then?' });
+    expect(session.entries.map((entry) => entry.kind)).toEqual(['code', 'turn']);
+    expect(session.turns).toEqual([{ question: 'Why?', answer: 'Because.' }]);
+  });
+
+  it('sends every block added since the last question, in order', () => {
+    const session = new ChatSession(SEED);
+    session.addCode({ context: OTHER, about: 'line 42' });
+    session.addCode({ context: 'File: b.ts\n  1 + b', about: '`b.ts` line 1' });
+    const content = session.messagesFor('Compare them').at(-1)!.content;
+    expect(content.indexOf(OTHER)).toBeLessThan(content.indexOf('File: b.ts'));
+    expect(content.endsWith('Compare them')).toBe(true);
+    // User and assistant messages still take turns.
+    expect(session.messagesFor('Compare them').map((m) => m.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+    ]);
+  });
+
+  it('does not add the code the conversation is already about', () => {
+    const session = new ChatSession(SEED);
+    expect(session.addCode({ context: SEED.context, about: 'line 14' })).toBe(false);
+    expect(session.addCode({ context: OTHER, about: 'line 42' })).toBe(true);
+    expect(session.addCode({ context: OTHER, about: 'line 42' })).toBe(false);
+    expect(session.entries).toHaveLength(1);
+    expect(() => session.addCode({ context: '  ', about: 'line 1' })).toThrow();
+  });
+
+  it('New chat (reset) clears the turns and added code, and keeps the start', () => {
+    const session = new ChatSession(SEED);
+    session.addTurn('Q', 'A');
+    session.addCode({ context: OTHER, about: 'line 42' });
+    session.reset();
+    expect(session.entries).toEqual([]);
+    expect(session.currentContext).toBe(SEED.context);
+    expect(session.messagesFor('Fresh question')).toHaveLength(4);
+    expect(session.messagesFor('Fresh question')[2]!.content).toBe(EXPLANATION_TEXT);
+  });
+
+  it('names added code the same way in the panel and the prompt', () => {
+    expect(codeNote('`a.ts` line 3')).toBe('Now looking at `a.ts` line 3');
   });
 });
 

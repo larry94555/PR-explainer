@@ -15,7 +15,7 @@ Drag to select several lines (or a whole hunk) and get one explanation for the s
 Every request includes the surrounding context the model needs: the file path and language, the diff hunk around the clicked line (added, removed, and unchanged lines), and the PR title and description. Context is trimmed to fit the model's context window.
 
 ## 4. Chat box
-From any popup, open a chat panel to ask follow-up questions ("Is this thread safe?", "How would you test this?"). The chat keeps the code you clicked and the explanation as context, and keeps one conversation per PR while the tab is open.
+From any popup, open a chat panel to ask follow-up questions ("Is this thread safe?", "How would you test this?"). The chat keeps the code you clicked and the explanation as context, and keeps one conversation per PR while the tab is open. While the chat is open, clicking another line adds it to the same conversation, and **New chat** starts over.
 
 ## 5. Streaming responses
 Explanations and chat replies appear token by token as the local model generates them, with a loading state and a **Stop** button.

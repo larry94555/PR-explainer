@@ -3,7 +3,10 @@
 // (src/popup/popup.ts) it lives in a Shadow DOM root, so GitHub's CSS cannot
 // restyle it and its CSS cannot leak into GitHub.
 //
-// The header names the file and lines being discussed. Questions are shown as
+// The header names the file and lines being discussed (setSubject changes
+// them when the user moves on to other code, PR 5.4), and a note in the list
+// (addNote) marks where that happened. A New chat button (onNewChat) lets the
+// caller start the conversation over. Questions are shown as
 // plain text; answers are untrusted model output and are rendered with
 // renderMarkdown, which never parses HTML. Enter sends, Shift+Enter starts a
 // new line, and Send is disabled while the text box is empty or an answer is
@@ -43,9 +46,12 @@ export function formatLines(subject: ChatSubject): string {
 
 export type ChatRole = 'user' | 'assistant';
 
-/** A message to show when the panel opens, such as the explanation and earlier turns. */
+/**
+ * A message to show when the panel opens, such as the explanation and earlier
+ * turns. A 'note' is a line between messages, such as "Now looking at …".
+ */
 export interface ChatPanelMessage {
-  role: ChatRole;
+  role: ChatRole | 'note';
   text: string;
 }
 
@@ -77,6 +83,8 @@ export interface ChatPanelOptions {
   onSend?: (question: string) => void;
   /** Called when Stop is pressed while an answer is being written. */
   onStop?: () => void;
+  /** Called when New chat is pressed. Leaving it out hides the button. */
+  onNewChat?: () => void;
   /** Called once when the panel closes, however it was closed. */
   onClose?: () => void;
 }
@@ -88,6 +96,12 @@ export interface ChatPanel {
   readonly messages: readonly ChatMessageView[];
   /** Adds a message at the bottom of the list. */
   addMessage(role: ChatRole, text: string): ChatMessageView;
+  /** Adds a note between messages, such as "Now looking at `file.ts` line 42". */
+  addNote(text: string): void;
+  /** Removes every message and note. */
+  clear(): void;
+  /** Changes the file and lines named in the header. */
+  setSubject(subject: ChatSubject): void;
   /** While busy (an answer is being written), Send and Enter do nothing and Stop shows. */
   setBusy(busy: boolean): void;
   /** Puts the cursor in the text box. */
@@ -129,18 +143,28 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   subject.className = 'subject';
   const file = doc.createElement('code');
   file.className = 'file';
-  file.textContent = options.subject.filePath;
   const lines = doc.createElement('span');
   lines.className = 'lines';
-  lines.textContent = formatLines(options.subject);
   subject.append(file, lines);
-  subject.title = `${options.subject.filePath}, ${formatLines(options.subject)}`;
+  const setSubject = (next: ChatSubject) => {
+    file.textContent = next.filePath;
+    lines.textContent = formatLines(next);
+    subject.title = `${next.filePath}, ${formatLines(next)}`;
+  };
+  setSubject(options.subject);
+  const newChatButton = doc.createElement('button');
+  newChatButton.className = 'new-chat';
+  newChatButton.type = 'button';
+  newChatButton.textContent = 'New chat';
+  newChatButton.title = 'Clear this conversation and start again';
   const closeButton = doc.createElement('button');
   closeButton.className = 'close';
   closeButton.type = 'button';
   closeButton.setAttribute('aria-label', 'Close chat');
   closeButton.textContent = '×';
-  header.append(title, subject, closeButton);
+  header.append(title, subject);
+  if (options.onNewChat) header.append(newChatButton);
+  header.append(closeButton);
 
   const list = doc.createElement('div');
   list.className = 'messages';
@@ -239,6 +263,15 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
     return view;
   };
 
+  const addNote = (text: string, follow = nearBottom()) => {
+    if (!open) return;
+    const element = doc.createElement('p');
+    element.className = 'note';
+    appendInline(element, text);
+    list.append(element);
+    if (follow) scrollToEnd();
+  };
+
   const send = () => {
     if (!canSend()) return;
     const question = input.value.trim();
@@ -263,6 +296,9 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   stopButton.addEventListener('click', () => {
     if (open && busy) options.onStop?.();
   });
+  newChatButton.addEventListener('click', () => {
+    if (open) options.onNewChat?.();
+  });
   closeButton.addEventListener('click', () => chat.close());
   // Key presses inside the shadow root reach GitHub's page with the panel's
   // host as their target, which GitHub does not see as a text box, so typing
@@ -271,7 +307,10 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
     host.addEventListener(type, (event) => event.stopPropagation());
   }
 
-  for (const message of options.messages ?? []) addMessage(message.role, message.text, true);
+  for (const message of options.messages ?? []) {
+    if (message.role === 'note') addNote(message.text, true);
+    else addMessage(message.role, message.text, true);
+  }
   syncSend();
 
   const chat: ChatPanel = {
@@ -284,6 +323,17 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
     },
     addMessage(role, text) {
       return addMessage(role, text);
+    },
+    addNote(text) {
+      addNote(text);
+    },
+    clear() {
+      if (!open) return;
+      views.length = 0;
+      list.replaceChildren();
+    },
+    setSubject(next) {
+      if (open) setSubject(next);
     },
     setBusy(next) {
       busy = next;

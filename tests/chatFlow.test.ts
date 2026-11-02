@@ -226,6 +226,115 @@ describe('chat flow', () => {
   });
 });
 
+describe('chat across lines (PR 5.4)', () => {
+  const OTHER = 'File: src/settings.ts\n  42 + return LOCAL_HOSTS.has(url.hostname);';
+  const OTHER_SUBJECT = { filePath: 'src/settings.ts', startLine: 42 };
+  const notes = () => [...root().querySelectorAll('.note')].map((el) => el.textContent);
+  const header = () => root().querySelector('.subject')!.textContent;
+
+  it('adds clicked code to the conversation and sends it with the next question', async () => {
+    const { panel, session, last } = setup();
+    send('What does this do?');
+    last().resolve({ status: 'done', answer: 'It lists local hosts.', model: MODEL });
+    await flush();
+
+    expect(panel.addCode(OTHER, OTHER_SUBJECT)).toBe(true);
+    expect(header()).toBe('src/settings.tsline 42');
+    expect(notes()).toEqual(['Now looking at src/settings.ts line 42']);
+    expect(root().activeElement).toBe(root().querySelector('.input'));
+
+    send('How does this relate to the previous line?');
+    const messages = last().messages;
+    // The first code and the earlier answer are still there.
+    expect(messages[1]!.content).toContain(SAMPLE_CONTEXT.trimEnd());
+    expect(messages[4]).toEqual({ role: 'assistant', content: 'It lists local hosts.' });
+    expect(messages.at(-1)!.content).toContain(OTHER);
+    expect(messages.at(-1)!.content).toMatch(/How does this relate to the previous line\?$/);
+    expect(session.entries.map((e) => e.kind)).toEqual(['turn', 'code']);
+  });
+
+  it('ignores the code the chat is already about, and refuses once closed', () => {
+    const { panel, session } = setup();
+    expect(panel.addCode(SEED.context, SUBJECT)).toBe(true);
+    expect(notes()).toEqual([]);
+    expect(session.entries).toEqual([]);
+
+    panel.close();
+    expect(panel.addCode(OTHER, OTHER_SUBJECT)).toBe(false);
+    expect(session.entries).toEqual([]);
+  });
+
+  it('records code clicked while an answer is being written after that answer', async () => {
+    const { panel, session, last } = setup();
+    send('What does this do?');
+    panel.addCode(OTHER, OTHER_SUBJECT);
+    // Shown at once, below the answer being written.
+    expect(root().querySelector('.messages')!.lastElementChild!.className).toBe('note');
+    expect(session.entries).toEqual([]);
+
+    last().resolve({ status: 'done', answer: 'It lists local hosts.', model: MODEL });
+    await flush();
+    expect(session.entries.map((e) => e.kind)).toEqual(['turn', 'code']);
+    send('And this one?');
+    expect(last().messages.at(-1)!.content).toContain(OTHER);
+  });
+
+  it('records queued code after a stopped or failed answer too', async () => {
+    const { panel, session, last } = setup();
+    send('First?');
+    last().chunk('Partly');
+    panel.addCode(OTHER, OTHER_SUBJECT);
+    stopButton().click();
+    expect(session.entries.map((e) => e.kind)).toEqual(['turn', 'code']);
+
+    send('Second?');
+    panel.addCode('File: b.ts\n  1 + b', { filePath: 'b.ts', startLine: 1 });
+    last().resolve({ status: 'failed', message: 'Down', fix: 'Start it' });
+    await flush();
+    expect(session.entries.map((e) => e.kind)).toEqual(['turn', 'code', 'code']);
+  });
+
+  it('New chat stops the answer and clears the conversation back to the explanation', async () => {
+    const { panel, session, last, requests } = setup();
+    send('What does this do?');
+    last().resolve({ status: 'done', answer: 'It lists local hosts.', model: MODEL });
+    await flush();
+    panel.addCode(OTHER, OTHER_SUBJECT);
+    send('And this?');
+    last().chunk('Half');
+
+    root().querySelector<HTMLButtonElement>('.new-chat')!.click();
+    expect(requests.at(-1)!.stop).toHaveBeenCalled();
+    expect(session.entries).toEqual([]);
+    expect(shown()).toEqual([expect.stringContaining('Defines the host names')]);
+    expect(notes()).toEqual([]);
+    expect(header()).toBe('src/settings.tsline 14');
+    expect(sendDisabled()).toBe(true);
+    expect(root().querySelector('.chat')!.getAttribute('data-busy')).toBe('false');
+
+    // A late answer from the stopped request changes nothing.
+    requests.at(-1)!.resolve({ status: 'done', answer: 'Late', model: MODEL });
+    await flush();
+    expect(session.entries).toEqual([]);
+    send('Fresh question');
+    expect(last().messages).toHaveLength(4);
+  });
+
+  it('reopening the chat shows the notes for code moved on to', () => {
+    const session = new ChatSession(SEED);
+    session.addTurn('Q', 'A');
+    session.addCode({ context: OTHER, about: '`src/settings.ts` line 42' });
+    expect(panelMessages(session).map((m) => m.role)).toEqual([
+      'assistant',
+      'user',
+      'assistant',
+      'note',
+    ]);
+    setup(session);
+    expect(notes()).toEqual(['Now looking at src/settings.ts line 42']);
+  });
+});
+
 describe('chatSessionFor', () => {
   it('reuses the PR session for the same code and explanation', () => {
     const sessions = new ChatSessions();

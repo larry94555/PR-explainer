@@ -428,6 +428,26 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     );
   });
 
+  it('while a chat is open, a clicked line goes to the chat instead of a popup (PR 5.4)', () => {
+    env = setup();
+    let chatOpen = true;
+    const addToChat = vi.fn(() => chatOpen);
+    env.deps.addToChat = addToChat;
+    click(code('R44'));
+    expect(addToChat).toHaveBeenCalledWith({
+      text: expect.stringContaining('docs/roadmap.md'),
+      subject: { filePath: 'docs/roadmap.md', startLine: 44 },
+    });
+    expect(env.deps.explain).not.toHaveBeenCalled();
+    expect(env.popups).toEqual([]);
+
+    // Once the chat is closed, clicks explain in the popup again.
+    chatOpen = false;
+    click(code('R44'));
+    expect(env.deps.explain).toHaveBeenCalledTimes(1);
+    expect(env.popups).toHaveLength(1);
+  });
+
   it('Ask a question does nothing until there is an explanation', () => {
     env = setup(() => new Promise(() => {}));
     env.deps.openChat = vi.fn();

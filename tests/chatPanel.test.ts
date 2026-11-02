@@ -283,6 +283,50 @@ describe('chat panel', () => {
     expect(shadow().querySelector('style')?.textContent).toContain('.messages');
   });
 
+  it('shows notes between messages, with inline code and no HTML', () => {
+    const chat = open({ messages: [{ role: 'note', text: 'Now looking at `a.ts` line 3' }] });
+    chat.addMessage('user', 'Q');
+    chat.addNote('Now looking at `<b>b.ts</b>` line 9');
+    const notes = [...shadow().querySelectorAll('.note')];
+    expect(notes.map((n) => n.textContent)).toEqual([
+      'Now looking at a.ts line 3',
+      'Now looking at <b>b.ts</b> line 9',
+    ]);
+    expect(notes[0]!.querySelector('code')?.textContent).toBe('a.ts');
+    expect(shadow().querySelector('b')).toBeNull();
+    // Notes are not messages.
+    expect(chat.messages).toHaveLength(1);
+    expect(list().lastElementChild).toBe(notes[1]);
+  });
+
+  it('changes the header when the subject changes', () => {
+    const chat = open();
+    chat.setSubject({ filePath: 'src/other.ts', startLine: 42 });
+    expect(shadow().querySelector('.file')!.textContent).toBe('src/other.ts');
+    expect(shadow().querySelector('.lines')!.textContent).toBe('line 42');
+    expect(shadow().querySelector<HTMLElement>('.subject')!.title).toBe('src/other.ts, line 42');
+  });
+
+  it('shows New chat only with onNewChat, and clear empties the list', () => {
+    open();
+    expect(shadow().querySelector('.new-chat')).toBeNull();
+
+    const onNewChat = vi.fn();
+    const chat = open({ onNewChat, messages: [{ role: 'assistant', text: 'Hi' }] });
+    chat.addNote('Now looking at line 2');
+    const button = shadow().querySelector<HTMLButtonElement>('.new-chat')!;
+    expect(button.textContent).toBe('New chat');
+    button.click();
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+
+    chat.clear();
+    expect(list().children).toHaveLength(0);
+    expect(chat.messages).toEqual([]);
+    chat.close();
+    button.click();
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+  });
+
   it('focuses the text box', () => {
     const chat = open();
     chat.focus();

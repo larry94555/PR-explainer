@@ -7,7 +7,7 @@
 // code into a chunk loaded with `import`, which fails in a content script.
 // Type-only imports (such as src/messaging/protocol.ts) are fine.
 import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
-import { chatSessionFor, startChat } from './chat/chatFlow';
+import { chatSessionFor, startChat, type ActiveChat } from './chat/chatFlow';
 import { currentChatPanel, openChatPanel } from './chat/chatPanel';
 import { ChatSessions } from './chat/chatSession';
 import { createClickHandler, type ClickHandlerDeps } from './clickHandler';
@@ -70,6 +70,8 @@ window.addEventListener('popstate', update);
 // timeout: the popup's Stop button ends a request that takes too long.
 // One chat per PR, kept for as long as the tab is open (never stored).
 const chats = new ChatSessions();
+// The chat panel opened last; clicks on other code go to it while it is open.
+let activeChat: ActiveChat | undefined;
 
 const explainDeps: ClickHandlerDeps = {
   isEnabled: () => enabled.current() === true,
@@ -82,7 +84,7 @@ const explainDeps: ClickHandlerDeps = {
   // answers streamed from the service worker (src/chat/chatFlow.ts).
   openChat: ({ subject, regenerated, ...seed }) => {
     const session = chatSessionFor(chats, prName(location.href), seed, { regenerated });
-    const panel = startChat(
+    activeChat = startChat(
       {
         ask: (messages, onChunk) => openChatStream({ messages }, onChunk),
         openPanel: (options) => openChatPanel(options),
@@ -90,8 +92,10 @@ const explainDeps: ClickHandlerDeps = {
       session,
       subject,
     );
-    panel.focus();
+    activeChat.focus();
   },
+  // While the chat is open, clicked code joins the conversation (PR 5.4).
+  addToChat: ({ text, subject }) => activeChat?.addCode(text, subject) ?? false,
   // Dev builds also log the context block sent to the model.
   onContext:
     import.meta.env.MODE === 'development'
