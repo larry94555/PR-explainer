@@ -56,7 +56,11 @@ export function serveExplainPort(port: PortLike, explain: StreamingExplain): voi
     if (started || !isStart(message)) return;
     started = true;
     explain(
-      { context: message.context },
+      {
+        context: message.context,
+        pr: typeof message.pr === 'string' ? message.pr : undefined,
+        fresh: message.fresh === true,
+      },
       { signal: controller.signal, onChunk: (text) => send({ type: 'chunk', text }) },
     ).then(
       (result) => send({ type: 'result', result }),

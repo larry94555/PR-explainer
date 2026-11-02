@@ -9,6 +9,7 @@ declare const chrome: {
   storage: {
     sync: import('./settings').StorageAreaLike;
     local: import('./enabledState').LocalStorageLike;
+    session: import('./explain/explainCache').SessionStorageLike;
     onChanged: import('./enabledState').StorageChangedEvent;
   };
 };

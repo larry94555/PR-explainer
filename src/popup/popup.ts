@@ -7,12 +7,15 @@
 // message and a fix from describeLlmError), and stopped (the Stop button was
 // pressed; the text so far stays). It closes with the close button, the Esc
 // key, or a click anywhere outside it. Once stopped or closed it ignores
-// further updates, so a late answer changes nothing.
+// further updates, so a late answer changes nothing. Once the model has
+// finished, failed, or been stopped, a Regenerate button asks it again,
+// skipping the explanation cache; the popup goes back to loading.
 //
 // The header shows how long the request has taken: a live timer while
 // loading and streaming, then "Answered in …", "Failed after …", or
 // "Stopped after …", so the local model's
-// latency is always visible. Only one popup
+// latency is always visible. An answer from the cache says "From cache" and
+// how long the model took when it first wrote it. Only one popup
 // is open at a time: opening a new one closes the old one.
 //
 // The content script opens it from its click handler (src/clickHandler.ts),
@@ -42,6 +45,11 @@ export interface PopupOptions {
   onClose?: () => void;
   /** Called when the Stop button is pressed, to cancel the request. */
   onStop?: () => void;
+  /**
+   * Called when the Regenerate button is pressed, after the popup has gone
+   * back to loading, to ask the model again without the cache.
+   */
+  onRegenerate?: () => void;
   /** Clock in milliseconds, for the elapsed time. Tests pass a fake one. */
   now?: () => number;
 }
@@ -65,12 +73,17 @@ export const STOPPED_EMPTY = 'Stopped before the model wrote anything.';
 export interface Popup {
   readonly host: HTMLElement;
   readonly state: PopupState;
-  /** Time since the popup opened, frozen when the answer or error arrives. */
+  /**
+   * Time since the popup opened (or since showLoading was last called),
+   * frozen when the answer or error arrives.
+   */
   readonly elapsedMs: number;
+  /** Shows the spinner and restarts the timer. */
   showLoading(model?: string): void;
   /** Shows the reply so far (markdown) while the model is still writing. */
   showPartial(markdown: string): void;
-  showExplanation(explanation: Explanation, model?: string): void;
+  /** `cached` is set when the answer came from the cache. */
+  showExplanation(explanation: Explanation, model?: string, cached?: { elapsedMs: number }): void;
   showError(message: string, fix: string): void;
   close(): void;
 }
@@ -156,7 +169,13 @@ export function openPopup(
   stopButton.type = 'button';
   stopButton.textContent = 'Stop';
   stopButton.title = 'Stop the model';
-  header.append(title, modelLabel, elapsedLabel, stopButton, closeButton);
+  // Shown only once the model has finished, failed, or been stopped.
+  const regenerateButton = doc.createElement('button');
+  regenerateButton.className = 'regenerate';
+  regenerateButton.type = 'button';
+  regenerateButton.textContent = 'Regenerate';
+  regenerateButton.title = 'Ask the model again, without the cache';
+  header.append(title, modelLabel, elapsedLabel, stopButton, regenerateButton, closeButton);
 
   const body = doc.createElement('div');
   body.className = 'body';
@@ -168,7 +187,7 @@ export function openPopup(
   let state: PopupState = 'loading';
 
   const now = options.now ?? (() => performance.now());
-  const startedAt = now();
+  let startedAt = now();
   let finishedAt: number | null = null;
   const elapsed = () => (finishedAt ?? now()) - startedAt;
   const showElapsed = (prefix = '') => {
@@ -176,6 +195,7 @@ export function openPopup(
   };
   let ticker: ReturnType<typeof setInterval> | undefined;
   const startTicking = () => {
+    startedAt = now();
     finishedAt = null;
     showElapsed();
     ticker ??= setInterval(() => showElapsed(), TICK_MS);
@@ -185,6 +205,14 @@ export function openPopup(
     ticker = undefined;
     finishedAt ??= now();
     showElapsed(prefix);
+  };
+  // A cached answer arrives at once, so the time worth showing is how long
+  // the model took the first time.
+  const showCached = (ms: number) => {
+    clearInterval(ticker);
+    ticker = undefined;
+    finishedAt ??= now();
+    elapsedLabel.textContent = `From cache · took ${formatElapsed(ms)}`;
   };
 
   const place = () => {
@@ -242,6 +270,11 @@ export function openPopup(
     }
     options.onStop?.();
   });
+  regenerateButton.addEventListener('click', () => {
+    if (state !== 'done' && state !== 'failed' && state !== 'stopped') return;
+    popup.showLoading(modelLabel.textContent || undefined);
+    options.onRegenerate?.();
+  });
 
   // Keeps the newest text in view while it streams in, unless the user has
   // scrolled up to read something.
@@ -278,10 +311,11 @@ export function openPopup(
       setBody('streaming', partial);
       if (follow) panel.scrollTop = panel.scrollHeight;
     },
-    showExplanation(explanation, model) {
+    showExplanation(explanation, model, cached) {
       if (state === 'closed' || state === 'stopped') return;
       setModel(model);
-      stopTicking('Answered in ');
+      if (cached) showCached(cached.elapsedMs);
+      else stopTicking('Answered in ');
       const sections = (Object.keys(SECTION_TITLES) as SectionKey[]).map((key) => {
         const section = doc.createElement('section');
         section.dataset.section = key;

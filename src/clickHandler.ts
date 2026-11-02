@@ -3,7 +3,9 @@
 // On each click on a code line it opens the popup in the loading state next
 // to the line, streams the explanation of the line's context from the service
 // worker into it as the model writes, and shows the three sections at the
-// end. The popup's Stop button, or closing the popup, stops the request. Clicks on GitHub's own controls
+// end. The popup's Stop button, or closing the popup, stops the request. Its
+// Regenerate button asks again with `fresh` set, so the service worker skips
+// its cache. Clicks on GitHub's own controls
 // (the comment "+" button, links, menus, form fields), clicks that finish a
 // text selection, and modified clicks (Shift, Ctrl, Alt, Cmd) are left alone
 // so GitHub keeps working as before. Nothing happens at all while the toolbar
@@ -22,14 +24,21 @@ export interface ClickHandlerDeps {
    * Sends the formatted context to the service worker, calling `onChunk`
    * with each piece of the reply as it arrives.
    */
-  explain(context: string, onChunk: (text: string) => void): ExplainStream;
+  explain(
+    context: string,
+    onChunk: (text: string) => void,
+    options: { fresh: boolean },
+  ): ExplainStream;
   /**
    * False while the user has turned click-to-explain off with the toolbar
    * button (PR 3.6). Clicks are then left alone. Leaving it out means on.
    */
   isEnabled?(): boolean;
   /** Opens a popup next to the clicked row, closing any other popup. */
-  openPopup(anchor: Element, options: Required<Pick<PopupOptions, 'onStop' | 'onClose'>>): Popup;
+  openPopup(
+    anchor: Element,
+    options: Required<Pick<PopupOptions, 'onStop' | 'onClose' | 'onRegenerate'>>,
+  ): Popup;
   /** Called with each context block sent to the model (dev logging). */
   onContext?(context: string): void;
   /**
@@ -47,6 +56,8 @@ export interface ExplainTiming {
   model?: string;
   /** When the first piece of the reply arrived, if any did. */
   firstChunkMs?: number;
+  /** True when the answer came from the cache. */
+  cached?: boolean;
 }
 
 // Elements GitHub (or the browser) already gives a meaning to a click on.
@@ -131,32 +142,53 @@ export function createClickHandler(deps: ClickHandlerDeps): (event: MouseEvent) 
         report({ status: 'stopped' });
       },
       onClose: () => stream.stop(),
+      // The popup is back in the loading state when this runs.
+      onRegenerate: () => {
+        stream.stop();
+        stream = ask(true);
+      },
     });
     const waiting = () => popup.state === 'loading' || popup.state === 'streaming';
 
-    let reply = '';
-    const stream: ExplainStream = deps.explain(text, (chunk) => {
-      if (!waiting()) return;
-      firstChunkMs ??= popup.elapsedMs;
-      reply += chunk;
-      popup.showPartial(reply);
-    });
-    stream.result.then(
-      (result) => {
-        if (!waiting()) return;
-        if (result.status === 'done') popup.showExplanation(result.explanation, result.model);
-        else popup.showError(result.message, result.fix);
-        report({
-          status: result.status,
-          model: result.status === 'done' ? result.model : undefined,
-        });
-      },
-      (error: unknown) => {
-        if (!waiting()) return;
-        const { message, fix } = describeRequestError(error);
-        popup.showError(message, fix);
-        report({ status: 'failed' });
-      },
-    );
+    // Each request checks it is still the newest, so a request replaced by
+    // Regenerate cannot write into the popup.
+    let latest: ExplainStream | undefined;
+    const ask = (fresh: boolean): ExplainStream => {
+      firstChunkMs = undefined;
+      let reply = '';
+      const current = () => latest === request && waiting();
+      const request: ExplainStream = deps.explain(
+        text,
+        (chunk) => {
+          if (!current()) return;
+          firstChunkMs ??= popup.elapsedMs;
+          reply += chunk;
+          popup.showPartial(reply);
+        },
+        { fresh },
+      );
+      latest = request;
+      request.result.then(
+        (result) => {
+          if (!current()) return;
+          if (result.status === 'done') {
+            popup.showExplanation(result.explanation, result.model, result.cached);
+          } else popup.showError(result.message, result.fix);
+          report({
+            status: result.status,
+            model: result.status === 'done' ? result.model : undefined,
+            ...(result.status === 'done' && result.cached ? { cached: true } : {}),
+          });
+        },
+        (error: unknown) => {
+          if (!current()) return;
+          const { message, fix } = describeRequestError(error);
+          popup.showError(message, fix);
+          report({ status: 'failed' });
+        },
+      );
+      return request;
+    };
+    let stream = ask(false);
   };
 }
