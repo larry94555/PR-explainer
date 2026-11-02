@@ -319,3 +319,23 @@ describe('options page', () => {
     expect(client.chat).not.toHaveBeenCalled();
   });
 });
+
+describe('options page privacy note (PR 7.4)', () => {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  it('says code stays on this computer and links to PRIVACY.md', () => {
+    const section = doc.querySelector<HTMLElement>('#privacy')!;
+    expect(section.getAttribute('aria-labelledby')).toBe('privacy-title');
+    expect(section.textContent).toContain('Your code stays on this computer');
+    expect(section.textContent).toContain('sends nothing anywhere else');
+    const link = section.querySelector<HTMLAnchorElement>('a')!;
+    expect(link.getAttribute('href')).toMatch(/\/PRIVACY\.md$/);
+    // Opens in a new tab without giving that page access to this one.
+    expect(link.target).toBe('_blank');
+    expect(link.rel).toContain('noopener');
+  });
+
+  it('is outside the form, so it is not a setting', () => {
+    expect(doc.querySelector('#settings-form #privacy')).toBeNull();
+  });
+});

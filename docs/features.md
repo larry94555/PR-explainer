@@ -21,7 +21,7 @@ From any popup, open a chat panel to ask follow-up questions ("Is this thread sa
 Explanations and chat replies appear token by token as the local model generates them, with a loading state and a **Stop** button.
 
 ## 6. Local LLM only
-Talks to a local LLM server (Ollama by default, at `http://localhost:11434`). No cloud API keys and no telemetry. The extension only makes network requests to github.com pages it runs on and to the local LLM address you configure.
+Talks to a local LLM server (Ollama by default, at `http://localhost:11434`). No cloud API keys and no telemetry. The extension only makes network requests to GitHub (for the PR's description and files) and to the local LLM address you configure; anything else is refused, a test enforces it, and [PRIVACY.md](../PRIVACY.md) explains how.
 
 ## 7. Settings page
 An options page to set the LLM server URL, pick an installed model from a dropdown, test the connection, and adjust response length, temperature, and context size (automatic by default, read from the model). A **Show prompt** debug option shows the prompt sent under each explanation. Settings are saved in Chrome storage.

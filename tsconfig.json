@@ -13,7 +13,16 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "types": ["vitest/globals", "node", "vite/client"]
   },
-  "include": ["src", "tests", "demo", "vite.demo.config.ts", "vite.config.ts", "vitest.config.ts"]
+  "include": [
+    "src",
+    "tests",
+    "demo",
+    "scripts",
+    "vite.demo.config.ts",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ]
 }
