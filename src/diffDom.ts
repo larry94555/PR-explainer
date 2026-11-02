@@ -76,6 +76,56 @@ export function locateHunk(target: EventTarget | null): DiffHunk | null {
   return { header, lines: [...before, line, ...after], index: before.length };
 }
 
+// A block of diff lines the user selected (PR 4.4): every code line from
+// `start` to `end` in page order, whichever was selected first.
+export interface DiffRange {
+  // The code line rows in the range, for highlighting.
+  rows: Element[];
+  // The range's lines, with the header of any hunk the range crosses in
+  // between, in page order.
+  items: Array<{ line: DiffLine } | { header: string }>;
+  // The hunks around the first and the last line, for the lines before and
+  // after the range.
+  first: DiffHunk;
+  last: DiffHunk;
+}
+
+// Returns the lines from the row `start` is in to the row `end` is in,
+// 'other-file' when they are in two different files, or null when either is
+// not on a code line. The order of `start` and `end` does not matter.
+export function locateRange(
+  start: EventTarget | null,
+  end: EventTarget | null,
+): DiffRange | 'other-file' | null {
+  const a = findRow(start);
+  const b = findRow(end);
+  if (!a || !b || !a.layout.readLine(a.row) || !b.layout.readLine(b.row)) return null;
+  // Both layouts use one table per file.
+  if (a.layout !== b.layout || a.row.closest('table') !== b.row.closest('table')) {
+    return 'other-file';
+  }
+  const { layout } = a;
+  const backwards = (a.row.compareDocumentPosition(b.row) & Node.DOCUMENT_POSITION_PRECEDING) !== 0;
+  const [firstRow, lastRow] = backwards ? [b.row, a.row] : [a.row, b.row];
+
+  const rows: Element[] = [];
+  const items: DiffRange['items'] = [];
+  for (let r: Element | null = firstRow; r; r = r.nextElementSibling) {
+    if (layout.isBoundary(r)) {
+      const header = layout.headerText(r);
+      if (header) items.push({ header });
+    } else {
+      const line = layout.readLine(r);
+      if (line) {
+        rows.push(r);
+        items.push({ line });
+      }
+    }
+    if (r === lastRow) break;
+  }
+  return { rows, items, first: locateHunk(firstRow)!, last: locateHunk(lastRow)! };
+}
+
 interface Layout {
   // Matches a row of this layout's diff table.
   row: string;

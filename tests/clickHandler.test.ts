@@ -9,7 +9,13 @@ import {
 } from '../src/clickHandler';
 import type { ExplainResult } from '../src/explain/explainHandler';
 import { RequestError } from '../src/messaging/client';
-import { currentPopup, openPopup, POPUP_ID, type Popup } from '../src/popup/popup';
+import {
+  currentPopup,
+  openPopup,
+  POPUP_ID,
+  type Popup,
+  type PopupAnchor,
+} from '../src/popup/popup';
 
 function fixture(name: string): string {
   return readFileSync(resolve(import.meta.dirname, 'fixtures', name), 'utf8');
@@ -40,12 +46,12 @@ type PopupHooks = Parameters<ClickHandlerDeps['openPopup']>[1];
  * A popup that records what it was asked to show. Like the real one, it
  * ignores updates once stopped or closed. `pressStop` acts like its Stop button.
  */
-function fakePopup(anchor: Element, hooks: PopupHooks) {
+function fakePopup(anchor: PopupAnchor, hooks: PopupHooks) {
   const calls: string[] = [];
   let state: Popup['state'] = 'loading';
   const finished = () => state === 'closed' || state === 'stopped';
   const popup: Popup & {
-    anchor: Element;
+    anchor: PopupAnchor;
     calls: string[];
     pressStop(): void;
     pressRegenerate(): void;

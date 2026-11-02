@@ -40,6 +40,14 @@ export interface AnchorRect {
   left: number;
 }
 
+/**
+ * Anything whose box the popup can point at: a row, or a selected block of
+ * rows (src/selection.ts). Its box is read again each time the popup moves.
+ */
+export interface PopupAnchor {
+  getBoundingClientRect(): AnchorRect;
+}
+
 export interface PopupOptions {
   /** Called once when the popup closes, however it was closed. */
   onClose?: () => void;
@@ -131,7 +139,7 @@ export function currentPopup(): Popup | null {
 
 /** Opens a popup in the loading state next to `anchor`, closing any other popup. */
 export function openPopup(
-  anchor: Element | AnchorRect,
+  anchor: PopupAnchor | AnchorRect,
   options: PopupOptions = {},
   doc: Document = document,
 ): Popup {

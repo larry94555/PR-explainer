@@ -52,7 +52,7 @@ Update this table (and the PR's heading) when a roadmap PR merges.
 | 4.1 | Streaming in the Ollama client | Medium | ✅ Done ([#17](https://github.com/larry94555/PR-explainer/pull/17)) |
 | 4.2 | Stream to the popup with a Stop button | Medium | ✅ Done ([#18](https://github.com/larry94555/PR-explainer/pull/18)) |
 | 4.3 | Explanation cache and Regenerate | Medium | ✅ Done ([#19](https://github.com/larry94555/PR-explainer/pull/19)) |
-| 4.4 | Multi-line selection | Medium | Not started |
+| 4.4 | Multi-line selection | Medium | ✅ Done ([#20](https://github.com/larry94555/PR-explainer/pull/20)) |
 | 5.1 | Chat session model | Small | Not started |
 | 5.2 | Chat panel UI | Medium | Not started |
 | 5.3 | Connect chat to the LLM with streaming | Medium | Not started |
@@ -355,15 +355,26 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   11. On `chrome://extensions`, click the **service worker** link on the PR Explainer card and run `await debugLlm.cache()` in its console. Confirm it lists the saved entries, newest last, each with a `key`, `model`, `elapsedMs`, and the three sections.
   12. Close every Chrome window, open Chrome again, open the same PR, and click the line from step 5. Confirm it is asked fresh, since the cache only lasts for the browser session.
 
-### PR 4.4: Multi-line selection (Medium)
+### PR 4.4: Multi-line selection (Medium) ✅ Done
+- **Status:** Done ([#20](https://github.com/larry94555/PR-explainer/pull/20)).
 - **Why it's needed:** Many changes only make sense as a block, such as a whole `if` statement or function.
-- **Problem it solves:** Lets the user drag across lines (or shift-click a second line) to select a range in one file. The range is highlighted and an "Explain selection" button appears. The prompt is adjusted to explain the block as a whole. Selections across files are rejected with a short note.
-- **Unit tests added:** `selection.test.ts` (jsdom with fixtures) covers drag and shift-click ranges, ranges with mixed added and removed lines, reversed ranges (bottom to top), and cross-file selections being rejected.
-- **How to test:**
-  1. On a PR files page, drag across 5 lines in one file.
-  2. Confirm they are highlighted and an "Explain selection" button appears.
-  3. Click it and confirm the explanation covers the whole block.
-  4. Try selecting across two files and confirm the "one file at a time" note.
+- **Problem it solves:** Adds `src/selection.ts`. The user picks a range of lines in one file by dragging across them (a text selection that covers two or more rows) or by clicking one line and Shift-clicking another, in either direction. The rows are tinted blue with a blue bar on the left, and an **Explain selection (N lines)** button appears under the last one. Pressing it opens the usual popup, pointed at the whole block (below it, or above it when there is no room below, instead of covering it), with the same streaming, elapsed time, **Stop**, cache and **Regenerate** as a single line: the shared part of the click handler is now `explainInPopup` in `src/clickHandler.ts`. `locateRange` in `src/diffDom.ts` collects the rows between the two ends, keeping the header of any hunk the range crosses, and `formatSelection` in `src/lineContext.ts` sends the model the file, a summary (`Selection: 5 lines (3 added, 2 unchanged); lines 144 to 150 of the new file`), up to 10 lines before, the selected lines, and up to 10 lines after. The service worker sees the `Selection:` line and uses a system prompt that asks for the block to be explained as a whole, not line by line; the single-line prompt is unchanged, so cached single-line answers still hit. A range across two files shows "Select lines in one file at a time." for four seconds instead of a button, and a range over 100 lines asks for a smaller one (the full token budget is PR 6.2). Esc, or a mousedown anywhere else, clears the highlight and the button; while the block's popup is open the highlight stays until the popup closes. Nothing happens while the toolbar button has click-to-explain off, and a plain click on one line works as before.
+- **Unit tests added:** `selection.test.ts` (jsdom with both diff fixtures) covers `locateRange` (a range with mixed added and removed lines, the same range selected bottom to top, keeping a crossed hunk header, rejecting a range across two files, and ends that are not on a code line), `formatSelection` (the summary, lines before and after, a block of only added lines), the block prompt being used for a selection while a single line keeps the line prompt (this also checks the `Selection:` text matches in the content script and the service worker), and the page behavior: a drag highlights the rows and the button explains them as one block, Shift-click in either direction, a selection inside one line being ignored, the cross-file note (and it going away), the line limit, Esc and a click elsewhere clearing the highlight, a later click not bringing back an old selection the browser still shows (the full mousedown, mouseup, click sequence), nothing happening while turned off, and a new selection replacing the highlight of a block whose popup is still open. All the click handler tests still pass against the shared `explainInPopup`.
+- **Screenshots** (taken on PR #19's **Files changed** tab with a fake Ollama that streams a canned reply; GitHub's own stylesheet is blocked in the screenshot sandbox, so the diff uses a small stand-in style): [a Shift-click selection with the Explain selection button](screenshots/pr-4.4/1-selected.png), [the block's explanation streaming in](screenshots/pr-4.4/2-streaming.png), [the finished explanation above the block](screenshots/pr-4.4/3-done.png), [the note for a range across two files](screenshots/pr-4.4/4-other-file.png).
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test` and confirm the `selection` tests pass (and all the others still do).
+  2. Make sure Ollama is running (`ollama list` works), `OLLAMA_ORIGINS` is set (see PR 2.2), and a model is chosen on the settings page.
+  3. Run `npm run dev`, wait for `built in`, then reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
+  4. Open the **Files changed** tab of a PR in **Unified** view, for example `https://github.com/larry94555/PR-explainer/pull/19/files`, and refresh the page so the new content script loads. Press `F12` and open the **Console** tab.
+  5. In `src/clickHandler.ts`, press the mouse on the code of one line and drag down across about five lines, then let go. Confirm the five rows turn light blue with a blue bar on the left, and a green **Explain selection (5 lines)** button appears under the last row. No popup opens yet.
+  6. Click **Explain selection**. Confirm the popup opens below the block (or above it, near the bottom of the window) without covering it, the timer counts up with a **Stop** button, the answer streams in, and it ends with **What it does**, **Why it's needed**, and **Concerns** about the block as a whole, then "Answered in …" and **Regenerate**. The rows stay highlighted while the popup is open.
+  7. In the console, confirm `[PR Explainer] context for the model:` shows a `Selection: 5 lines (…)` line and a `Selected lines:` section, and then `[PR Explainer] explained in …`.
+  8. Press **Esc**. Confirm the popup closes and the highlight goes away. Drag across the same five lines again and click **Explain selection**; confirm the answer appears at once with "From cache · took …". Click **Regenerate** and confirm it asks again.
+  9. Click one line (its popup opens; press **Esc**), then hold **Shift** and click a line about six rows above it. Confirm the rows between the two are highlighted with the button, as in step 5. Press **Stop** partway through an explanation to confirm Stop still works for a block.
+  10. Click a line in one file, press **Esc**, then **Shift**-click a line in a different file. Confirm a small "Select lines in one file at a time." note appears and fades after about four seconds, with nothing highlighted.
+  11. Drag across a selection inside a single line (a few words). Confirm nothing is highlighted and no button appears, so copying text still works.
+  12. Click a single line without Shift and confirm it is explained on its own, as before.
+  13. Click the PR Explainer toolbar button to turn it off, drag across several lines, and confirm nothing is highlighted. Turn it back on.
 
 ---
 
