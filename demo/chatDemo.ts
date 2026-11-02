@@ -66,16 +66,21 @@ function open(subject: ChatSubject, messages: ChatPanelMessage[]): void {
       const answer = chat.addMessage('assistant', '');
       chat.setBusy(true);
       let shown = 0;
-      const timer = setInterval(() => {
-        if (!chat.isOpen) return clearInterval(timer);
-        shown++;
-        answer.update(words.slice(0, shown).join(''));
-        if (shown >= words.length) {
-          clearInterval(timer);
-          chat.setBusy(false);
-          status.textContent = 'Last event: answer finished';
-        }
-      }, 60);
+      let timer: ReturnType<typeof setInterval> | undefined;
+      // Like a real model, it "thinks" for a moment before the first word,
+      // so the answer's timer (PR 8.1) can be seen ticking.
+      setTimeout(() => {
+        timer = setInterval(() => {
+          if (!chat.isOpen) return clearInterval(timer);
+          shown++;
+          answer.update(words.slice(0, shown).join(''));
+          if (shown >= words.length) {
+            clearInterval(timer);
+            chat.setBusy(false);
+            status.textContent = 'Last event: answer finished';
+          }
+        }, 60);
+      }, 1500);
     },
   });
   chat.focus();
