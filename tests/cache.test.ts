@@ -149,7 +149,7 @@ describe('explain handler with the cache', () => {
     const chatStream = vi.fn(async function* (): AsyncGenerator<string, ChatStreamEnd, undefined> {
       time += 9800; // the model takes 9.8 s
       yield REPLY;
-      return { model: settings.model, doneReason: 'stop' };
+      return { model: settings.model, doneReason: 'stop', timings: { totalMs: 9_700 } };
     });
     const client: LlmClient = {
       listModels: vi.fn(),
@@ -180,6 +180,8 @@ describe('explain handler with the cache', () => {
     const first = await handler(payload);
     expect(first).toMatchObject({ status: 'done', model: 'qwen2.5-coder:7b' });
     expect(first).not.toHaveProperty('cached');
+    // Where the time went is only shown for an answer from the model (PR 8.1).
+    expect(first).toHaveProperty('timings', { totalMs: 9_700 });
 
     const onChunk = vi.fn();
     const second = await handler(payload, { onChunk });
@@ -187,6 +189,7 @@ describe('explain handler with the cache', () => {
     expect(onChunk).not.toHaveBeenCalled();
     expect(second).toEqual({
       ...first,
+      timings: undefined,
       cached: { elapsedMs: 9800, savedAt: 10_800 },
     });
   });

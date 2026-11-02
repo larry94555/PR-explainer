@@ -31,11 +31,18 @@
 // under the explanation shows the prompt, its estimated size against the
 // budget, and what was trimmed to fit.
 //
+// Once a model's answer is shown, a Details button next to the time opens a
+// short table of where the time went (PR 8.1): loading the model, reading
+// the prompt, writing the answer (with tokens per second), and the time spent
+// outside Ollama. It is not shown for a cached answer.
+//
 // The content script opens it from its click handler (src/clickHandler.ts),
 // and the demo page (`npm run demo:popup`) shows it with fake data.
 
 import type { PromptReport } from '../explain/fitPrompt';
 import type { Explanation, SectionKey } from '../explain/parseExplanation';
+import type { LlmTimings } from '../llm/types';
+import { latencyBreakdown, latencyRows } from './latencyBreakdown';
 import { appendInline, renderMarkdown } from './renderMarkdown';
 import { POPUP_STYLE } from './popupStyle';
 import { restoreFocus } from '../a11y';
@@ -117,6 +124,12 @@ export interface Popup {
   showError(message: string, fix: string): void;
   /** Adds the prompt that was sent under the explanation (the Show prompt setting). */
   showPrompt(report: PromptReport): void;
+  /**
+   * Adds the Details button and its latency table for the answer shown
+   * (PR 8.1). Does nothing unless an answer is shown, or when the timings
+   * have nothing to split the time by.
+   */
+  showTimings(timings: LlmTimings | undefined): void;
   close(): void;
 }
 
@@ -221,7 +234,45 @@ export function openPopup(
   regenerateButton.type = 'button';
   regenerateButton.textContent = 'Regenerate';
   regenerateButton.title = 'Ask the model again, without the cache';
-  header.append(title, modelLabel, elapsedLabel, stopButton, regenerateButton, closeButton);
+  // Shown only once the server's timings for an answer are known (PR 8.1).
+  const detailsButton = doc.createElement('button');
+  detailsButton.className = 'details';
+  detailsButton.type = 'button';
+  detailsButton.textContent = 'Details';
+  detailsButton.title = 'Show where the time went';
+  detailsButton.hidden = true;
+  detailsButton.setAttribute('aria-expanded', 'false');
+  detailsButton.setAttribute('aria-controls', 'pe-latency');
+  header.append(
+    title,
+    modelLabel,
+    elapsedLabel,
+    detailsButton,
+    stopButton,
+    regenerateButton,
+    closeButton,
+  );
+
+  const latency = doc.createElement('dl');
+  latency.className = 'latency';
+  latency.id = 'pe-latency';
+  latency.setAttribute('aria-label', 'Where the time went');
+  latency.hidden = true;
+  let detailsOpen = false;
+  const showDetails = (open: boolean) => {
+    detailsOpen = open;
+    latency.hidden = !open;
+    detailsButton.setAttribute('aria-expanded', String(open));
+  };
+  const hideTimings = () => {
+    detailsButton.hidden = true;
+    showDetails(false);
+    latency.replaceChildren();
+  };
+  detailsButton.addEventListener('click', () => {
+    showDetails(!detailsOpen);
+    place();
+  });
 
   const body = doc.createElement('div');
   body.className = 'body';
@@ -242,7 +293,7 @@ export function openPopup(
     });
     footer.append(askButton);
   }
-  panel.append(header, body, footer);
+  panel.append(header, latency, body, footer);
   shadow.append(style, panel);
   doc.body.append(host);
   const stopFollowingTheme = followTheme(host, doc);
@@ -310,6 +361,7 @@ export function openPopup(
 
   const setModel = (model?: string) => {
     modelLabel.textContent = model ?? '';
+    modelLabel.title = model ?? '';
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -356,6 +408,7 @@ export function openPopup(
       if (state === 'closed') return;
       setModel(model);
       startTicking();
+      hideTimings();
       const loading = doc.createElement('div');
       loading.className = 'loading';
       const spinner = doc.createElement('span');
@@ -407,6 +460,22 @@ export function openPopup(
       appendInline(fixEl, fix);
       error.append(messageEl, fixEl);
       setBody('failed', error);
+    },
+    showTimings(timings) {
+      if (state !== 'done') return;
+      const breakdown = latencyBreakdown(elapsed(), timings);
+      if (!breakdown) return;
+      latency.replaceChildren(
+        ...latencyRows(breakdown).flatMap((row) => {
+          const term = doc.createElement('dt');
+          term.textContent = row.label;
+          const value = doc.createElement('dd');
+          value.dataset.row = row.key;
+          value.textContent = row.value;
+          return [term, value];
+        }),
+      );
+      detailsButton.hidden = false;
     },
     showPrompt(report) {
       if (state !== 'done') return;

@@ -51,6 +51,8 @@ describe('popup', () => {
     expect(shadow().querySelector('.spinner')).not.toBeNull();
     expect(shadow().querySelector('.loading')?.textContent).toBe('Asking qwen2.5-coder:7b…');
     expect(shadow().querySelector('.model')?.textContent).toBe('qwen2.5-coder:7b');
+    // The name is cut short when the header is full, so it is also the tooltip.
+    expect(shadow().querySelector<HTMLElement>('.model')?.title).toBe('qwen2.5-coder:7b');
     expect(shadow().querySelector('[role="dialog"]')).not.toBeNull();
   });
 
@@ -251,6 +253,81 @@ describe('popup', () => {
       stopButton().click();
       expect(onStop).not.toHaveBeenCalled();
       expect(popup.state).toBe('done');
+    });
+  });
+
+  describe('latency Details (PR 8.1)', () => {
+    const TIMINGS = {
+      totalMs: 13_900,
+      loadMs: 4_100,
+      promptTokens: 812,
+      promptMs: 1_300,
+      answerTokens: 240,
+      answerMs: 8_000,
+    };
+    const detailsButton = () => shadow().querySelector<HTMLButtonElement>('button.details')!;
+    const table = () => shadow().querySelector<HTMLElement>('dl.latency')!;
+    const rows = () =>
+      Array.from(table().querySelectorAll('dt'), (dt) => [
+        dt.textContent,
+        dt.nextElementSibling!.textContent,
+      ]);
+
+    it('is hidden until the timings of an answer are shown', () => {
+      const popup = openPopup(ANCHOR, { now: () => 0 });
+      expect(detailsButton().hidden).toBe(true);
+      popup.showTimings(TIMINGS);
+      expect(detailsButton().hidden).toBe(true);
+      popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+      expect(detailsButton().hidden).toBe(true);
+      popup.showTimings(TIMINGS);
+      expect(detailsButton().hidden).toBe(false);
+      expect(detailsButton().textContent).toBe('Details');
+      expect(table().hidden).toBe(true);
+    });
+
+    it('opens and closes the table of where the time went', () => {
+      let time = 0;
+      const popup = openPopup(ANCHOR, { now: () => time });
+      time = 14_200;
+      popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+      popup.showTimings(TIMINGS);
+      expect(detailsButton().getAttribute('aria-expanded')).toBe('false');
+      expect(detailsButton().getAttribute('aria-controls')).toBe(table().id);
+
+      detailsButton().click();
+      expect(table().hidden).toBe(false);
+      expect(detailsButton().getAttribute('aria-expanded')).toBe('true');
+      expect(rows()).toEqual([
+        ['Load', '4.1 s'],
+        ['Prompt', '812 tokens · 1.3 s'],
+        ['Answer', '240 tokens · 8.0 s · 30.0 tokens/s'],
+        ['Outside Ollama', '300 ms'],
+        ['Total', '14.2 s'],
+      ]);
+
+      detailsButton().click();
+      expect(table().hidden).toBe(true);
+      expect(detailsButton().getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('is not shown when the server gave no timings, as for a cached answer', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b', { elapsedMs: 9_000 });
+      popup.showTimings(undefined);
+      popup.showTimings({});
+      expect(detailsButton().hidden).toBe(true);
+    });
+
+    it('goes away when Regenerate asks again', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+      popup.showTimings(TIMINGS);
+      detailsButton().click();
+      shadow().querySelector<HTMLButtonElement>('button.regenerate')!.click();
+      expect(detailsButton().hidden).toBe(true);
+      expect(table().hidden).toBe(true);
+      expect(table().children).toHaveLength(0);
     });
   });
 

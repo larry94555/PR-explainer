@@ -274,6 +274,7 @@ function setup(isEnabled?: () => boolean) {
         showExplanation: () => {},
         showError: () => {},
         showPrompt: () => {},
+        showTimings: () => {},
         close: () => hooks.onClose(),
       } as Popup;
     },

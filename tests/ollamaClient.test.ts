@@ -1,5 +1,5 @@
 import { createLlmClient } from '../src/llm/createClient';
-import { buildChatBody, OllamaClient, type FetchLike } from '../src/llm/ollamaClient';
+import { buildChatBody, OllamaClient, readTimings, type FetchLike } from '../src/llm/ollamaClient';
 import { LlmError, type LlmErrorKind } from '../src/llm/types';
 
 const BASE = 'http://localhost:11434';
@@ -271,6 +271,98 @@ describe('OllamaClient.chat', () => {
     const fetch = fakeFetch(() => jsonResponse({ message: { role: 'assistant', content: 'OK' } }));
     const reply = await new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, { model: 'm' });
     expect(reply.model).toBe('m');
+  });
+});
+
+// Ollama's timing fields, in nanoseconds (PR 8.1).
+const TIMINGS = {
+  total_duration: 13_900_000_000,
+  load_duration: 4_100_000_000,
+  prompt_eval_count: 812,
+  prompt_eval_duration: 1_300_000_000,
+  eval_count: 240,
+  eval_duration: 8_000_500_000,
+};
+const TIMINGS_MS = {
+  totalMs: 13_900,
+  loadMs: 4_100,
+  promptTokens: 812,
+  promptMs: 1_300,
+  answerTokens: 240,
+  answerMs: 8_000.5,
+};
+
+describe('readTimings', () => {
+  it('converts the durations from nanoseconds to milliseconds and keeps the counts', () => {
+    expect(readTimings({ ...CHAT_REPLY, ...TIMINGS })).toEqual(TIMINGS_MS);
+  });
+
+  it('leaves out fields that are missing or not usable numbers', () => {
+    expect(
+      readTimings({
+        total_duration: 2_000_000,
+        load_duration: '5',
+        prompt_eval_count: -1,
+        eval_count: Number.NaN,
+        eval_duration: null,
+      }),
+    ).toEqual({ totalMs: 2 });
+  });
+
+  it('is undefined when there are no timings', () => {
+    expect(readTimings(CHAT_REPLY)).toBeUndefined();
+    expect(readTimings(null)).toBeUndefined();
+  });
+});
+
+describe('OllamaClient timings (PR 8.1)', () => {
+  const messages = [{ role: 'user' as const, content: 'Reply with OK' }];
+  const options = { model: 'qwen2.5-coder:7b' };
+
+  it('returns the timings with a chat() reply', async () => {
+    const fetch = fakeFetch(() => jsonResponse({ ...CHAT_REPLY, ...TIMINGS }));
+    const reply = await new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, options);
+    expect(reply.timings).toEqual(TIMINGS_MS);
+  });
+
+  it("returns the done line's timings at the end of a stream", async () => {
+    const lines = [
+      { model: 'qwen2.5-coder:7b', message: { content: 'O' }, done: false },
+      { model: 'qwen2.5-coder:7b', message: { content: 'K' }, done: false },
+      {
+        model: 'qwen2.5-coder:7b',
+        message: { content: '' },
+        done: true,
+        done_reason: 'stop',
+        ...TIMINGS,
+      },
+    ];
+    const fetch = fakeFetch(
+      () => new Response(lines.map((l) => JSON.stringify(l)).join('\n') + '\n'),
+    );
+    const stream = new OllamaClient({ baseUrl: BASE, fetch }).chatStream(messages, options);
+    const pieces: string[] = [];
+    let next = await stream.next();
+    while (!next.done) {
+      pieces.push(next.value);
+      next = await stream.next();
+    }
+    expect(pieces).toEqual(['O', 'K']);
+    expect(next.value).toEqual({
+      model: 'qwen2.5-coder:7b',
+      doneReason: 'stop',
+      timings: TIMINGS_MS,
+    });
+  });
+
+  it('leaves timings out when the server sends none', async () => {
+    const fetch = fakeFetch(
+      () => new Response(JSON.stringify({ model: 'm', message: { content: 'OK' }, done: true })),
+    );
+    const stream = new OllamaClient({ baseUrl: BASE, fetch }).chatStream(messages, options);
+    let next = await stream.next();
+    while (!next.done) next = await stream.next();
+    expect(next.value).toEqual({ model: 'm' });
   });
 });
 

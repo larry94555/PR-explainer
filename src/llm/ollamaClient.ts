@@ -9,6 +9,9 @@
 // header, which Ollama may reject with 403 (see the origin-blocked error).
 // Every request goes through createLlmFetch (PR 7.4), which refuses any
 // address that is not the configured server on this computer.
+//
+// A finished reply carries Ollama's timing fields (PR 8.1), read by
+// readTimings and converted from nanoseconds to milliseconds.
 
 import {
   LlmError,
@@ -17,6 +20,7 @@ import {
   type ChatReply,
   type ChatStreamEnd,
   type LlmClient,
+  type LlmTimings,
   type ModelContext,
   type ModelInfo,
 } from './types';
@@ -82,7 +86,12 @@ export class OllamaClient implements LlmClient {
     if (typeof message?.content !== 'string') {
       throw badResponse('/api/chat', 'missing "message.content"');
     }
-    return { content: message.content, model: typeof replyModel === 'string' ? replyModel : model };
+    const timings = readTimings(body);
+    return {
+      content: message.content,
+      model: typeof replyModel === 'string' ? replyModel : model,
+      ...(timings && { timings }),
+    };
   }
 
   async *chatStream(
@@ -133,6 +142,7 @@ export class OllamaClient implements LlmClient {
             return {
               model: part.model ?? model,
               ...(part.doneReason && { doneReason: part.doneReason }),
+              ...(part.timings && { timings: part.timings }),
             };
           }
         }
@@ -215,6 +225,33 @@ interface StreamPart {
   done: boolean;
   model?: string;
   doneReason?: string;
+  timings?: LlmTimings;
+}
+
+// Ollama's timing fields on a finished reply, as nanoseconds and counts.
+const TIMING_FIELDS = {
+  total_duration: 'totalMs',
+  load_duration: 'loadMs',
+  prompt_eval_count: 'promptTokens',
+  prompt_eval_duration: 'promptMs',
+  eval_count: 'answerTokens',
+  eval_duration: 'answerMs',
+} as const satisfies Record<string, keyof LlmTimings>;
+
+/**
+ * The timing fields of a finished reply, with durations in milliseconds, or
+ * undefined when it has none. A field that is missing or not a number is left
+ * out, since older servers and cached prompts leave some out. Exported for tests.
+ */
+export function readTimings(body: unknown): LlmTimings | undefined {
+  if (typeof body !== 'object' || body === null) return undefined;
+  const timings: LlmTimings = {};
+  for (const [field, key] of Object.entries(TIMING_FIELDS)) {
+    const value = (body as Record<string, unknown>)[field];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue;
+    timings[key] = key.endsWith('Tokens') ? value : value / 1e6;
+  }
+  return Object.keys(timings).length ? timings : undefined;
 }
 
 // One line of Ollama's stream: {"model": ..., "message": {"content": "..."},
@@ -247,11 +284,13 @@ function parseStreamLine(line: string): StreamPart {
   if (content === undefined && done !== true) {
     throw badResponse('/api/chat', 'a stream line has no "message.content"');
   }
+  const timings = done === true ? readTimings(parsed) : undefined;
   return {
     content: content ?? '',
     done: done === true,
     ...(typeof model === 'string' && { model }),
     ...(typeof done_reason === 'string' && { doneReason: done_reason }),
+    ...(timings && { timings }),
   };
 }
 

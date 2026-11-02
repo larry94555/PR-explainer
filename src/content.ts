@@ -17,6 +17,7 @@ import { trackEnabled } from './enabledState';
 import { openAfter, openChatStream, openExplainStream, sendRequest } from './messaging/client';
 import { closeDetached, DiffPageFeatures, watchNavigation } from './navigation';
 import { currentPopup, openPopup } from './popup/popup';
+import { latencyBreakdown, latencySummary } from './popup/latencyBreakdown';
 import { createFileContextLoader, type CodeSpan } from './fileContext';
 import type { FileContext } from './explain/explainPrompt';
 import { createPrMetadataLoader, type PrMetadata } from './prMetadata';
@@ -173,12 +174,15 @@ const explainDeps: ClickHandlerDeps = {
       : undefined,
   // Every build logs how long each explanation took, to track the local
   // model's latency.
-  onTiming: ({ elapsedMs, status, model, firstChunkMs, cached }) => {
+  onTiming: ({ elapsedMs, status, model, firstChunkMs, cached, timings }) => {
     const verb = { done: 'explained', failed: 'failed', stopped: 'stopped' }[status];
+    // Where the time went, as the popup's Details shows it (PR 8.1).
+    const breakdown = latencyBreakdown(elapsedMs, timings);
     const details = [
       model,
       firstChunkMs === undefined ? '' : `first text after ${(firstChunkMs / 1000).toFixed(1)} s`,
       cached ? 'from cache' : '',
+      breakdown ? latencySummary(breakdown) : '',
     ].filter(Boolean);
     console.info(
       `[PR Explainer] ${verb} in ${(elapsedMs / 1000).toFixed(1)} s` +

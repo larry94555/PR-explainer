@@ -35,7 +35,8 @@ export const POPUP_STYLE = `
     border-bottom: 1px solid var(--pe-border);
   }
   .title { font-weight: 600; }
-  .model { flex: 1; color: var(--pe-muted); font-size: 12px; }
+  /* One line, cut short with … when the header is full; the whole name is its tooltip. */
+  .model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pe-muted); font-size: 12px; }
   .elapsed { color: var(--pe-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .close {
     border: 0;
@@ -48,7 +49,7 @@ export const POPUP_STYLE = `
     cursor: pointer;
   }
   .close:hover, .close:focus-visible { background: var(--pe-hover-bg); color: var(--pe-fg); }
-  .stop, .regenerate {
+  .stop, .regenerate, .details {
     border: 1px solid var(--pe-border);
     background: var(--pe-bg);
     color: var(--pe-fg);
@@ -62,6 +63,24 @@ export const POPUP_STYLE = `
   .stop:hover, .stop:focus-visible { background: var(--pe-danger-bg); border-color: var(--pe-danger); color: var(--pe-danger); }
   /* Stop only makes sense while the model is working. */
   .popup:not([data-state='loading']):not([data-state='streaming']) .stop { display: none; }
+  .details[hidden] { display: none; }
+  .details:hover, .details:focus-visible, .details[aria-expanded='true'] { background: var(--pe-hover-bg); }
+  /* Where the time went (PR 8.1): a two-column table under the header. */
+  .latency {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 2px 12px;
+    margin: 0;
+    padding: 8px 12px;
+    background: var(--pe-subtle-bg);
+    border-bottom: 1px solid var(--pe-border-muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .latency[hidden] { display: none; }
+  .latency dt { color: var(--pe-muted); }
+  .latency dd { margin: 0; }
+  .latency dt:nth-last-of-type(1), .latency dd:last-of-type { font-weight: 600; }
   .regenerate:hover, .regenerate:focus-visible { background: var(--pe-accent-bg); border-color: var(--pe-accent); color: var(--pe-accent); }
   /* Regenerate only makes sense once the model has stopped working. */
   .popup:not([data-state='done']):not([data-state='failed']):not([data-state='stopped']) .regenerate { display: none; }

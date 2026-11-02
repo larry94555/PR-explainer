@@ -135,6 +135,16 @@ describe('explain handler', () => {
     }
   });
 
+  it("passes on the server's timings with the answer (PR 8.1)", async () => {
+    const timings = { totalMs: 9_000, loadMs: 20, answerTokens: 200, answerMs: 8_000 };
+    const { handler } = setup(async function* () {
+      yield '## What it does\nA.';
+      return { model: 'qwen2.5-coder:7b', timings };
+    });
+    const result = await handler({ context: SAMPLE_CONTEXT });
+    expect(result).toMatchObject({ status: 'done', timings });
+  });
+
   it('works without onChunk', async () => {
     const { handler } = setup(streamOf(['## What it does\nA.'], undefined, 'llama3'));
     await expect(handler({ context: SAMPLE_CONTEXT })).resolves.toMatchObject({
