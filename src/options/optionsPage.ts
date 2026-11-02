@@ -392,7 +392,13 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
 
   async function speedTest(): Promise<void> {
     if (speedRun) return;
-    const values = validForm(['llmUrl', 'temperature', 'maxResponseTokens', 'keepAliveMinutes']);
+    const values = validForm([
+      'llmUrl',
+      'temperature',
+      'maxResponseTokens',
+      'contextTokens',
+      'keepAliveMinutes',
+    ]);
     if (!values) {
       speedStatus.textContent = 'Fix the problems above, then try again.';
       return;
@@ -432,6 +438,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
         temperature: values.temperature,
         maxResponseTokens: values.maxResponseTokens,
         keepAliveMinutes: values.keepAliveMinutes,
+        contextTokens: values.contextTokens,
         signal: run.signal,
         now,
         onProgress: (sofar, next) => {

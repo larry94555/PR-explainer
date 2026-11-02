@@ -3,9 +3,10 @@
 // long the answer took. The model's size and whether it runs on the GPU make
 // the biggest difference to speed, and this shows the user both.
 //
-// Each model is loaded first, so the time is what a click takes once the
-// model is warm (PR 8.3), and its GPU share is read from /api/ps while it is
-// loaded. Every model but the one picked in the settings is unloaded after its
+// Each model is loaded first, with the context window an explanation would
+// use, so the time is what a click takes once the model is warm (PR 8.3) and
+// the GPU share is what explanations get. The share is read from /api/ps
+// while the model is loaded. Every model but the one picked in the settings is unloaded after its
 // answer, so models tested earlier do not take video memory from later ones;
 // the picked one is tested last and stays loaded.
 
@@ -56,6 +57,13 @@ export interface SpeedTestOptions {
   temperature: number;
   maxResponseTokens: number;
   keepAliveMinutes: number;
+  /**
+   * The Context size setting: a set window is used as it is, so the test
+   * loads the same KV cache (and so the same GPU fit) as an explanation would.
+   * 0 (automatic) uses MIN_NUM_CTX, which is what automatic sizing (PR 8.5)
+   * and the warm-up give a short explanation like the sample.
+   */
+  contextTokens: number;
   signal?: AbortSignal;
   /** Called after each model, with the results so far, in test order. */
   onProgress?(results: SpeedResult[], next?: string): void;
@@ -68,6 +76,7 @@ export async function runSpeedTest(options: SpeedTestOptions): Promise<SpeedResu
   const { client, signal, current } = options;
   const now = options.now ?? (() => performance.now());
   const messages = buildExplainPrompt(SAMPLE_CONTEXT);
+  const contextTokens = options.contextTokens > 0 ? options.contextTokens : MIN_NUM_CTX;
   // The picked model goes last, so it is the one left loaded.
   const isCurrent = (m: string) => !!current && isSameModel(m, current);
   const order = [
@@ -85,7 +94,7 @@ export async function runSpeedTest(options: SpeedTestOptions): Promise<SpeedResu
     try {
       await client.loadModel(model, {
         keepAliveMinutes: Math.max(1, keepAliveMinutes),
-        contextTokens: MIN_NUM_CTX,
+        contextTokens,
         signal,
       });
       const gpu = await readGpu(client, model, signal);
@@ -94,7 +103,7 @@ export async function runSpeedTest(options: SpeedTestOptions): Promise<SpeedResu
         model,
         temperature: options.temperature,
         maxResponseTokens: options.maxResponseTokens,
-        contextTokens: MIN_NUM_CTX,
+        contextTokens,
         keepAliveMinutes,
         signal,
       });

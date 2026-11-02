@@ -50,6 +50,7 @@ function options(client: LlmClient, clock: { t: number }, extra: Partial<SpeedTe
     temperature: 0.2,
     maxResponseTokens: 300,
     keepAliveMinutes: 30,
+    contextTokens: 0,
     now: () => clock.t,
     ...extra,
   } satisfies SpeedTestOptions;
@@ -115,6 +116,20 @@ describe('runSpeedTest (PR 8.6)', () => {
     const loads = vi.mocked(client.loadModel).mock.invocationCallOrder;
     const chats = vi.mocked(client.chat).mock.invocationCallOrder;
     expect(loads[0]).toBeLessThan(chats[0]!);
+  });
+
+  it('uses a set Context size for loading and asking, so the GPU fit matches explanations', async () => {
+    const clock = { t: 0 };
+    const client = fakeClient({ a: { ms: 1 } }, clock);
+    await runSpeedTest(options(client, clock, { models: ['a'], contextTokens: 16384 }));
+    expect(client.loadModel).toHaveBeenCalledWith(
+      'a',
+      expect.objectContaining({ contextTokens: 16384 }),
+    );
+    expect(client.chat).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ contextTokens: 16384 }),
+    );
   });
 
   it('tests the picked model last and keeps only it loaded', async () => {

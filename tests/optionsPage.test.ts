@@ -494,6 +494,37 @@ describe('options page Speed section (PR 8.6)', () => {
     );
   });
 
+  it('runs the test with the Context size in the form (automatic is 2048)', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:7b': 1_000 });
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    await page.speedTest();
+    expect(client.chat).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ contextTokens: 2048 }),
+    );
+
+    $<HTMLInputElement>('contextTokens').value = '8192';
+    await page.speedTest();
+    expect(client.loadModel).toHaveBeenLastCalledWith(
+      'qwen2.5-coder:7b',
+      expect.objectContaining({ contextTokens: 8192 }),
+    );
+    expect(client.chat).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ contextTokens: 8192 }),
+    );
+  });
+
+  it('does not run with a bad Context size', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:7b': 1_000 });
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    $<HTMLInputElement>('contextTokens').value = '100';
+    await page.speedTest();
+    expect(errorFor('contextTokens')).not.toBe('');
+    expect(text('speed-status')).toBe('Fix the problems above, then try again.');
+    expect(client.chat).not.toHaveBeenCalled();
+  });
+
   it('says so when no model answers in under 10 seconds', async () => {
     const { client, now } = timedClient({ 'qwen2.5-coder:7b': 14_000 });
     const page = await initOptionsPage(document, { ...fakeDeps(client), now });
