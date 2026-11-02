@@ -12,8 +12,9 @@ import { currentChatPanel, openChatPanel } from './chat/chatPanel';
 import { ChatSessions } from './chat/chatSession';
 import { createClickHandler, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
-import { openChatStream, openExplainStream, sendRequest } from './messaging/client';
+import { openAfter, openChatStream, openExplainStream, sendRequest } from './messaging/client';
 import { currentPopup, openPopup } from './popup/popup';
+import { createPrMetadataLoader, type PrMetadata } from './prMetadata';
 import { parsePrUrl } from './prUrl';
 import { installSelection } from './selection';
 
@@ -21,6 +22,23 @@ import { installSelection } from './selection';
 function prName(url: string): string | undefined {
   const pr = parsePrUrl(url);
   return pr ? `${pr.owner}/${pr.repo}#${pr.number}` : undefined;
+}
+
+// The PR's title and description (PR 6.1), read from the page or fetched
+// from its Conversation tab once per PR, with the user's GitHub cookies.
+const prMetadata = createPrMetadataLoader({
+  doc: document,
+  fetchHtml: async (path, signal) => {
+    const response = await fetch(path, { credentials: 'same-origin', signal });
+    if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
+    return response.text();
+  },
+});
+
+/** Starts reading the current PR's title and description, if on a PR. */
+function loadPrMetadata(): Promise<PrMetadata | undefined> {
+  const pr = parsePrUrl(location.href);
+  return pr ? prMetadata.load(pr) : Promise.resolve(undefined);
 }
 
 let workerStatus = 'Service worker: checking…';
@@ -50,6 +68,8 @@ function update(): void {
 }
 
 update();
+// Read the description ahead of the first click, so it does not wait.
+void loadPrMetadata();
 
 sendRequest('ping', undefined).then(
   () => {
@@ -66,7 +86,10 @@ sendRequest('ping', undefined).then(
 // GitHub changes pages without a full reload (Turbo), so this script keeps
 // running when the user moves from a PR to, say, an issue. Re-check the URL
 // after each of those navigations and on back/forward.
-document.addEventListener('turbo:load', update);
+document.addEventListener('turbo:load', () => {
+  update();
+  void loadPrMetadata();
+});
 document.addEventListener('turbo:render', update);
 window.addEventListener('popstate', update);
 
@@ -78,9 +101,20 @@ const chats = new ChatSessions();
 const explainDeps: ClickHandlerDeps = {
   isEnabled: () => enabled.current() === true,
   // The PR names the cache entry, so the same code in two PRs is asked
-  // separately (src/explain/explainCache.ts).
-  explain: (context, onChunk, { fresh }) =>
-    openExplainStream({ context, pr: prName(location.href), fresh }, onChunk),
+  // separately (src/explain/explainCache.ts). The PR's title and description
+  // go with the code, so the answer can say why the PR needs it (PR 6.1).
+  explain: (context, onChunk, { fresh }) => {
+    const pr = prName(location.href);
+    return openAfter(loadPrMetadata(), (prInfo) => {
+      if (import.meta.env.MODE === 'development' && prInfo) {
+        console.log(
+          `[PR Explainer] PR title for the model: ${prInfo.title || '(none)'}\n` +
+            `PR description for the model:\n${prInfo.description || '(none)'}`,
+        );
+      }
+      return openExplainStream({ context, pr, fresh, prInfo }, onChunk);
+    });
+  },
   openPopup: (anchor, options) => openPopup(anchor, options),
   // The popup's Ask a question button: chat about the explained code, with
   // answers streamed from the service worker (src/chat/chatFlow.ts).

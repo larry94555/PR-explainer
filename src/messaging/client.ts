@@ -133,6 +133,46 @@ export function openChatStream(
   return openStream<ChatResult>(CHAT_PORT, request, onChunk, runtime);
 }
 
+/**
+ * Opens a stream once `ready` resolves, passing it the value, and returns a
+ * stream that can be stopped straight away: stopping before `ready` resolves
+ * rejects the result with an "AbortError" and the stream is never opened.
+ * Used to wait for the PR's title and description (PR 6.1) before asking.
+ */
+export function openAfter<T, R>(
+  ready: Promise<T>,
+  open: (value: T) => PortStream<R>,
+): PortStream<R> {
+  let inner: PortStream<R> | undefined;
+  let stopped = false;
+  let rejectResult!: (error: unknown) => void;
+  const result = new Promise<R>((resolve, reject) => {
+    rejectResult = reject;
+    ready.then(
+      (value) => {
+        if (stopped) return;
+        inner = open(value);
+        inner.result.then(resolve, reject);
+      },
+      (error: unknown) => {
+        if (!stopped) reject(error);
+      },
+    );
+  });
+  return {
+    result,
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      if (inner) inner.stop();
+      else {
+        result.catch(() => {});
+        rejectResult(new RequestError('Stopped by the user', 'AbortError'));
+      }
+    },
+  };
+}
+
 function openStream<R>(
   name: string,
   request: { type: 'start' },
