@@ -2,11 +2,12 @@
 // extension APIs and no LLM, so each state can be checked by eye. Ask a
 // question opens the real chat flow (src/chat/chatFlow.ts) with a fake model
 // that streams canned answers word by word; a question with "fail" in it
-// gets an error instead.
+// gets an error instead. While the chat is open, clicking another line adds
+// it to the conversation (PR 5.4) instead of opening the popup.
 
 import type { ChatResult } from '../src/chat/chatHandler';
 import { openChatPanel } from '../src/chat/chatPanel';
-import { startChat } from '../src/chat/chatFlow';
+import { startChat, type ActiveChat } from '../src/chat/chatFlow';
 import { ChatSession } from '../src/chat/chatSession';
 import { describeLlmError } from '../src/llm/describeLlmError';
 import type { ChatMessage } from '../src/llm/types';
@@ -61,10 +62,16 @@ const ANSWERS = [
 ];
 
 /** A fake model: streams a canned answer word by word, until stopped. */
+const RELATED =
+  'The line you moved to is part of the same loop as the line we started on:\n\n' +
+  '- The earlier line sets up the retry loop.\n' +
+  '- This line decides **how long to wait** before the next try in that loop.';
+
 function fakeAsk(messages: ChatMessage[], onChunk: (text: string) => void) {
   const question = messages.at(-1)!.content;
   const earlier = messages.filter((m) => m.role === 'user').length - 2;
-  const words = ANSWERS[earlier % ANSWERS.length]!.split(/(?<=\s)/);
+  const answer = question.includes('Now looking at') ? RELATED : ANSWERS[earlier % ANSWERS.length]!;
+  const words = answer.split(/(?<=\s)/);
   let timer: ReturnType<typeof setInterval> | undefined;
   const result = new Promise<ChatResult>((resolve) => {
     if (/fail/i.test(question)) {
@@ -103,9 +110,20 @@ const status = document.querySelector('#status')!;
 const chosen = () =>
   document.querySelector<HTMLInputElement>('input[name="state"]:checked')?.value ?? 'done';
 
+const subjectOf = (row: Element) => ({
+  filePath: 'src/llm/retry.ts',
+  startLine: Number((row as HTMLTableRowElement).cells[0]!.textContent),
+});
+let activeChat: ActiveChat | undefined;
+
 document.addEventListener('click', (event) => {
   const row = (event.target as Element).closest?.('table.diff tr');
   if (!row) return;
+  const code = `File: src/llm/retry.ts\n${row.textContent}`;
+  if (activeChat?.addCode(code, subjectOf(row))) {
+    status.textContent = 'Last event: line added to the chat';
+    return;
+  }
   const popup = openPopup(row, {
     onClose: () => (status.textContent = 'Last event: closed'),
     onAsk: () => {
@@ -113,9 +131,8 @@ document.addEventListener('click', (event) => {
         context: LINES.map(([marker, code]) => marker + code).join('\n'),
         explanation: chosen() === 'unsafe' ? UNSAFE : SAMPLE,
       });
-      const line = Number((row as HTMLTableRowElement).cells[0]!.textContent);
-      const subject = { filePath: 'src/llm/retry.ts', startLine: line };
-      startChat({ ask: fakeAsk, openPanel: openChatPanel }, session, subject).focus();
+      activeChat = startChat({ ask: fakeAsk, openPanel: openChatPanel }, session, subjectOf(row));
+      activeChat.focus();
       status.textContent = 'Last event: chat opened';
     },
   });

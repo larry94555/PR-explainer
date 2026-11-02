@@ -6,7 +6,8 @@
 // The rows in the range are highlighted and a small "Explain selection"
 // button appears under the last one. Pressing it opens the explanation popup
 // under the block, using the same streaming, Stop, cache and Regenerate as a
-// single line (explainInPopup in src/clickHandler.ts). A range that spans two
+// single line (explainCode in src/clickHandler.ts); while the chat is open
+// the block goes to the chat instead (PR 5.4). A range that spans two
 // files shows a short "one file at a time" note instead, and a range longer
 // than MAX_SELECTED_LINES asks for a smaller one.
 //
@@ -14,7 +15,7 @@
 // else; while the block's popup is open the highlight stays, and it is
 // cleared when that popup closes.
 
-import { explainInPopup, isInteractive, type ClickHandlerDeps } from './clickHandler';
+import { explainCode, isInteractive, type ClickHandlerDeps } from './clickHandler';
 import { locateRange, locateRow, type DiffRange } from './diffDom';
 import {
   formatSelection,
@@ -91,7 +92,7 @@ export function selectionSubject(context: SelectionContext): ChatSubject {
 
 export interface SelectionDeps extends Pick<
   ClickHandlerDeps,
-  'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat'
+  'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat'
 > {
   /** False while click-to-explain is off (toolbar button). */
   isEnabled?(): boolean;
@@ -232,7 +233,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
       const selected = rows;
       const context = selectionContext(range);
       const request = { text: formatSelection(context), subject: selectionSubject(context) };
-      explainInPopup(deps, request, blockAnchor(selected), () => {
+      explainCode(deps, request, blockAnchor(selected), () => {
         // Only clear the highlight if no newer selection replaced it.
         if (rows === selected) {
           explaining = false;

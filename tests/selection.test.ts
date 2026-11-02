@@ -26,6 +26,7 @@ import {
   SELECTED_ATTR,
   SELECTION_UI_ID,
   TOO_MANY_NOTE,
+  type SelectionDeps,
 } from '../src/selection';
 
 function fixture(name: string): string {
@@ -276,6 +277,22 @@ describe.each(layouts)('selecting lines on the $name layout', ({ code, file, add
     // The highlight stays while the popup is open and goes when it closes.
     expect(highlighted()).toHaveLength(5);
     env.popups[0]!.hooks.onClose();
+    expect(highlighted()).toEqual([]);
+  });
+
+  it('gives the block to an open chat instead of a popup (PR 5.4)', () => {
+    env = setup();
+    const addToChat = vi.fn(() => true);
+    (env.deps as SelectionDeps).addToChat = addToChat;
+    dragSelect(code('R42'), code('R45'));
+    mouse('mouseup', code('R45'));
+    uiButton()!.click();
+    expect(addToChat).toHaveBeenCalledWith({
+      text: expect.stringContaining('Selection: 5 lines'),
+      subject: expect.objectContaining({ startLine: 42, endLine: 45 }),
+    });
+    expect(env.deps.explain).not.toHaveBeenCalled();
+    expect(env.popups).toEqual([]);
     expect(highlighted()).toEqual([]);
   });
 

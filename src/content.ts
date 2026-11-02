@@ -7,7 +7,7 @@
 // code into a chunk loaded with `import`, which fails in a content script.
 // Type-only imports (such as src/messaging/protocol.ts) are fine.
 import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
-import { chatSessionFor, startChat } from './chat/chatFlow';
+import { chatSessionFor, CurrentChat, startChat } from './chat/chatFlow';
 import { currentChatPanel, openChatPanel } from './chat/chatPanel';
 import { ChatSessions } from './chat/chatSession';
 import { createClickHandler, type ClickHandlerDeps } from './clickHandler';
@@ -24,6 +24,9 @@ function prName(url: string): string | undefined {
 }
 
 let workerStatus = 'Service worker: checking…';
+// The chat panel opened last; clicks on other code in its PR go to it while
+// it is open (PR 5.4).
+const currentChat = new CurrentChat();
 // The toolbar button turns click-to-explain on and off for every tab (see
 // src/toolbarToggle.ts). Until the saved state is read, clicks are ignored
 // and the badge keeps its default look.
@@ -38,6 +41,8 @@ const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (va
 });
 
 function update(): void {
+  // Moving to another PR (or off PRs) without a reload closes its chat.
+  currentChat.leave(prName(location.href));
   if (!syncBadge(document, location.href)) return;
   setBadgeStatus(document, workerStatus);
   const value = enabled.current();
@@ -70,7 +75,6 @@ window.addEventListener('popstate', update);
 // timeout: the popup's Stop button ends a request that takes too long.
 // One chat per PR, kept for as long as the tab is open (never stored).
 const chats = new ChatSessions();
-
 const explainDeps: ClickHandlerDeps = {
   isEnabled: () => enabled.current() === true,
   // The PR names the cache entry, so the same code in two PRs is asked
@@ -81,8 +85,9 @@ const explainDeps: ClickHandlerDeps = {
   // The popup's Ask a question button: chat about the explained code, with
   // answers streamed from the service worker (src/chat/chatFlow.ts).
   openChat: ({ subject, regenerated, ...seed }) => {
-    const session = chatSessionFor(chats, prName(location.href), seed, { regenerated });
-    const panel = startChat(
+    const pr = prName(location.href);
+    const session = chatSessionFor(chats, pr, seed, { regenerated });
+    const chat = startChat(
       {
         ask: (messages, onChunk) => openChatStream({ messages }, onChunk),
         openPanel: (options) => openChatPanel(options),
@@ -90,8 +95,11 @@ const explainDeps: ClickHandlerDeps = {
       session,
       subject,
     );
-    panel.focus();
+    currentChat.set(chat, pr);
+    chat.focus();
   },
+  // While the chat is open, clicked code in its PR joins the conversation (PR 5.4).
+  addToChat: ({ text, subject }) => currentChat.addCode(prName(location.href), text, subject),
   // Dev builds also log the context block sent to the model.
   onContext:
     import.meta.env.MODE === 'development'

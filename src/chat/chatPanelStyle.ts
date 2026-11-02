@@ -51,6 +51,18 @@ export const CHAT_PANEL_STYLE = `
     cursor: pointer;
   }
   .close:hover, .close:focus-visible { background: #e6eaef; color: #1f2328; }
+  .new-chat {
+    flex: none;
+    border: 1px solid #d0d7de;
+    background: #ffffff;
+    color: #1f2328;
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .new-chat:hover, .new-chat:focus-visible { background: #f3f4f6; border-color: #afb8c1; }
   .messages {
     flex: 1;
     overflow-y: auto;
@@ -68,6 +80,14 @@ export const CHAT_PANEL_STYLE = `
   }
   .message.assistant { align-self: flex-start; background: #f6f8fa; border: 1px solid #eaeef2; }
   .message > :last-child { margin-bottom: 0; }
+  /* "Now looking at …": where the user moved on to other code. */
+  .note {
+    align-self: center;
+    margin: 4px 0;
+    color: #59636e;
+    font-size: 12px;
+    text-align: center;
+  }
   p, ul, ol, pre { margin: 0 0 8px; }
   ul, ol { padding-left: 20px; }
   code {

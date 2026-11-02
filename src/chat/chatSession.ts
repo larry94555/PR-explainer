@@ -1,7 +1,8 @@
 // The record of one chat about the code (Milestone 5). A chat starts from an
 // explanation the popup has shown: the session keeps the code context that
 // was sent to the model, the explanation it gave, and the questions and
-// answers that follow, and builds the message list the LLM is sent for the
+// answers that follow, along with any other code the user moved on to while
+// chatting (PR 5.4), and builds the message list the LLM is sent for the
 // next question. It has no UI and does not talk to the LLM; the chat panel
 // (src/chat/chatPanel.ts) shows it and src/chat/chatFlow.ts sends it to the model.
 //
@@ -12,6 +13,7 @@
 // checks against src/explain/explainPrompt.ts.
 
 import type { Explanation } from '../explain/parseExplanation';
+import type { ChatSubject } from './chatPanel';
 import type { ChatMessage } from '../llm/types';
 
 export const CHAT_SYSTEM_PROMPT = [
@@ -46,6 +48,26 @@ export interface ChatTurn {
   answer: string;
 }
 
+/**
+ * Code the user moved on to while chatting (PR 5.4): another line or block
+ * they clicked with the chat open. `about` names it, in Markdown, for example
+ * "`src/settings.ts` line 42".
+ */
+export interface ChatCode {
+  context: string;
+  about: string;
+  /** Where the code is, so a reopened chat names it in its header. */
+  subject?: ChatSubject;
+}
+
+/** What the conversation holds, in order: questions and answers, and code moved on to. */
+export type ChatEntry = ({ kind: 'turn' } & ChatTurn) | ({ kind: 'code' } & ChatCode);
+
+/** How code the user moved on to is introduced, in the chat panel and to the model. */
+export function codeNote(about: string): string {
+  return `Now looking at ${about}`;
+}
+
 /** The model's explanation as Markdown, with the three headings it was asked for. */
 export function formatExplanation(explanation: Explanation): string {
   return (Object.keys(EXPLANATION_HEADINGS) as (keyof Explanation)[])
@@ -56,7 +78,7 @@ export function formatExplanation(explanation: Explanation): string {
 export class ChatSession {
   readonly context: string;
   readonly explanation: Explanation;
-  readonly #turns: ChatTurn[] = [];
+  #entries: ChatEntry[] = [];
 
   constructor(seed: ChatSeed) {
     if (typeof seed.context !== 'string' || !seed.context.trim()) {
@@ -68,13 +90,50 @@ export class ChatSession {
 
   /** The finished questions and answers, oldest first. */
   get turns(): readonly ChatTurn[] {
-    return this.#turns.map((turn) => ({ ...turn }));
+    return this.#entries.flatMap((entry) =>
+      entry.kind === 'turn' ? [{ question: entry.question, answer: entry.answer }] : [],
+    );
+  }
+
+  /** Every turn and every piece of code moved on to, oldest first. */
+  get entries(): readonly ChatEntry[] {
+    return this.#entries.map((entry) => ({ ...entry }));
+  }
+
+  /** The code the conversation is about now: the last code moved on to, or the start. */
+  get currentContext(): string {
+    const codes = this.#entries.filter((entry) => entry.kind === 'code');
+    return codes.at(-1)?.context ?? this.context;
+  }
+
+  /**
+   * Adds code the user moved on to (PR 5.4). The next question is sent with
+   * it, so the model sees both the earlier code and this one. Code the
+   * conversation is already about is not added again. Returns whether it was
+   * added.
+   */
+  addCode(code: ChatCode): boolean {
+    if (typeof code.context !== 'string' || !code.context.trim()) {
+      throw new Error('Code added to a chat cannot be empty');
+    }
+    if (code.context === this.currentContext) return false;
+    this.#entries.push({ kind: 'code', ...code });
+    return true;
+  }
+
+  /**
+   * Clears the conversation (the panel's New chat button): every turn and
+   * all code moved on to. The code and explanation it started from stay.
+   */
+  reset(): void {
+    this.#entries = [];
   }
 
   /**
    * The messages to send the model to answer `question`: the system prompt,
    * the code (as the first user message), the explanation (as the model's
-   * reply to it), every earlier turn, and then the question. Nothing is
+   * reply to it), every earlier turn, and then the question. Code moved on to
+   * is sent at the start of the question that followed it. Nothing is
    * recorded, so a request that fails or is stopped before it says anything
    * leaves the session as it was.
    */
@@ -94,11 +153,27 @@ export class ChatSession {
       },
       { role: 'assistant', content: formatExplanation(this.explanation) },
     ];
-    for (const turn of this.#turns) {
-      messages.push({ role: 'user', content: turn.question });
-      messages.push({ role: 'assistant', content: turn.answer });
+    // Code blocks waiting for the next question, so user and assistant
+    // messages keep taking turns.
+    let codes: string[] = [];
+    const withCode = (text: string) => {
+      const content = [...codes, text].join('\n\n');
+      codes = [];
+      return content;
+    };
+    for (const entry of this.#entries) {
+      if (entry.kind === 'code') {
+        codes.push(
+          [`${codeNote(entry.about)} in the diff:`, '', '```', entry.context.trimEnd(), '```'].join(
+            '\n',
+          ),
+        );
+        continue;
+      }
+      messages.push({ role: 'user', content: withCode(entry.question) });
+      messages.push({ role: 'assistant', content: entry.answer });
     }
-    messages.push({ role: 'user', content: asked });
+    messages.push({ role: 'user', content: withCode(asked) });
     return messages;
   }
 
@@ -112,7 +187,7 @@ export class ChatSession {
     const asked = cleanQuestion(question);
     const said = answer.trim();
     if (!said) return false;
-    this.#turns.push({ question: asked, answer: said });
+    this.#entries.push({ kind: 'turn', question: asked, answer: said });
     return true;
   }
 }

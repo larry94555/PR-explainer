@@ -6,7 +6,9 @@
 // end. The popup's Stop button, or closing the popup, stops the request. Its
 // Regenerate button asks again with `fresh` set, so the service worker skips
 // its cache. Once the explanation is shown, its Ask a question button opens
-// the chat about the same code (openChat, src/chat/chatFlow.ts). Clicks on
+// the chat about the same code (openChat, src/chat/chatFlow.ts). While the
+// chat is open, a click on another line goes to the chat instead of a popup
+// (addToChat, PR 5.4). Clicks on
 // GitHub's own controls
 // (the comment "+" button, links, menus, form fields), clicks that finish a
 // text selection, and modified clicks (Shift, Ctrl, Alt, Cmd) are left alone
@@ -51,6 +53,12 @@ export interface ClickHandlerDeps {
    * Leaving it out hides the button.
    */
   openChat?(chat: ChatStart): void;
+  /**
+   * Hands clicked code to the open chat, which adds it to the conversation
+   * (PR 5.4). Returns false when no chat is open, and the code is explained
+   * in the popup as usual. Leaving it out means there is never a chat to add to.
+   */
+  addToChat?(request: ExplainRequest): boolean;
   /** Called with each context block sent to the model (dev logging). */
   onContext?(context: string): void;
   /**
@@ -154,12 +162,34 @@ export function createClickHandler(deps: ClickHandlerDeps): (event: MouseEvent) 
     if (!row || !context) return;
 
     const { filePath, lineNumber } = context.line;
-    explainInPopup(
+    explainCode(
       deps,
       { text: formatContext(context), subject: { filePath, startLine: lineNumber } },
       row,
     );
   };
+}
+
+/**
+ * Brings `request` into the open chat if there is one (PR 5.4), and otherwise
+ * explains it in a popup (explainInPopup). `onClose` runs when the popup
+ * closes, or right away when the chat took the code.
+ */
+export function explainCode(
+  deps: Pick<
+    ClickHandlerDeps,
+    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat'
+  >,
+  request: ExplainRequest,
+  anchor: PopupAnchor,
+  onClose?: () => void,
+): void {
+  if (deps.addToChat?.(request)) {
+    deps.onContext?.(request.text);
+    onClose?.();
+    return;
+  }
+  explainInPopup(deps, request, anchor, onClose);
 }
 
 /**

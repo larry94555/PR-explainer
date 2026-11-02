@@ -428,13 +428,22 @@ Update this table (and the PR's heading) when a roadmap PR merges.
   10. Drag across a few lines, click **Explain selection**, then **Ask a question**. Confirm the header says "lines … to …".
 
 ### PR 5.4: Chat about a new line from the same panel (Small)
+- **Status:** In review ([#24](https://github.com/larry94555/PR-explainer/pull/24)).
 - **Why it's needed:** Users reading a PR jump between lines and should not lose the conversation each time.
-- **Problem it solves:** While the chat is open, clicking another line adds it to the conversation as new context ("Now looking at `file.ts` line 42") instead of starting over. A **New chat** button clears the session.
-- **Unit tests added:** `chatSession.test.ts` gets cases for adding context mid-conversation and for **New chat** resetting the session.
-- **How to test:**
-  1. Open a chat about one line and ask a question.
-  2. Click a different line and ask "How does this relate to the previous line?"; confirm the answer refers to both.
-  3. Click **New chat** and confirm the history clears.
+- **Problem it solves:** While the chat panel is open, clicking another diff line (or pressing **Explain selection** on a block) adds that code to the conversation instead of opening the popup: the header changes to the new file and line, a "Now looking at `file.ts` line 42" note marks the spot, and the next question is sent with that code, after the earlier code, explanation and turns (`ChatSession.addCode`, `ActiveChat.addCode` in `src/chat/chatFlow.ts`, `addToChat` / `explainCode` in `src/clickHandler.ts`). Clicking the code the chat is already about does nothing. Code clicked while an answer is being written is shown at once and recorded after that answer. A **New chat** button in the panel's header stops any answer and clears the conversation (`ChatSession.reset`) back to the code and explanation it started from. Once the panel is closed, clicks open the popup again. Closing and reopening the chat keeps the header on the code it moved on to. The chat belongs to its PR (`CurrentChat`): moving to another PR in GitHub without a reload closes it, so code from one PR never joins another PR's conversation. The popup demo (`npm run demo:popup`) shows the same behavior with a fake model.
+- **Unit tests added:** `chatSession.test.ts` gets cases for adding code mid-conversation (sent with the next question, kept in later history, several blocks in order, user and assistant messages still taking turns), not re-adding the current code, and **New chat** resetting the session. `chatFlow.test.ts` covers the header and note changing, the next question carrying the new code, code clicked while an answer streams (also after Stop or a failure), **New chat** stopping the answer and clearing the panel, a closed panel refusing code, reopening showing the notes and the moved-on-to line in the header, and `CurrentChat` closing a chat when GitHub moves to another PR instead of adding that PR's code. `chatPanel.test.ts`, `clickHandler.test.ts` and `selection.test.ts` cover notes, `setSubject`, the **New chat** button and `clear`, and clicks and selections going to an open chat instead of the popup.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass (510 tests in 26 files). Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run demo:popup`, click line 12 of the fake diff, click **Ask a question**, and send `How would I unit test this?`. When the answer finishes, click line 17. Confirm no popup opens, the header says line 17, and "Now looking at `src/llm/retry.ts` line 17" appears in the chat. Send `How does this relate to the previous line?` and confirm the fake answer talks about both lines. Click **New chat** and confirm only the explanation is left and the header says line 12 again. Press `Ctrl+C` in Command Prompt to stop the demo.
+  3. Make sure Ollama is running with your model. Run `npm run dev`, wait for `built in`, reload the extension (see [InstallingExtension.md](InstallingExtension.md)), and refresh a PR's **Files changed** tab.
+  4. Click a diff line, wait for the explanation, click **Ask a question**, and ask `What does this do?`.
+  5. Click a different line in the diff. Confirm no popup opens, and the chat header and a "Now looking at …" note name the new line.
+  6. Ask `How does this relate to the previous line?` and confirm the answer refers to both lines.
+  7. Drag across a few lines and click **Explain selection**. Confirm the block is added to the chat ("lines … to …") instead of opening a popup.
+  8. Close the panel with **×**, click the first line, and click **Ask a question**. Confirm the conversation is back and the header names the last line you moved to.
+  9. Click **New chat** and confirm the history clears, leaving only the first explanation.
+  10. Close the panel and click a line. Confirm the explanation popup opens as usual.
+  11. With a chat open, use GitHub's links to go to another PR's **Files changed** tab without reloading, and click a line. Confirm the old chat is gone and the popup explains the new line.
 
 ---
 
