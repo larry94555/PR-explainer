@@ -19,6 +19,11 @@ export interface ChatOptions {
   maxResponseTokens?: number;
   /** The context window to run the model with, prompt and reply together, in tokens. */
   contextTokens?: number;
+  /**
+   * How long the server keeps the model in memory after this request, in
+   * minutes (PR 8.3). Left to the server's default (5 minutes) when omitted.
+   */
+  keepAliveMinutes?: number;
   /** Cancels the request. The promise then rejects with kind "aborted". */
   signal?: AbortSignal;
 }
@@ -78,6 +83,16 @@ export interface ModelContext {
 
 export interface LlmClient {
   listModels(options?: { signal?: AbortSignal }): Promise<ModelInfo[]>;
+  /** The models loaded in memory right now, by name (PR 8.3). */
+  loadedModels(options?: { signal?: AbortSignal }): Promise<string[]>;
+  /**
+   * Loads `model` into memory without asking it anything, and keeps it there
+   * for `keepAliveMinutes` (PR 8.3). Resolves once it is loaded.
+   */
+  loadModel(
+    model: string,
+    options?: { keepAliveMinutes?: number; signal?: AbortSignal },
+  ): Promise<void>;
   /** Looks up `model`'s context window. */
   modelContext(model: string, options?: { signal?: AbortSignal }): Promise<ModelContext>;
   chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatReply>;

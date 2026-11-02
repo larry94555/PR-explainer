@@ -26,6 +26,8 @@ function setup(pieces: string[], error?: Error) {
   });
   const client: LlmClient = {
     listModels: vi.fn(),
+    loadedModels: vi.fn(),
+    loadModel: vi.fn(),
     modelContext: vi.fn(),
     chat: vi.fn(),
     chatStream,
@@ -53,6 +55,8 @@ describe('chat handler', () => {
       model: SETTINGS.model,
       temperature: SETTINGS.temperature,
       maxResponseTokens: SETTINGS.maxResponseTokens,
+      // Keeps the model loaded between questions (PR 8.3).
+      keepAliveMinutes: SETTINGS.keepAliveMinutes,
       signal,
     });
   });
@@ -87,6 +91,8 @@ describe('chat handler', () => {
     const { chatStream } = setup(['OK']);
     const client: LlmClient = {
       listModels: vi.fn(),
+      loadedModels: vi.fn(),
+      loadModel: vi.fn(),
       modelContext: vi.fn(),
       chat: vi.fn(),
       chatStream,

@@ -6,6 +6,9 @@ declare const chrome: {
       onStartup: { addListener(listener: () => void): void };
     };
   action: import('./toolbarToggle').ActionLike;
+  tabs: {
+    onRemoved: { addListener(listener: (tabId: number) => void): void };
+  };
   storage: {
     sync: import('./settings').StorageAreaLike;
     local: import('./enabledState').LocalStorageLike;

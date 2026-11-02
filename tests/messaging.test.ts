@@ -44,6 +44,17 @@ describe('messaging', () => {
     expect(ping).toHaveBeenCalledOnce();
   });
 
+  it('tells the handler which tab sent the request (PR 8.3)', async () => {
+    const warmup = vi.fn(() => ({ outcome: 'loaded' as const }));
+    const runtime = fakeRuntime({ id: EXTENSION_ID, tab: { id: 42 } });
+    new MessageRouter().on('warmup', warmup).listen(runtime);
+
+    await expect(sendRequest('warmup', { pr: 'o/r#1' }, { runtime })).resolves.toEqual({
+      outcome: 'loaded',
+    });
+    expect(warmup).toHaveBeenCalledWith({ pr: 'o/r#1' }, { id: EXTENSION_ID, tab: { id: 42 } });
+  });
+
   it('waits for async handlers', async () => {
     const runtime = connectedRuntime(
       new MessageRouter().on('ping', async () => {

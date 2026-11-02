@@ -95,6 +95,15 @@ describe('OllamaClient.chatStream', () => {
     });
   });
 
+  it('sends keep_alive so the model stays loaded between clicks (PR 8.3)', async () => {
+    const { client: c, fetch } = client(streamResponse([line('Hi'), DONE]));
+    await collect(c.chatStream(MESSAGES, { model: MODEL, keepAliveMinutes: 30 }));
+    expect(JSON.parse(fetch.mock.calls[0]![1]?.body as string)).toMatchObject({
+      keep_alive: '30m',
+      stream: true,
+    });
+  });
+
   it('yields each piece of text and returns the model and done reason', async () => {
     const { client: c } = client(
       streamResponse([line('The '), line('function '), line('adds.'), DONE]),

@@ -15,7 +15,7 @@ import { ChatSessions } from './chat/chatSession';
 import { createClickHandler, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
 import { openAfter, openChatStream, openExplainStream, sendRequest } from './messaging/client';
-import { closeDetached, DiffPageFeatures, watchNavigation } from './navigation';
+import { closeDetached, DiffPageFeatures, showsDiffs, watchNavigation } from './navigation';
 import { currentPopup, openPopup } from './popup/popup';
 import { latencyBreakdown, latencySummary } from './popup/latencyBreakdown';
 import { createFileContextLoader, type CodeSpan } from './fileContext';
@@ -105,11 +105,27 @@ function pingWorker(): void {
   );
 }
 
+// Loading a model can take longer than a normal request's timeout.
+const WARMUP_TIMEOUT_MS = 120_000;
+
+/**
+ * Asks the service worker to load the model while the user reads the diffs,
+ * so the first click does not wait for it (PR 8.3). The worker does this once
+ * per tab and PR and skips it if the model is already loaded; a failure is
+ * only logged there, so it is ignored here.
+ */
+function warmUpModel(): void {
+  const pr = prName(location.href);
+  if (!pr || !showsDiffs(location.href) || enabled.current() !== true) return;
+  sendRequest('warmup', { pr }, { timeoutMs: WARMUP_TIMEOUT_MS }).catch(() => {});
+}
+
 function update(): void {
   // Moving to another PR (or off PRs) without a reload closes its chat.
   currentChat.leave(prName(location.href));
   if (!syncBadge(document, location.href)) return;
   pingWorker();
+  warmUpModel();
   setBadgeStatus(document, workerStatus);
   const value = enabled.current();
   if (value !== null) setBadgeEnabled(document, value);

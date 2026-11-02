@@ -66,7 +66,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 7.4 | Privacy check and packaging | Medium | ✅ Done ([#32](https://github.com/larry94555/PR-explainer/pull/32)) |
 | 8.1 | Latency breakdown in the popup | Small | ✅ Done ([#33](https://github.com/larry94555/PR-explainer/pull/33)) |
 | 8.2 | Latency benchmark script and baseline | Medium | ✅ Done ([#34](https://github.com/larry94555/PR-explainer/pull/34)) |
-| 8.3 | Keep the model loaded and warm it up | Small | Not started |
+| 8.3 | Keep the model loaded and warm it up | Small | ✅ Done ([#35](https://github.com/larry94555/PR-explainer/pull/35)) |
 | 8.4 | Shorter answers | Small | Not started |
 | 8.5 | Smaller, cache-friendly prompts | Medium | Not started |
 | 8.6 | Model and GPU check on the settings page | Medium | Not started |
@@ -624,16 +624,22 @@ This milestone comes last because it builds on streaming (4.1, 4.2), caching (4.
   5. Run `npm run bench -- not-a-model` and confirm it stops at once with "Not installed: not-a-model" and the list of installed models. Quit Ollama from the system tray, run `npm run bench`, and confirm it says "Could not reach Ollama at http://localhost:11434. Is it running?" Open Ollama again.
   6. Commit the `docs/latency.md` section from step 4 as the baseline (or send it to Claude to commit).
 
-### PR 8.3: Keep the model loaded and warm it up (Small)
+### PR 8.3: Keep the model loaded and warm it up (Small) ✅ Done
+- **Status:** Done ([#35](https://github.com/larry94555/PR-explainer/pull/35)).
 - **Why it's needed:** Ollama unloads a model after 5 idle minutes, and loading a 7B model can take 5 to 20 seconds. That alone can blow the 10 second goal on the first click.
-- **Problem it solves:** Sends `keep_alive` (a new setting, default 30 minutes) with every request so the model stays in memory while you review. When a PR's **Files changed** tab opens, the service worker sends a tiny warm-up request so the model is loaded before the first click. Warm-up is skipped if the model is already loaded (`/api/ps`).
-- **Unit tests added:** `ollamaClient.test.ts` checks `keep_alive` is sent. `warmup.test.ts` checks warm-up runs once per tab, is skipped when `/api/ps` lists the model, and never shows an error to the user if it fails. `settings.test.ts` covers the new setting's range.
+- **Problem it solves:** A new setting, **Keep model loaded (minutes)** (default 30, from 0 to 1440), is sent as Ollama's `keep_alive` with every explanation, chat question and Test connection, so the model stays in memory while you review. 0 unloads it as soon as each answer is done, for laptops short on memory. When a PR's **Files changed** (or commits) tab opens with click-to-explain on, the content script sends a `warmup` request, and the service worker (`src/llm/warmup.ts`) asks `/api/ps` whether the model is loaded and, if not, sends Ollama a chat request with no messages, which only loads it. It runs once per tab and PR (a closed tab is forgotten), two tabs opening PRs at the same time share one load, and it is skipped when no model is picked or Keep model loaded is 0. It never shows the user an error: the service worker console says what happened (`[PR Explainer] warm-up: loaded qwen2.5-coder:7b in 6.3 s`, `… is already loaded`, or `… could not load …`), and if it fails the first click loads the model as before. The message router now passes each handler the sender, so the worker knows the tab. `npm run bench` uses the default settings, so it now keeps the model loaded for 30 minutes too.
+- **Unit tests added:** `ollamaClient.test.ts` and `chatStream.test.ts` check `keep_alive` is sent in minutes (and left out when not set), that `loadedModels()` reads `/api/ps`, and that `loadModel()` sends no messages and the keep-alive and reports a missing model. `warmup.test.ts` checks warm-up loads the model with the setting, runs once per tab and PR (again after the tab closes), counts a second request while loading as a repeat, shares one load between tabs, is skipped when `/api/ps` lists the model (including `llama3.2` listed as `llama3.2:latest`), when no model is picked and when the setting is 0, and never throws when Ollama is down, the model is missing, or settings cannot be read. `settings.test.ts` covers the new default and range. `optionsPage.test.ts` checks the field loads, saves and shows an error for a bad value. `messaging.test.ts` checks a handler is told which tab sent the request. `explainHandler.test.ts` and `chatHandler.test.ts` check the setting reaches the client.
+- **Screenshots:** [the new setting](screenshots/pr-8.3/1-settings-keep-loaded.png) and [the error for a value that is too large](screenshots/pr-8.3/2-settings-bad-keep-loaded.png).
 - **How to test (Windows 11, Command Prompt):**
-  1. Run `npm test`.
-  2. Run `npm run dev`, reload the extension. Quit Ollama and open it again.
-  3. Open a PR's **Files changed** tab, wait 15 seconds, then run `ollama ps` in Command Prompt and confirm the model is listed with an "UNTIL" about 30 minutes away.
-  4. Click a line, open **Details**, and confirm "Load" is close to zero.
-  5. Run `npm run bench` and confirm load time no longer appears in the median.
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass (938 tests in 41 files, including `warmup`). Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, click the reload icon on the PR Explainer card on `chrome://extensions`, and open the extension's settings page (**Details**, then **Extension options**). Confirm **Keep model loaded (minutes)** shows 30. Type `2000`, click **Save**, and confirm the error from the second screenshot. Put back `30` and click **Save**.
+  3. Quit Ollama (right-click its icon in the system tray, near the clock, and choose **Quit Ollama**), then open it again from the Start menu so the model is not loaded. Run `ollama ps` and confirm no model is listed.
+  4. Open a PR's **Files changed** tab (for example [#34's](https://github.com/larry94555/PR-explainer/pull/34/files)) and do not click anything. Wait 20 seconds, then run `ollama ps` and confirm your model is listed with **UNTIL** about 30 minutes from now.
+  5. On `chrome://extensions`, click **service worker** on the PR Explainer card and confirm the console says `[PR Explainer] warm-up: loaded … in … s`. Refresh the PR page and confirm it does not load the model again: nothing new is logged, or, if Chrome stopped the idle service worker in the meantime, only `… is already loaded`. Open a different PR's **Files changed** tab and confirm it logs `… is already loaded`.
+  6. Click a line, wait for "Answered in …", click **Details**, and confirm **Load** is close to zero (a few milliseconds).
+  7. Turn click-to-explain off with the toolbar button, quit and reopen Ollama, open a new PR's **Files changed** tab, wait 20 seconds and confirm `ollama ps` lists no model. Turn it back on.
+  8. Set **Keep model loaded** to `0` and save. Click a line, wait for the answer, run `ollama ps`, and confirm the model is gone. Set it back to `30`.
+  9. Optional: run `npm run bench -- qwen2.5-coder:7b` (or your model) right after quitting and reopening Ollama, then run `ollama ps` and confirm the model is listed with **UNTIL** about 30 minutes away. Only the first run's **Load** is several seconds; run `npm run bench` again and confirm no run pays for loading.
 
 ### PR 8.4: Shorter answers (Small)
 - **Why it's needed:** Writing the answer is usually the slowest part: at 20 tokens per second, a 500 token answer takes 25 seconds on its own.
