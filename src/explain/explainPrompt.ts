@@ -25,14 +25,14 @@ function systemPrompt(given: string, task: string, subject: string): string {
     '',
     'Answer in Markdown with exactly these three level-2 headings, in this order:',
     `## ${SECTION_HEADINGS.what}`,
-    `One to three sentences on what the ${subject} does.`,
+    `At most two sentences on what the ${subject} does.`,
     `## ${SECTION_HEADINGS.why}`,
-    'One to three sentences on why the change needs it.',
+    'At most two sentences on why the change needs it.',
     `## ${SECTION_HEADINGS.concerns}`,
-    'A short bulleted list of real problems: bugs, edge cases, security, or performance.',
-    'If there are none, write "None found."',
+    'At most three bullets, one sentence each, most important first, on real problems:',
+    'bugs, edge cases, security, or performance. If there are none, write "None found."',
     '',
-    'Be concise and specific. Do not repeat the code back. Do not add other headings.',
+    'Be brief and specific. Do not repeat the code back. Do not add other headings or a summary.',
   ].join('\n');
 }
 

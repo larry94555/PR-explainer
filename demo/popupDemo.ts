@@ -17,7 +17,7 @@ import { isExplainShortcut } from '../src/a11y';
 import { resolveTheme, watchTheme } from '../src/theme';
 import { buildFittedExplainPrompt, type PromptReport } from '../src/explain/fitPrompt';
 import { promptBudget } from '../src/llm/contextSize';
-import type { Explanation } from '../src/explain/parseExplanation';
+import { parseExplanation, type Explanation } from '../src/explain/parseExplanation';
 
 const MODEL = 'qwen2.5-coder:7b';
 
@@ -40,6 +40,13 @@ const TIMINGS: LlmTimings = {
   answerTokens: 240,
   answerMs: 8_000,
 };
+
+// A reply that hit the answer limit partway through "Why it's needed" (PR 8.4).
+const CUT_OFF = parseExplanation(
+  '## What it does\nRetries the `fetch` call up to three times, waiting longer each time.\n' +
+    "## Why it's needed\nOllama can take a moment to load a model, so the first",
+  { cutOff: true },
+);
 
 const UNSAFE: Explanation = {
   what: 'This reply tries to run code: <img src=x onerror="alert(\'pwned\')"> and <script>alert(1)</script>',
@@ -317,6 +324,9 @@ function explainRow(row: Element): void {
     }
     case 'unsafe':
       popup.showExplanation(UNSAFE, MODEL);
+      break;
+    case 'cutoff':
+      popup.showExplanation(CUT_OFF, MODEL);
       break;
   }
 }

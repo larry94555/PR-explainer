@@ -54,11 +54,30 @@ describe('chat handler', () => {
     expect(chatStream).toHaveBeenCalledWith(MESSAGES, {
       model: SETTINGS.model,
       temperature: SETTINGS.temperature,
-      maxResponseTokens: SETTINGS.maxResponseTokens,
+      // Chat answers may be longer than the explanation limit (PR 8.4).
+      maxResponseTokens: 1024,
       // Keeps the model loaded between questions (PR 8.3).
       keepAliveMinutes: SETTINGS.keepAliveMinutes,
       signal,
     });
+  });
+
+  it('sends a higher answer limit as it is (PR 8.4)', async () => {
+    const { chatStream } = setup(['A.']);
+    const handler = createChatHandler({
+      getSettings: async () => ({ ...SETTINGS, maxResponseTokens: 4000 }),
+      createClient: () => ({
+        listModels: vi.fn(),
+        loadedModels: vi.fn(),
+        loadModel: vi.fn(),
+        modelContext: vi.fn(),
+        chat: vi.fn(),
+        chatStream,
+      }),
+      platform: 'windows',
+    });
+    await handler({ messages: MESSAGES });
+    expect(chatStream.mock.calls[0]![1].maxResponseTokens).toBe(4000);
   });
 
   it('returns a message and fix when the LLM fails', async () => {

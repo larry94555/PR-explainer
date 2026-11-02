@@ -12,7 +12,7 @@
 import type { ContextSizer } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
 import type { ChatMessage, LlmClient } from '../llm/types';
-import type { Settings } from '../settings';
+import { chatResponseTokens, type Settings } from '../settings';
 
 export interface ChatPayload {
   /** The messages from ChatSession.messagesFor, ending with the question. */
@@ -73,7 +73,7 @@ export function createChatHandler(deps: ChatDeps) {
       const stream = deps.createClient(settings).chatStream(payload.messages, {
         model: settings.model,
         temperature: settings.temperature,
-        maxResponseTokens: settings.maxResponseTokens,
+        maxResponseTokens: chatResponseTokens(settings),
         ...(contextTokens !== undefined && { contextTokens }),
         keepAliveMinutes: settings.keepAliveMinutes,
         signal,

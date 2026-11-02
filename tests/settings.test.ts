@@ -1,4 +1,6 @@
 import {
+  CHAT_MIN_RESPONSE_TOKENS,
+  chatResponseTokens,
   DEFAULT_SETTINGS,
   getSettings,
   saveSettings,
@@ -38,13 +40,26 @@ async function expectRejectedFields(
 }
 
 describe('settings', () => {
+  describe('chat answer limit (PR 8.4)', () => {
+    it('lets chat answers run to CHAT_MIN_RESPONSE_TOKENS when the setting is lower', () => {
+      expect(CHAT_MIN_RESPONSE_TOKENS).toBe(1024);
+      expect(chatResponseTokens(DEFAULT_SETTINGS)).toBe(1024);
+      expect(chatResponseTokens({ maxResponseTokens: 1 })).toBe(1024);
+    });
+
+    it('uses the setting when it is higher', () => {
+      expect(chatResponseTokens({ maxResponseTokens: 4096 })).toBe(4096);
+    });
+  });
+
   describe('defaults', () => {
-    it('uses the Ollama default URL, no model, temperature 0.2, keep loaded 30 minutes', () => {
+    it('uses the Ollama default URL, no model, temperature 0.2, 300-token answers, keep loaded 30 minutes', () => {
       expect(DEFAULT_SETTINGS).toEqual({
         llmUrl: 'http://localhost:11434',
         model: '',
         temperature: 0.2,
-        maxResponseTokens: 1024,
+        // Short answers arrive sooner (PR 8.4).
+        maxResponseTokens: 300,
         contextTokens: 0,
         keepAliveMinutes: 30,
         showPrompt: false,

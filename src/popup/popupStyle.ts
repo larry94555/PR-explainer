@@ -120,6 +120,7 @@ export const POPUP_STYLE = `
   }
   @keyframes blink { 50% { opacity: 0; } }
   .stopped-note { padding-top: 12px; color: var(--pe-muted); }
+  .cut-off-note { margin: 0; padding-top: 8px; border-top: 1px solid var(--pe-border-muted); color: var(--pe-muted); font-size: 12px; }
   .body { padding: 4px 12px 12px; }
   .loading { display: flex; align-items: center; gap: 8px; padding: 12px 0 4px; color: var(--pe-muted); }
   .spinner {

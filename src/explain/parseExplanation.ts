@@ -5,19 +5,35 @@
 //   as a bold or colon heading ("**Concerns:** none");
 // - text before the first heading, and <think> blocks from reasoning models;
 // - missing sections, and a reply with no headings at all (all of it goes
-//   under "What it does").
+//   under "What it does");
+// - a reply cut off at the answer limit (PR 8.4): the section it stopped in
+//   ends with "…", and the sections it never reached say so instead of
+//   pretending the model had nothing to add.
 
 export interface Explanation {
   what: string;
   why: string;
   concerns: string;
+  /** True when the reply hit the answer limit and stopped early (PR 8.4). */
+  cutOff?: boolean;
 }
 
-export type SectionKey = keyof Explanation;
+export interface ParseOptions {
+  /** The model stopped because it hit the answer limit (Ollama's done_reason "length"). */
+  cutOff?: boolean;
+}
+
+export type SectionKey = 'what' | 'why' | 'concerns';
 
 export const NO_CONCERNS = 'None found.';
 export const NO_REASON = 'The model did not say.';
 export const NO_ANSWER = 'The model gave an empty answer.';
+/** In place of a section the answer was cut off before (PR 8.4). */
+export const CUT_OFF_BEFORE = 'Cut off before this part.';
+/** Added to the end of the section the answer was cut off in. */
+export const CUT_OFF_MARK = ' …';
+
+const SECTION_ORDER: readonly SectionKey[] = ['what', 'why', 'concerns'];
 
 // Heading names, lowercased, with straight apostrophes. Several wordings map
 // to the same section.
@@ -55,17 +71,21 @@ function matchHeading(line: string): { key: SectionKey; rest: string } | null {
   return key ? { key, rest: match[2]!.trim() } : null;
 }
 
-export function parseExplanation(reply: string): Explanation {
-  const text = reply.replace(/<think>[\s\S]*?<\/think>/gi, '');
+export function parseExplanation(reply: string, options: ParseOptions = {}): Explanation {
+  // A reply cut off inside a <think> block has no closing tag; drop the rest.
+  const text = reply.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '');
   const sections: Partial<Record<SectionKey, string[]>> = {};
   const preamble: string[] = [];
   let current: string[] = preamble;
+  // The section the reply ended in: the last heading, or "what" if none.
+  let last: SectionKey = 'what';
 
   for (const line of text.split(/\r?\n/)) {
     const heading = matchHeading(line);
     if (heading) {
       // A repeated heading adds to the same section.
       current = sections[heading.key] ??= [];
+      last = heading.key;
       if (heading.rest) current.push(heading.rest);
     } else {
       current.push(line);
@@ -78,9 +98,24 @@ export function parseExplanation(reply: string): Explanation {
   // Text before the first heading is usually filler ("Sure! Here is...") when
   // the model did write a "What it does" section, and the whole answer when
   // it did not.
+  const found: Record<SectionKey, string> = {
+    what: what || intro,
+    why: join(sections.why),
+    concerns: join(sections.concerns),
+  };
+  if (options.cutOff) {
+    // Sections after the one it stopped in were never reached. A section the
+    // model skipped before that point keeps the usual text below.
+    const stoppedAt = SECTION_ORDER.indexOf(last);
+    for (const key of SECTION_ORDER.slice(stoppedAt)) {
+      if (!found[key]) found[key] = CUT_OFF_BEFORE;
+      else if (key === last) found[key] += CUT_OFF_MARK;
+    }
+  }
   return {
-    what: what || intro || NO_ANSWER,
-    why: join(sections.why) || NO_REASON,
-    concerns: join(sections.concerns) || NO_CONCERNS,
+    what: found.what || NO_ANSWER,
+    why: found.why || NO_REASON,
+    concerns: found.concerns || NO_CONCERNS,
+    ...(options.cutOff && { cutOff: true }),
   };
 }

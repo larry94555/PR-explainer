@@ -235,8 +235,9 @@ export function createExplainHandler(deps: ExplainDeps) {
         onChunk?.(next.value);
         next = await stream.next();
       }
-      const explanation = parseExplanation(content);
-      const { model, timings } = next.value;
+      const { model, timings, doneReason } = next.value;
+      // "length" means the answer hit maxResponseTokens and stopped early.
+      const explanation = parseExplanation(content, { cutOff: doneReason === 'length' });
       if (cache && key) {
         // A failed save only means the next click asks the model again.
         await cache
