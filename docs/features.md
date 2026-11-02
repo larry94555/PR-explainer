@@ -37,3 +37,6 @@ Supports unified and split diff views, light and dark themes, lazily loaded diff
 
 ## 11. On/off toggle
 A toolbar button turns click-to-explain on or off, so normal GitHub clicking (commenting, selecting text) is never blocked when you don't want explanations.
+
+## 12. Keyboard and screen reader support
+Press **Alt+E** to explain the diff line that has keyboard focus (or holds the text cursor), or the selected block of lines. Focus moves into the popup when it opens and returns to the code when it closes, **Esc** closes the popup and the chat, and both are labelled for screen readers. The popup, chat, and selection button follow GitHub's light or dark theme.
