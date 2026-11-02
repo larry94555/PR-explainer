@@ -67,7 +67,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 8.1 | Latency breakdown in the popup | Small | ✅ Done ([#33](https://github.com/larry94555/PR-explainer/pull/33)) |
 | 8.2 | Latency benchmark script and baseline | Medium | ✅ Done ([#34](https://github.com/larry94555/PR-explainer/pull/34)) |
 | 8.3 | Keep the model loaded and warm it up | Small | ✅ Done ([#35](https://github.com/larry94555/PR-explainer/pull/35)) |
-| 8.4 | Shorter answers | Small | Not started |
+| 8.4 | Shorter answers | Small | ✅ Done ([#36](https://github.com/larry94555/PR-explainer/pull/36)) |
 | 8.5 | Smaller, cache-friendly prompts | Medium | Not started |
 | 8.6 | Model and GPU check on the settings page | Medium | Not started |
 | 8.7 | Explain on hover (prefetch) | Medium | Not started |
