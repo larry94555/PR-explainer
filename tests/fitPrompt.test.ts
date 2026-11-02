@@ -190,6 +190,71 @@ describe('buildFittedExplainPrompt', () => {
   });
 });
 
+describe('buildFittedExplainPrompt with the full file context (PR 6.3)', () => {
+  const pr = { title: 'Speed up compute', description: words(200) };
+  // A 60-line function around clicked line 11 (file line 111), with a two-line opening.
+  const file = {
+    kind: 'block' as const,
+    startLine: 100,
+    lines: [
+      'export function compute(',
+      '  n: number): number {',
+      ...Array.from({ length: 57 }, (_, i) => `  const step${i + 102} = work(${i + 102});`),
+      '}',
+    ],
+    focusStart: 111,
+    focusEnd: 111,
+    headerLines: 2,
+  };
+
+  it('sends the whole block when it fits', () => {
+    const fitted = buildFittedExplainPrompt(clicked(10, 10), pr, 100_000, file);
+    expect(fitted.messages).toEqual(buildExplainPrompt(clicked(10, 10), pr, file));
+    expect(fitted.trimmed).toEqual([]);
+  });
+
+  it('cuts the file context first, farthest first, keeping its opening and the clicked line', () => {
+    const full = estimateMessages(buildExplainPrompt(clicked(10, 10), pr, file));
+    const fitted = buildFittedExplainPrompt(clicked(10, 10), pr, full - 200, file);
+    expect(fitted.trimmed).toEqual(['full file context']);
+    const content = user(fitted.messages);
+    expect(content).toContain('  export function compute(\n    n: number): number {\n');
+    expect(content).toContain('> ' + '  const step111 = work(111);');
+    expect(content).toContain('step110');
+    expect(content).not.toContain('step158');
+    expect(content).toMatch(/\(\d+ lines left out\)\n```$/);
+    // The description and the diff are whole.
+    expect(content).toContain(clicked(10, 10));
+    expect(content).toContain(words(200));
+    expect(fitted.tokens).toBeLessThanOrEqual(full - 200);
+  });
+
+  it('leaves the file context out before cutting the description', () => {
+    const withoutFile = estimateMessages(buildExplainPrompt(clicked(10, 10), pr));
+    const fitted = buildFittedExplainPrompt(clicked(10, 10), pr, withoutFile - 50, file);
+    expect(fitted.trimmed).toEqual(['PR description', 'full file context']);
+    expect(user(fitted.messages)).not.toContain('function or block');
+  });
+
+  it('never sends more than the budget, even with little room to spare', () => {
+    const text = clicked(10, 10);
+    const full = estimateMessages(buildExplainPrompt(text, pr, file));
+    let checked = 0;
+    for (let budget = full - 1; budget > 0; budget--) {
+      let fitted;
+      try {
+        fitted = buildFittedExplainPrompt(text, pr, budget, file);
+      } catch (error) {
+        expect(error).toBeInstanceOf(PromptTooLargeError);
+        break;
+      }
+      expect(estimateMessages(fitted.messages)).toBeLessThanOrEqual(budget);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(500);
+  });
+});
+
 function words(n: number): string {
   return Array.from({ length: n }, (_, i) => `word${i}`).join(' ');
 }

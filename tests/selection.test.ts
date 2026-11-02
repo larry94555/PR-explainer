@@ -291,6 +291,7 @@ describe.each(layouts)('selecting lines on the $name layout', ({ code, file, add
     expect(addToChat).toHaveBeenCalledWith({
       text: expect.stringContaining('Selection: 5 lines'),
       subject: expect.objectContaining({ startLine: 42, endLine: 45 }),
+      code: expect.objectContaining({ filePath: 'docs/roadmap.md', startLine: 42, endLine: 45 }),
     });
     expect(env.deps.explain).not.toHaveBeenCalled();
     expect(env.popups).toEqual([]);

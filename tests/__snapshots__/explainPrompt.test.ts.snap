@@ -91,3 +91,59 @@ Surrounding diff (the clicked line starts with >):
   },
 ]
 `;
+
+exports[`buildExplainPrompt > with the block from the full file (PR 6.3) > adds it after the diff, with the clicked line marked 1`] = `
+[
+  {
+    "content": "You are a senior software engineer helping a colleague review a GitHub pull request.
+You are given one line from the diff, the lines around it, and the file it is in.
+Explain the clicked line in the context of the change.
+
+Answer in Markdown with exactly these three level-2 headings, in this order:
+## What it does
+One to three sentences on what the line does.
+## Why it's needed
+One to three sentences on why the change needs it.
+## Concerns
+A short bulleted list of real problems: bugs, edge cases, security, or performance.
+If there are none, write "None found."
+
+Be concise and specific. Do not repeat the code back. Do not add other headings.",
+    "role": "system",
+  },
+  {
+    "content": "Explain the clicked line in this pull request diff.
+
+\`\`\`
+File: src/settings.ts (TypeScript)
+Clicked line: added, line 42 of the new file
++const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+Surrounding diff (the clicked line starts with >):
+@@ -38,6 +38,9 @@ export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
+ export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
+ 
++// Code never leaves the laptop, so only loopback addresses are accepted.
+>+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
++
+ export interface SettingsIssue {
+   field: SettingsField;
+\`\`\`
+
+The lines around the code in the full file (lines 36 to 45 of the file at the PR's head commit; the clicked code starts with >):
+\`\`\`
+  export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
+  export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
+  
+  // Code never leaves the laptop, so only loopback addresses are accepted.
+> const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+  
+  export interface SettingsIssue {
+    field: SettingsField;
+    message: string;
+  }
+\`\`\`",
+    "role": "user",
+  },
+]
+`;
