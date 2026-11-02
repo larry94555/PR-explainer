@@ -7,6 +7,8 @@
 // Runs in the service worker. The manifest's localhost host_permissions let
 // the worker reach Ollama without CORS, but Chrome still sends an Origin
 // header, which Ollama may reject with 403 (see the origin-blocked error).
+// Every request goes through createLlmFetch (PR 7.4), which refuses any
+// address that is not the configured server on this computer.
 
 import {
   LlmError,
@@ -18,13 +20,14 @@ import {
   type ModelContext,
   type ModelInfo,
 } from './types';
+import { createLlmFetch, type FetchLike } from '../net/llmFetch';
 
-export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+export type { FetchLike } from '../net/llmFetch';
 
 export interface OllamaClientOptions {
   /** Server address with no trailing slash, for example "http://localhost:11434". */
   baseUrl: string;
-  /** Defaults to the global fetch. Tests pass a fake. */
+  /** Defaults to the global fetch. Tests pass a fake. Either way it is guarded. */
   fetch?: FetchLike;
 }
 
@@ -34,8 +37,7 @@ export class OllamaClient implements LlmClient {
 
   constructor(options: OllamaClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
-    // Wrapped so fetch is not called with the client as `this`.
-    this.fetch = options.fetch ?? ((input, init) => fetch(input, init));
+    this.fetch = createLlmFetch(this.baseUrl, options.fetch);
   }
 
   async listModels(options: { signal?: AbortSignal } = {}): Promise<ModelInfo[]> {
@@ -171,6 +173,8 @@ export class OllamaClient implements LlmClient {
     try {
       response = await this.fetch(`${this.baseUrl}${path}`, init);
     } catch (cause) {
+      // Refused by the guard: nothing was sent.
+      if (cause instanceof LlmError && cause.kind === 'blocked') throw cause;
       // Some fetches reject an aborted request with an error not named AbortError.
       if (isAbort(cause) || init.signal?.aborted) throw abortedError(cause);
       // fetch rejects with a TypeError ("Failed to fetch") when nothing listens.

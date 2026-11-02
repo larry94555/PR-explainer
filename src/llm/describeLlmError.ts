@@ -103,5 +103,10 @@ export function describeLlmError(error: unknown, context: ErrorContext = {}): Er
       };
     case 'aborted':
       return { message: 'The request was cancelled.', fix: 'Try again.' };
+    case 'blocked':
+      return {
+        message: `Nothing was sent${where}: PR Explainer only sends code to an LLM on this computer.`,
+        fix: 'Set the URL to a local address, such as `http://localhost:11434`.',
+      };
   }
 }

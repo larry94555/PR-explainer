@@ -311,16 +311,74 @@ export function headShaFromPage(doc: Document, pr: Pick<PrRef, 'owner' | 'repo'>
 const encodePath = (path: string) => path.split('/').map(encodeURIComponent).join('/');
 
 /**
- * Where the file can be read, most likely first: the page's own raw URL at
- * the head commit (works for private repos while signed in), then the PR's
- * head on raw.githubusercontent.com (public repos).
+ * Where the file can be read, most likely first. None of these redirect,
+ * since the content script follows no redirects (src/net/githubFetch.ts,
+ * PR 7.4); github.com's own /raw/ link always does, so it is not used.
+ * - The head commit on raw.githubusercontent.com: small, but public
+ *   repositories only.
+ * - The file's page on github.com at the head commit, read with the user's
+ *   GitHub sign-in, so private repositories work: GitHub puts the file's
+ *   lines in the page's data (see fileFromBlobPage). Bigger, so second.
+ * - The PR's head ref on raw.githubusercontent.com, for when the page does
+ *   not say which commit is the head (public only).
  */
-export function rawFileUrls(pr: PrRef, filePath: string, headSha: string | null): string[] {
+export function fileUrls(pr: PrRef, filePath: string, headSha: string | null): string[] {
   const path = encodePath(filePath);
+  const raw = `https://raw.githubusercontent.com/${pr.owner}/${pr.repo}`;
   return [
-    ...(headSha ? [`/${pr.owner}/${pr.repo}/raw/${headSha}/${path}`] : []),
-    `https://raw.githubusercontent.com/${pr.owner}/${pr.repo}/refs/pull/${pr.number}/head/${path}`,
+    ...(headSha ? [`${raw}/${headSha}/${path}`, blobPageUrl(pr, path, headSha)] : []),
+    `${raw}/refs/pull/${pr.number}/head/${path}`,
   ];
+}
+
+function blobPageUrl(pr: Pick<PrRef, 'owner' | 'repo'>, path: string, sha: string): string {
+  return `/${pr.owner}/${pr.repo}/blob/${sha}/${path}`;
+}
+
+const isBlobPage = (url: string) => url.startsWith('/');
+
+const EMBEDDED_DATA =
+  /<script type="application\/json" data-target="react-app\.embeddedData">([\s\S]*?)<\/script>/g;
+
+/**
+ * The file's text from its github.com page (a "blob" page), or null. GitHub's
+ * code view puts the file's lines in the page as JSON
+ * (`payload.….rawLines`, next to `blob.truncated`). This is not a documented
+ * API, so anything unexpected gives null and the explanation goes on without
+ * the file. A file GitHub cut short is not used, since its later lines would
+ * be missing.
+ */
+export function fileFromBlobPage(html: string): string | null {
+  for (const match of html.matchAll(EMBEDDED_DATA)) {
+    let data: unknown;
+    try {
+      data = JSON.parse(match[1]!);
+    } catch {
+      continue;
+    }
+    let lines: string[] | null = null;
+    let truncated = false;
+    const visit = (value: unknown, depth: number): void => {
+      if (depth > 12 || typeof value !== 'object' || value === null) return;
+      for (const [key, child] of Object.entries(value)) {
+        if (
+          key === 'rawLines' &&
+          !lines &&
+          Array.isArray(child) &&
+          child.every((line) => typeof line === 'string')
+        ) {
+          lines = child as string[];
+        } else if (key === 'truncated' && child === true) {
+          truncated = true;
+        } else {
+          visit(child, depth + 1);
+        }
+      }
+    };
+    visit(data, 0);
+    if (lines && !truncated) return (lines as string[]).join('\n');
+  }
+  return null;
 }
 
 export interface FileContextLoaderDeps {
@@ -345,10 +403,12 @@ export function createFileContextLoader(deps: FileContextLoaderDeps): FileContex
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      for (const url of rawFileUrls(pr, filePath, headShaFromPage(deps.doc, pr))) {
+      for (const url of fileUrls(pr, filePath, headShaFromPage(deps.doc, pr))) {
         if (controller.signal.aborted) break;
         try {
-          const text = await deps.fetchText(url, controller.signal);
+          const body = await deps.fetchText(url, controller.signal);
+          const text = isBlobPage(url) ? fileFromBlobPage(body) : body;
+          if (text === null) continue;
           return text.length <= MAX_FILE_CHARS ? text : null;
         } catch {
           // Try the next place.

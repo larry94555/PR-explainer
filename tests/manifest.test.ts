@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import manifest from '../public/manifest.json';
+import pkg from '../package.json';
 
 const root = resolve(import.meta.dirname, '..');
 // Every github.com page, since GitHub moves to a PR without a reload and
@@ -95,6 +96,27 @@ describe('manifest.json', () => {
     ]) {
       expect(manifest).not.toHaveProperty(key);
     }
+  });
+
+  it('can reach no host but GitHub and this computer (PR 7.4)', () => {
+    // Whatever is added later, code must not be able to leave the laptop.
+    const allowed = /^https:\/\/github\.com\/\*$|^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])\/\*$/;
+    for (const pattern of manifest.host_permissions) expect(pattern).toMatch(allowed);
+    for (const cs of manifest.content_scripts) {
+      for (const pattern of cs.matches) expect(pattern).toBe(GITHUB_PATTERN);
+    }
+    const text = JSON.stringify(manifest);
+    for (const broad of ['<all_urls>', '*://*/*', 'https://*/*', 'http://*/*', '*.github.com']) {
+      expect(text).not.toContain(broad);
+    }
+    // No permission that reads other sites or browsing data.
+    for (const p of ['tabs', 'webRequest', 'cookies', 'history', 'scripting', 'debugger']) {
+      expect(manifest.permissions).not.toContain(p);
+    }
+  });
+
+  it('has the same version as package.json, so the packaged .zip is named after it', () => {
+    expect(manifest.version).toBe(pkg.version);
   });
 
   it('has a toolbar button with no popup, so a click turns click-to-explain on or off', () => {

@@ -56,6 +56,11 @@ export const CONTEXT_TOKENS_RANGE = { min: 512, max: 131072 } as const;
 // Code never leaves the laptop, so only loopback addresses are accepted.
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 
+/** Whether a URL's hostname (as `new URL(...).hostname` gives it) is this computer. */
+export function isLocalHostname(hostname: string): boolean {
+  return LOCAL_HOSTNAMES.has(hostname);
+}
+
 export interface SettingsIssue {
   field: SettingsField;
   message: string;
@@ -114,7 +119,7 @@ function checkLlmUrl(value: unknown): string | null {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     return 'URL must start with http:// or https://.';
   }
-  if (!LOCAL_HOSTNAMES.has(url.hostname)) {
+  if (!isLocalHostname(url.hostname)) {
     return 'URL must point to this computer (localhost or 127.0.0.1).';
   }
   if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) {

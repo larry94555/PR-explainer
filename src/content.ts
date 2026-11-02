@@ -22,6 +22,11 @@ import type { FileContext } from './explain/explainPrompt';
 import { createPrMetadataLoader, type PrMetadata } from './prMetadata';
 import { parsePrUrl } from './prUrl';
 import { installSelection } from './selection';
+import { createGithubFetch } from './net/githubFetch';
+
+// Every request the content script makes goes through this, and it only
+// reaches GitHub (PR 7.4).
+const githubFetch = createGithubFetch();
 
 /** "owner/repo#17" for the PR on this page, or undefined (no caching). */
 function prName(url: string): string | undefined {
@@ -34,7 +39,7 @@ function prName(url: string): string | undefined {
 const prMetadata = createPrMetadataLoader({
   doc: document,
   fetchHtml: async (path, signal) => {
-    const response = await fetch(path, { credentials: 'same-origin', signal });
+    const response = await githubFetch(path, { credentials: 'same-origin', signal });
     if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
     return response.text();
   },
@@ -52,7 +57,7 @@ function loadPrMetadata(): Promise<PrMetadata | undefined> {
 const fileContexts = createFileContextLoader({
   doc: document,
   fetchText: async (url, signal) => {
-    const response = await fetch(url, { credentials: 'same-origin', signal });
+    const response = await githubFetch(url, { credentials: 'same-origin', signal });
     if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
     return response.text();
   },

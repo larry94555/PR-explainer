@@ -21,4 +21,5 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
-      - run: npm run build
+      # Builds, then checks and zips the extension (PR 7.4).
+      - run: npm run package

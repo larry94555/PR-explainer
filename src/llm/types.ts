@@ -79,6 +79,8 @@ export interface LlmClient {
  * - bad-response: the reply was not the JSON we expected.
  * - http: any other HTTP error status.
  * - aborted: the caller cancelled the request.
+ * - blocked: the request was not sent, because it was not to an LLM on this
+ *   computer (src/net/llmFetch.ts, PR 7.4).
  */
 export type LlmErrorKind =
   | 'connection'
@@ -87,7 +89,8 @@ export type LlmErrorKind =
   | 'no-model'
   | 'bad-response'
   | 'http'
-  | 'aborted';
+  | 'aborted'
+  | 'blocked';
 
 export class LlmError extends Error {
   override name = 'LlmError';
