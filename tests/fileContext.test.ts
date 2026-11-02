@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildFileContext,
@@ -5,7 +7,8 @@ import {
   findEnclosingBlock,
   headShaFromPage,
   MAX_BLOCK_LINES,
-  rawFileUrls,
+  fileFromBlobPage,
+  fileUrls,
   WINDOW_LINES,
   type CodeSpan,
 } from '../src/fileContext';
@@ -293,7 +296,7 @@ const PR: PrRef = { owner: 'octo', repo: 'shop', number: 7, tab: 'files' };
 const SHA = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 
-describe('headShaFromPage and rawFileUrls', () => {
+describe('headShaFromPage and fileUrls', () => {
   afterEach(() => {
     document.body.innerHTML = '';
   });
@@ -319,12 +322,13 @@ describe('headShaFromPage and rawFileUrls', () => {
     expect(headShaFromPage(document, PR)).toBeNull();
   });
 
-  it('lists the head commit, then the PR head, on raw.githubusercontent.com (no redirects)', () => {
-    expect(rawFileUrls(PR, 'src/my file#1.ts', SHA)).toEqual([
+  it('lists the head commit on raw.githubusercontent.com, its github.com page, then the PR head', () => {
+    expect(fileUrls(PR, 'src/my file#1.ts', SHA)).toEqual([
       `https://raw.githubusercontent.com/octo/shop/${SHA}/src/my%20file%231.ts`,
+      `/octo/shop/blob/${SHA}/src/my%20file%231.ts`,
       'https://raw.githubusercontent.com/octo/shop/refs/pull/7/head/src/my%20file%231.ts',
     ]);
-    expect(rawFileUrls(PR, 'a.ts', null)).toEqual([
+    expect(fileUrls(PR, 'a.ts', null)).toEqual([
       'https://raw.githubusercontent.com/octo/shop/refs/pull/7/head/a.ts',
     ]);
   });
@@ -354,15 +358,16 @@ describe('createFileContextLoader', () => {
     expect(fetchText).toHaveBeenCalledTimes(2);
   });
 
-  it("tries the PR's head ref when the head commit's URL fails", async () => {
+  it("tries the file's page, then the PR's head ref, when the head commit's URL fails", async () => {
     document.body.innerHTML = `<a href="/octo/shop/blob/${SHA}/src/cart.ts">View file</a>`;
     const fetchText = vi.fn(async (url: string) => {
-      if (url.includes(SHA)) throw new Error('GitHub answered 404');
+      if (url.includes(SHA) && !url.startsWith('/')) throw new Error('GitHub answered 404');
+      if (url.startsWith('/')) return '<html>no embedded data</html>';
       return file;
     });
     const loader = createFileContextLoader({ doc: document, fetchText });
     expect(await loader.load(PR, click)).toBeDefined();
-    expect(fetchText.mock.calls.map(([url]) => url)).toEqual(rawFileUrls(PR, 'src/cart.ts', SHA));
+    expect(fetchText.mock.calls.map(([url]) => url)).toEqual(fileUrls(PR, 'src/cart.ts', SHA));
   });
 
   it('gives undefined when the file cannot be read, and tries again next time', async () => {
@@ -394,5 +399,66 @@ describe('createFileContextLoader', () => {
       fetchText: async () => 'x'.repeat(1_000_001),
     });
     expect(await big.load(PR, click)).toBeUndefined();
+  });
+});
+
+// PR 7.4: github.com's /raw/ link redirects, and the content script follows
+// no redirects, so a private repository's file is read from its github.com
+// page instead. The fixture is that page as GitHub served it.
+describe('private repositories (file read from its github.com page)', () => {
+  const fixtures = resolve(import.meta.dirname, 'fixtures');
+  const page = readFileSync(resolve(fixtures, 'github-blob-page.html'), 'utf8');
+  const source = readFileSync(resolve(fixtures, 'github-blob-page.badge.ts.txt'), 'utf8');
+
+  it("reads the file's lines from the page's embedded data", () => {
+    expect(fileFromBlobPage(page)).toBe(source.replace(/\n$/, ''));
+  });
+
+  it.each([
+    ['no embedded data', '<html><body>Sign in</body></html>'],
+    [
+      'broken JSON',
+      '<script type="application/json" data-target="react-app.embeddedData">{</script>',
+    ],
+    [
+      'a file GitHub cut short',
+      '<script type="application/json" data-target="react-app.embeddedData">{"payload":{"blob":{"truncated":true},"x":{"rawLines":["a"]}}}</script>',
+    ],
+    [
+      'lines that are not text',
+      '<script type="application/json" data-target="react-app.embeddedData">{"payload":{"x":{"rawLines":[1,2]}}}</script>',
+    ],
+  ])('gives null for %s', (_name, html) => {
+    expect(fileFromBlobPage(html)).toBeNull();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('explains with the whole file when raw.githubusercontent.com cannot read it', async () => {
+    document.body.innerHTML = `<a href="/octo/shop/blob/${SHA}/src/badge.ts">View file</a>`;
+    const fetchText = vi.fn(async (url: string) => {
+      // A private repository: raw.githubusercontent.com answers 404.
+      if (!url.startsWith('/')) throw new Error('GitHub answered 404');
+      return page;
+    });
+    const loader = createFileContextLoader({ doc: document, fetchText });
+    const lineNo = source.split('\n').indexOf('  let host = findBadge(doc);') + 1;
+    const context = await loader.load(PR, {
+      filePath: 'src/badge.ts',
+      startLine: lineNo,
+      endLine: lineNo,
+      text: '  let host = findBadge(doc);',
+    });
+    // The enclosing function, read from the file the diff alone does not show.
+    expect(context?.kind).toBe('block');
+    expect(context?.lines[0]).toBe(
+      'export function showBadge(doc: Document, pr: PrRef): HTMLElement {',
+    );
+    expect(fetchText.mock.calls.map(([url]) => url)).toEqual([
+      `https://raw.githubusercontent.com/octo/shop/${SHA}/src/badge.ts`,
+      `/octo/shop/blob/${SHA}/src/badge.ts`,
+    ]);
   });
 });
