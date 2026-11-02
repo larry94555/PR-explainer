@@ -32,7 +32,7 @@ import {
 } from './lineContext';
 import type { ChatSubject } from './chat/chatPanel';
 import type { AnchorRect, PopupAnchor } from './popup/popup';
-import { applyTheme, THEME_VARS } from './theme';
+import { followTheme, THEME_VARS } from './theme';
 
 /** Set on each highlighted row. GitHub's own markup never uses it. */
 export const SELECTED_ATTR = 'data-pr-explainer-selected';
@@ -56,7 +56,7 @@ const PAGE_STYLE = `
 `;
 
 // The bar uses the popup's theme colors, so it matches GitHub's light or dark
-// mode (src/theme.ts, PR 7.3).
+// mode, and changes with it while shown (src/theme.ts, PR 7.3).
 const UI_STYLE = `
   :host { all: initial; }
   ${THEME_VARS}
@@ -190,6 +190,8 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
   let anchorAt: Node | null = null;
   let rows: Element[] = [];
   let ui: HTMLElement | null = null;
+  // Stops the shown bar following GitHub's theme (PR 7.3).
+  let stopFollowingTheme: (() => void) | null = null;
   let noteTimer: ReturnType<typeof setTimeout> | undefined;
   let explaining = false;
   // Presses the shown Explain selection button, while one is shown.
@@ -211,6 +213,8 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
     clearTimeout(noteTimer);
     ui?.remove();
     ui = null;
+    stopFollowingTheme?.();
+    stopFollowingTheme = null;
     explainSelected = null;
   };
   const clearHighlight = () => {
@@ -238,7 +242,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
     host.style.setProperty('top', `${y}px`);
     host.style.setProperty('left', `${x}px`);
     host.style.setProperty('z-index', '2147483646');
-    applyTheme(host, doc);
+    stopFollowingTheme = followTheme(host, doc);
     doc.body.append(host);
     ui = host;
   };

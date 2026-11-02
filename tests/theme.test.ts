@@ -2,6 +2,11 @@ import { openChatPanel } from '../src/chat/chatPanel';
 import { CHAT_PANEL_STYLE } from '../src/chat/chatPanelStyle';
 import { openPopup } from '../src/popup/popup';
 import { POPUP_STYLE } from '../src/popup/popupStyle';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import type { ClickHandlerDeps } from '../src/clickHandler';
+import type { Popup, PopupAnchor } from '../src/popup/popup';
+import { installSelection, SELECTION_UI_ID } from '../src/selection';
 import { applyTheme, followTheme, resolveTheme, THEME_VARS, watchTheme } from '../src/theme';
 
 const html = document.documentElement;
@@ -189,5 +194,44 @@ describe('panels in light and dark mode', () => {
     for (const style of [POPUP_STYLE, CHAT_PANEL_STYLE]) {
       expect(own(style)).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(/i);
     }
+  });
+});
+
+describe('the Explain selection bar', () => {
+  const ANCHOR = 'diff-6a17656d764b8e1930354f341cf7f47960b63845c3046edcd8bbf282aaa2f464';
+  const code = (id: string) =>
+    document.querySelector(`td[data-line-anchor="${ANCHOR}${id}"] .diff-text-inner`)!;
+  const bar = () => document.getElementById(SELECTION_UI_ID);
+  const click = (target: Element, shiftKey = false) => {
+    for (const type of ['mousedown', 'mouseup', 'click']) {
+      target.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, shiftKey }));
+    }
+  };
+  const deps = {
+    explain: () => ({ result: new Promise<never>(() => {}), stop: () => {} }),
+    openPopup: (_: PopupAnchor, hooks: Parameters<ClickHandlerDeps['openPopup']>[1]) =>
+      ({ close: () => hooks.onClose() }) as Popup,
+  };
+
+  it('opens in the page theme, switches while shown, and stops watching once gone', () => {
+    const system = fakeSystem(true);
+    setGitHub('auto');
+    document.body.innerHTML = readFileSync(
+      resolve(import.meta.dirname, 'fixtures', 'github-diff-new.html'),
+      'utf8',
+    );
+    const uninstall = installSelection(deps);
+    click(code('R43'));
+    click(code('R45'), true);
+    expect(bar()?.dataset.theme).toBe('dark');
+    system.set(false);
+    expect(bar()?.dataset.theme).toBe('light');
+    // A new bar replaces the old one, and only the new one is watched.
+    click(code('R44'));
+    click(code('R45'), true);
+    expect(system.listeners.size).toBe(1);
+    uninstall();
+    expect(bar()).toBeNull();
+    expect(system.listeners.size).toBe(0);
   });
 });
