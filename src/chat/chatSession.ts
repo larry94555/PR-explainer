@@ -12,7 +12,7 @@
 // imports types, and keeps its own copy of the section headings, which a test
 // checks against src/explain/explainPrompt.ts.
 
-import type { Explanation } from '../explain/parseExplanation';
+import type { Explanation, SectionKey } from '../explain/parseExplanation';
 import type { ChatSubject } from './chatPanel';
 import type { ChatMessage } from '../llm/types';
 
@@ -28,7 +28,7 @@ export const CHAT_SYSTEM_PROMPT = [
 // The headings the explain prompt asks for (SECTION_HEADINGS in
 // src/explain/explainPrompt.ts). The explanation is replayed to the model in
 // the same shape it was written in.
-export const EXPLANATION_HEADINGS: Record<keyof Explanation, string> = {
+export const EXPLANATION_HEADINGS: Record<SectionKey, string> = {
   what: 'What it does',
   why: "Why it's needed",
   concerns: 'Concerns',
@@ -70,7 +70,7 @@ export function codeNote(about: string): string {
 
 /** The model's explanation as Markdown, with the three headings it was asked for. */
 export function formatExplanation(explanation: Explanation): string {
-  return (Object.keys(EXPLANATION_HEADINGS) as (keyof Explanation)[])
+  return (Object.keys(EXPLANATION_HEADINGS) as SectionKey[])
     .map((key) => `## ${EXPLANATION_HEADINGS[key]}\n${explanation[key].trim()}`)
     .join('\n\n');
 }

@@ -149,6 +149,19 @@ describe('explain handler', () => {
     expect(result).toMatchObject({ status: 'done', timings });
   });
 
+  it('marks an answer that hit the answer limit as cut off (PR 8.4)', async () => {
+    const { handler, client } = setup(async function* () {
+      yield "## What it does\nA.\n## Why it's needed\nBecause the";
+      return { model: 'qwen2.5-coder:7b', doneReason: 'length' };
+    });
+    const result = await handler({ context: SAMPLE_CONTEXT });
+    expect(result).toMatchObject({
+      status: 'done',
+      explanation: { what: 'A.', why: 'Because the …', cutOff: true },
+    });
+    expect(vi.mocked(client.chatStream).mock.calls[0]![1].maxResponseTokens).toBe(300);
+  });
+
   it('works without onChunk', async () => {
     const { handler } = setup(streamOf(['## What it does\nA.'], undefined, 'llama3'));
     await expect(handler({ context: SAMPLE_CONTEXT })).resolves.toMatchObject({
@@ -229,12 +242,12 @@ describe('explain handler', () => {
       expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(8192);
     });
 
-    it('trims the lines around the code to fit a 2048-token context', async () => {
-      const { handler, client } = setup(streamOf(DONE), { ...SETTINGS, contextTokens: 2048 });
+    it('trims the lines around the code to fit a 1024-token context', async () => {
+      const { handler, client } = setup(streamOf(DONE), { ...SETTINGS, contextTokens: 1024 });
       const result = await handler({ context: longContext });
       expect(result.status).toBe('done');
       const [messages, options] = vi.mocked(client.chatStream).mock.calls[0]!;
-      expect(options.contextTokens).toBe(2048);
+      expect(options.contextTokens).toBe(1024);
       expect(messages[1]!.content).toContain('>+const target = 1;');
       expect(messages[1]!.content).toMatch(/earlier lines left out/);
       expect(messages[1]!.content).not.toContain('nearby line 0\n');
@@ -256,13 +269,13 @@ describe('explain handler', () => {
     });
 
     it('returns the prompt as sent when Show prompt is on, and not otherwise', async () => {
-      const on = setup(streamOf(DONE), { ...SETTINGS, contextTokens: 2048, showPrompt: true });
+      const on = setup(streamOf(DONE), { ...SETTINGS, contextTokens: 1024, showPrompt: true });
       const result = await on.handler({ context: longContext });
       expect(result).toMatchObject({
         status: 'done',
         prompt: {
-          contextTokens: 2048,
-          budget: 2048 - SETTINGS.maxResponseTokens - 32,
+          contextTokens: 1024,
+          budget: 1024 - SETTINGS.maxResponseTokens - 32,
           trimmed: ['lines around the code'],
         },
       });

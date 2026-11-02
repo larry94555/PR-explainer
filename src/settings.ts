@@ -20,7 +20,11 @@ export interface Settings {
   model: string;
   /** Sampling temperature, 0 to 2. Low values give steadier explanations. */
   temperature: number;
-  /** Upper limit on the length of a reply, in tokens. */
+  /**
+   * Upper limit on the length of an explanation, in tokens. Kept low (PR 8.4)
+   * because writing the answer is usually the slowest part. Chat answers may
+   * use up to CHAT_MIN_RESPONSE_TOKENS even when this is lower.
+   */
   maxResponseTokens: number;
   /**
    * The model's context window, in tokens: prompt and reply together (PR 6.2).
@@ -44,7 +48,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   llmUrl: 'http://localhost:11434',
   model: '',
   temperature: 0.2,
-  maxResponseTokens: 1024,
+  maxResponseTokens: 300,
   contextTokens: 0,
   keepAliveMinutes: 30,
   showPrompt: false,
@@ -53,6 +57,18 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
 /** The chrome.storage key that holds one field, for example "settings.model". */
 export function storageKey(field: SettingsField): string {
   return `settings.${field}`;
+}
+
+/**
+ * Chat answers may be this long even when maxResponseTokens is lower (PR 8.4):
+ * a question can need a longer answer than an explanation, and the user is
+ * already reading while it streams.
+ */
+export const CHAT_MIN_RESPONSE_TOKENS = 1024;
+
+/** The answer limit for a chat question: the setting, but at least CHAT_MIN_RESPONSE_TOKENS. */
+export function chatResponseTokens(settings: Pick<Settings, 'maxResponseTokens'>): number {
+  return Math.max(settings.maxResponseTokens, CHAT_MIN_RESPONSE_TOKENS);
 }
 
 export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;

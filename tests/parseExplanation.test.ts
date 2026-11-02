@@ -1,4 +1,5 @@
 import {
+  CUT_OFF_BEFORE,
   NO_ANSWER,
   NO_CONCERNS,
   NO_REASON,
@@ -92,6 +93,70 @@ describe('parseExplanation', () => {
       what: NO_ANSWER,
       why: NO_REASON,
       concerns: NO_CONCERNS,
+    });
+  });
+
+  describe('a reply cut off at the answer limit (PR 8.4)', () => {
+    it('marks the section it stopped in and the sections it never reached', () => {
+      const reply = "## What it does\nLists the hosts.\n## Why it's needed\nSettings only accept";
+      expect(parseExplanation(reply, { cutOff: true })).toEqual({
+        what: 'Lists the hosts.',
+        why: 'Settings only accept …',
+        concerns: CUT_OFF_BEFORE,
+        cutOff: true,
+      });
+    });
+
+    it('marks a reply cut off in the first section', () => {
+      expect(parseExplanation('## What it does\nLists the', { cutOff: true })).toEqual({
+        what: 'Lists the …',
+        why: CUT_OFF_BEFORE,
+        concerns: CUT_OFF_BEFORE,
+        cutOff: true,
+      });
+    });
+
+    it('marks a reply cut off in the middle of a concerns list', () => {
+      const reply = '## What it does\nA.\n## Why it’s needed\nB.\n## Concerns\n- One.\n- Tw';
+      expect(parseExplanation(reply, { cutOff: true })).toEqual({
+        what: 'A.',
+        why: 'B.',
+        concerns: '- One.\n- Tw …',
+        cutOff: true,
+      });
+    });
+
+    it('says a section was cut off when it stopped right after the heading', () => {
+      const reply = "## What it does\nA.\n## Why it's needed\n";
+      const result = parseExplanation(reply, { cutOff: true });
+      expect(result.why).toBe(CUT_OFF_BEFORE);
+      expect(result.concerns).toBe(CUT_OFF_BEFORE);
+    });
+
+    it('keeps the usual text for a section the model skipped before it stopped', () => {
+      const reply = '## What it does\nA.\n## Concerns\n- One';
+      expect(parseExplanation(reply, { cutOff: true })).toEqual({
+        what: 'A.',
+        why: NO_REASON,
+        concerns: '- One …',
+        cutOff: true,
+      });
+    });
+
+    it('marks a reply with no headings, and one cut off while thinking', () => {
+      expect(parseExplanation('Lists the', { cutOff: true }).what).toBe('Lists the …');
+      expect(parseExplanation('<think>First I will', { cutOff: true })).toEqual({
+        what: CUT_OFF_BEFORE,
+        why: CUT_OFF_BEFORE,
+        concerns: CUT_OFF_BEFORE,
+        cutOff: true,
+      });
+    });
+
+    it('does not mark a reply that finished', () => {
+      const reply = '## What it does\nA.';
+      expect(parseExplanation(reply, { cutOff: false })).not.toHaveProperty('cutOff');
+      expect(parseExplanation(reply).why).toBe(NO_REASON);
     });
   });
 });

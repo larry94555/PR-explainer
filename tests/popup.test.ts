@@ -68,6 +68,21 @@ describe('popup', () => {
     expect(section('what').querySelector('li strong')?.textContent).toBe('three');
     expect(section('why').querySelector('em')?.textContent).toBe('slow');
     expect(section('concerns').textContent).toBe('None found.');
+    expect(shadow().querySelector('.cut-off-note')).toBeNull();
+  });
+
+  it('says so under an answer that was cut off at the limit (PR 8.4)', () => {
+    const popup = openPopup(ANCHOR);
+    popup.showExplanation({ ...SAMPLE, why: 'The server is …', cutOff: true }, 'llama3');
+    const note = shadow().querySelector('.cut-off-note');
+    expect(note?.textContent).toContain('reached the length limit and was cut off');
+    expect(note?.querySelector('strong')?.textContent).toBe('Max response length');
+    // The note comes after the three sections.
+    expect(shadow().querySelector('section[data-section="concerns"] ~ .cut-off-note')).toBe(note);
+    // A cached cut-off answer is marked too.
+    popup.showLoading();
+    popup.showExplanation({ ...SAMPLE, cutOff: true }, 'llama3', { elapsedMs: 9_000 });
+    expect(shadow().querySelector('.cut-off-note')).not.toBeNull();
   });
 
   describe('Show prompt (PR 6.2)', () => {

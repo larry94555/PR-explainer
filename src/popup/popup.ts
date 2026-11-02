@@ -50,6 +50,11 @@ import { followTheme } from '../theme';
 
 export const POPUP_ID = 'pr-explainer-popup';
 
+/** Under an explanation that hit the answer limit (PR 8.4). */
+export const CUT_OFF_NOTE =
+  'This answer reached the length limit and was cut off. ' +
+  'For longer answers, raise **Max response length** in the extension settings.';
+
 export const SECTION_TITLES: Record<SectionKey, string> = {
   what: 'What it does',
   why: "Why it's needed",
@@ -444,7 +449,14 @@ export function openPopup(
         section.append(heading, content);
         return section;
       });
-      setBody('done', ...sections);
+      const notes: HTMLElement[] = [];
+      if (explanation.cutOff) {
+        const note = doc.createElement('p');
+        note.className = 'cut-off-note';
+        appendInline(note, CUT_OFF_NOTE);
+        notes.push(note);
+      }
+      setBody('done', ...sections, ...notes);
     },
     showError(message, fix) {
       if (state === 'closed' || state === 'stopped') return;
