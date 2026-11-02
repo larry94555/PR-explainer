@@ -67,6 +67,9 @@ function fakePopup(anchor: PopupAnchor, hooks: PopupHooks) {
     },
     showLoading: () => calls.push('loading'),
     showPrompt: (report) => calls.push(`prompt:${report.tokens}`),
+    showTimings: (timings) => {
+      if (timings) calls.push(`timings:${timings.totalMs}`);
+    },
     showPartial: (markdown) => {
       if (state !== 'loading' && state !== 'streaming') return;
       state = 'streaming';
@@ -215,6 +218,20 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     await flush();
     expect(env.popups[0]!.calls).toEqual(['done:qwen2.5-coder:7b:Marks 2.4 as done.']);
     expect(env.timings).toEqual([{ elapsedMs: 1234, status: 'done', model: 'qwen2.5-coder:7b' }]);
+  });
+
+  it('shows where the time went and logs it, for an answer from the model (PR 8.1)', async () => {
+    const timings = { totalMs: 900, answerTokens: 20, answerMs: 800 };
+    env = setup(() => Promise.resolve({ ...DONE, timings }));
+    click(code('R44'));
+    await flush();
+    expect(env.popups[0]!.calls).toEqual([
+      'done:qwen2.5-coder:7b:Marks 2.4 as done.',
+      'timings:900',
+    ]);
+    expect(env.timings).toEqual([
+      { elapsedMs: 1234, status: 'done', model: 'qwen2.5-coder:7b', timings },
+    ]);
   });
 
   it('shows the error message and fix when the model fails', async () => {

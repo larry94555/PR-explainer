@@ -153,6 +153,8 @@ export const CHAT_PANEL_STYLE = `
   .chat[data-busy='true'] .send, .chat:not([data-busy='true']) .stop { display: none; }
   /* An answer that has no text yet. */
   .message.assistant:empty::before { content: 'Thinking…'; color: var(--pe-muted); }
+  /* How long the answer above took (PR 8.1). */
+  .elapsed { align-self: flex-start; margin: -4px 0 0 2px; color: var(--pe-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   .message[data-status='failed'] { background: var(--pe-danger-subtle-bg); border-color: var(--pe-danger-border); }
   .error-message { color: var(--pe-danger); font-weight: 600; }
   .stopped-note { color: var(--pe-muted); font-style: italic; }

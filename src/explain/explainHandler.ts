@@ -24,10 +24,13 @@
 // The content script may also send the function or block around the code,
 // read from the full file at the PR's head (PR 6.3). It is checked here, and
 // it is the first thing cut when the prompt is too long.
+//
+// An answer from the model carries the server's timings (PR 8.1), for the
+// popup's latency Details. A cached answer has none.
 
 import { FALLBACK_CONTEXT_TOKENS, promptBudget, type ContextSizer } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
-import type { ChatMessage, LlmClient } from '../llm/types';
+import type { ChatMessage, LlmClient, LlmTimings } from '../llm/types';
 import type { Settings } from '../settings';
 import { explainCacheKey, type ExplainCache } from './explainCache';
 import type { FileContext, PrInfo } from './explainPrompt';
@@ -101,6 +104,8 @@ export type ExplainResult =
       cached?: CachedInfo;
       /** The prompt as sent, when the Show prompt setting is on. */
       prompt?: PromptReport;
+      /** Where the server's time went (PR 8.1). Left out for a cached answer. */
+      timings?: LlmTimings;
     }
   | { status: 'failed'; message: string; fix: string };
 
@@ -230,14 +235,20 @@ export function createExplainHandler(deps: ExplainDeps) {
         next = await stream.next();
       }
       const explanation = parseExplanation(content);
-      const model = next.value.model;
+      const { model, timings } = next.value;
       if (cache && key) {
         // A failed save only means the next click asks the model again.
         await cache
           .set(key, { explanation, model, elapsedMs: now() - startedAt, savedAt: now() })
           .catch(() => {});
       }
-      return { status: 'done', explanation, model, ...(prompt && { prompt }) };
+      return {
+        status: 'done',
+        explanation,
+        model,
+        ...(prompt && { prompt }),
+        ...(timings && { timings }),
+      };
     } catch (error) {
       const { message, fix } = describeLlmError(error, {
         url: settings.llmUrl,

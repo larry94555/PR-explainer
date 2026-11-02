@@ -10,7 +10,7 @@ import { openChatPanel } from '../src/chat/chatPanel';
 import { startChat, type ActiveChat } from '../src/chat/chatFlow';
 import { ChatSession } from '../src/chat/chatSession';
 import { describeLlmError } from '../src/llm/describeLlmError';
-import type { ChatMessage } from '../src/llm/types';
+import type { ChatMessage, LlmTimings } from '../src/llm/types';
 import { LlmError } from '../src/llm/types';
 import { openPopup } from '../src/popup/popup';
 import { isExplainShortcut } from '../src/a11y';
@@ -29,6 +29,16 @@ const SAMPLE: Explanation = {
   concerns:
     '1. A request that fails for a real reason (bad URL) now takes over a second to report.\n' +
     '2. `attempt` is never reset, so:\n\n```ts\nawait retry(fn); // second call starts at attempt 3\n```',
+};
+
+// What Ollama reports for a 7B model that had to be loaded first (PR 8.1).
+const TIMINGS: LlmTimings = {
+  totalMs: 13_900,
+  loadMs: 4_100,
+  promptTokens: 812,
+  promptMs: 1_300,
+  answerTokens: 240,
+  answerMs: 8_000,
 };
 
 const UNSAFE: Explanation = {
@@ -248,7 +258,11 @@ function explainRow(row: Element): void {
     status.textContent = 'Last event: line added to the chat';
     return;
   }
+  // The Explanation state answers at once, so it uses a clock that says the
+  // answer took 14.2 s, to match its Details (PR 8.1).
+  let fakeTime = 0;
   const popup = openPopup(row, {
+    ...(chosen() === 'done' && { now: () => fakeTime }),
     onClose: () => (status.textContent = 'Last event: closed'),
     onAsk: () => {
       const session = new ChatSession({
@@ -266,7 +280,9 @@ function explainRow(row: Element): void {
       popup.showLoading(MODEL);
       break;
     case 'done':
+      fakeTime = 14_200;
       popup.showExplanation(SAMPLE, MODEL);
+      popup.showTimings(TIMINGS);
       break;
     case 'prompt':
       popup.showExplanation(SAMPLE, MODEL);
@@ -278,7 +294,18 @@ function explainRow(row: Element): void {
       break;
     case 'slow':
       popup.showLoading(MODEL);
-      setTimeout(() => popup.showExplanation(SAMPLE, MODEL), 2000);
+      setTimeout(() => {
+        popup.showExplanation(SAMPLE, MODEL);
+        // Ollama's own share of the 2 s, so the rest shows as Outside Ollama.
+        popup.showTimings({
+          totalMs: 1_700,
+          loadMs: 15,
+          promptTokens: 812,
+          promptMs: 400,
+          answerTokens: 40,
+          answerMs: 1_280,
+        });
+      }, 2000);
       break;
     case 'failed': {
       const { message, fix } = describeLlmError(new LlmError('connection', 'fetch failed'), {

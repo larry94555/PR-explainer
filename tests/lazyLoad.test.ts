@@ -41,6 +41,7 @@ function attach() {
         showExplanation: () => {},
         showError: () => {},
         showPrompt: () => {},
+        showTimings: () => {},
         close: () => hooks.onClose(),
       }) as Popup,
   };

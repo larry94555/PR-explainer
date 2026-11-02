@@ -374,4 +374,97 @@ describe('chat panel', () => {
       expect(empty.element.textContent).toBe(STOPPED_EMPTY);
     });
   });
+
+  describe('answer timer (PR 8.1)', () => {
+    let time = 0;
+    const elapsed = () => [...shadow().querySelectorAll<HTMLElement>('.elapsed')];
+    const ask = () => {
+      const panel = openChatPanel({ subject: SUBJECT, now: () => time });
+      panel.addMessage('user', 'Why?');
+      const answer = panel.addMessage('assistant', '');
+      panel.setBusy(true);
+      return { panel, answer };
+    };
+
+    beforeEach(() => {
+      time = 0;
+      vi.useFakeTimers();
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it('ticks under the answer while it is written, then says how long it took', () => {
+      const { panel, answer } = ask();
+      expect(elapsed()).toHaveLength(1);
+      expect(answer.element.nextElementSibling).toBe(elapsed()[0]);
+      expect(elapsed()[0]!.textContent).toBe('0.0 s');
+      // Hidden from screen readers while it ticks, so the log is not re-read.
+      expect(elapsed()[0]!.getAttribute('aria-hidden')).toBe('true');
+
+      time = 2_340;
+      vi.advanceTimersByTime(100);
+      expect(elapsed()[0]!.textContent).toBe('2.3 s');
+      answer.update('Because.');
+      time = 4_150;
+      panel.setBusy(false);
+      expect(elapsed()[0]!.textContent).toBe('Answered in 4.1 s');
+      expect(elapsed()[0]!.hasAttribute('aria-hidden')).toBe(false);
+      time = 9_000;
+      vi.advanceTimersByTime(1_000);
+      expect(elapsed()[0]!.textContent).toBe('Answered in 4.1 s');
+    });
+
+    it('says "Failed after" or "Stopped after", even when called after setBusy(false)', () => {
+      const first = ask();
+      time = 1_500;
+      first.panel.setBusy(false);
+      first.answer.showError('Ollama is not running.', 'Start it.');
+      expect(elapsed()[0]!.textContent).toBe('Failed after 1.5 s');
+
+      const second = first.panel.addMessage('assistant', '');
+      first.panel.setBusy(true);
+      time = 2_000;
+      second.showStopped();
+      first.panel.setBusy(false);
+      expect(elapsed()[1]!.textContent).toBe('Stopped after 0.5 s');
+      expect(elapsed()[0]!.textContent).toBe('Failed after 1.5 s');
+    });
+
+    it('times each answer separately, and not the earlier messages', () => {
+      const panel = openChatPanel({
+        subject: SUBJECT,
+        now: () => time,
+        messages: [{ role: 'assistant', text: 'The explanation.' }],
+      });
+      expect(elapsed()).toHaveLength(0);
+      panel.addMessage('user', 'Why?');
+      panel.addMessage('assistant', '');
+      panel.setBusy(true);
+      panel.setBusy(true);
+      expect(elapsed()).toHaveLength(1);
+      time = 3_000;
+      panel.setBusy(false);
+      panel.addMessage('user', 'And?');
+      panel.addMessage('assistant', '');
+      time = 4_000;
+      panel.setBusy(true);
+      time = 5_000;
+      panel.setBusy(false);
+      expect(elapsed().map((e) => e.textContent)).toEqual([
+        'Answered in 3.0 s',
+        'Answered in 1.0 s',
+      ]);
+    });
+
+    it('stops ticking when the chat is cleared or closed', () => {
+      const { panel } = ask();
+      panel.clear();
+      expect(elapsed()).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+      panel.addMessage('assistant', '');
+      panel.setBusy(true);
+      expect(vi.getTimerCount()).toBe(1);
+      panel.close();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
 });

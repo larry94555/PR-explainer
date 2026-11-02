@@ -28,6 +28,27 @@ export interface ChatReply {
   content: string;
   /** The model that answered, as the server names it. */
   model: string;
+  /** Where the server's time went, when it says (PR 8.1). */
+  timings?: LlmTimings;
+}
+
+/**
+ * Where the server's time went on one reply (PR 8.1), in milliseconds. Each
+ * field is left out when the server does not report it.
+ */
+export interface LlmTimings {
+  /** The whole request, as the server measured it. */
+  totalMs?: number;
+  /** Loading the model into memory (near zero when it was already loaded). */
+  loadMs?: number;
+  /** How many prompt tokens the model read (cached ones are not counted). */
+  promptTokens?: number;
+  /** Reading the prompt. */
+  promptMs?: number;
+  /** How many tokens the model wrote. */
+  answerTokens?: number;
+  /** Writing the answer. */
+  answerMs?: number;
 }
 
 /** What chatStream returns once the reply is complete. */
@@ -36,6 +57,8 @@ export interface ChatStreamEnd {
   model: string;
   /** Why the model stopped, when the server says: "stop" (finished) or "length" (hit the limit). */
   doneReason?: string;
+  /** Where the server's time went, when it says (PR 8.1). */
+  timings?: LlmTimings;
 }
 
 export interface ModelInfo {

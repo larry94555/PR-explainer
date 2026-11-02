@@ -25,6 +25,7 @@ import { locateRow } from './diffDom';
 import { extractContext, formatContext } from './lineContext';
 import type { Explanation } from './explain/parseExplanation';
 import type { CodeSpan } from './fileContext';
+import type { LlmTimings } from './llm/types';
 import type { ExplainStream } from './messaging/client';
 import type { Popup, PopupAnchor, PopupOptions } from './popup/popup';
 
@@ -98,6 +99,8 @@ export interface ExplainTiming {
   firstChunkMs?: number;
   /** True when the answer came from the cache. */
   cached?: boolean;
+  /** Where the server's time went, for an answer from the model (PR 8.1). */
+  timings?: LlmTimings;
 }
 
 // Elements GitHub (or the browser) already gives a meaning to a click on.
@@ -293,12 +296,14 @@ export function explainInPopup(
         if (result.status === 'done') {
           explanation = result.explanation;
           popup.showExplanation(result.explanation, result.model, result.cached);
+          popup.showTimings(result.timings);
           if (result.prompt) popup.showPrompt(result.prompt);
         } else popup.showError(result.message, result.fix);
         report({
           status: result.status,
           model: result.status === 'done' ? result.model : undefined,
           ...(result.status === 'done' && result.cached ? { cached: true } : {}),
+          ...(result.status === 'done' && result.timings ? { timings: result.timings } : {}),
         });
       },
       (error: unknown) => {

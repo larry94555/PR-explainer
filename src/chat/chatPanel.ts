@@ -17,6 +17,11 @@
 // answer that failed shows the message and fix in red (showError), and a
 // stopped one keeps its text with a "Stopped" note (showStopped).
 //
+// Like the popup, each answer shows how long it took: a live timer under it
+// while the panel is busy, then "Answered in …", "Failed after …", or
+// "Stopped after …" (PR 8.1). The timer is hidden from screen readers while
+// it ticks, so the message list does not announce every tenth of a second.
+//
 // It follows GitHub's light or dark mode (src/theme.ts). Esc closes it, and
 // closing it while focus is inside gives focus back to what had it before it
 // opened. The message list is marked aria-busy while an answer is being
@@ -29,6 +34,7 @@
 // demo page (`npm run demo:chat`) does it with fake answers.
 
 import { appendInline, renderMarkdown } from '../popup/renderMarkdown';
+import { formatElapsed, TICK_MS } from '../popup/popup';
 import { CHAT_PANEL_STYLE } from './chatPanelStyle';
 import { restoreFocus } from '../a11y';
 import { followTheme } from '../theme';
@@ -94,6 +100,8 @@ export interface ChatPanelOptions {
   onNewChat?: () => void;
   /** Called once when the panel closes, however it was closed. */
   onClose?: () => void;
+  /** Clock in milliseconds, for an answer's elapsed time. Tests pass a fake one. */
+  now?: () => number;
 }
 
 export interface ChatPanel {
@@ -109,7 +117,11 @@ export interface ChatPanel {
   clear(): void;
   /** Changes the file and lines named in the header. */
   setSubject(subject: ChatSubject): void;
-  /** While busy (an answer is being written), Send and Enter do nothing and Stop shows. */
+  /**
+   * While busy (an answer is being written), Send and Enter do nothing and
+   * Stop shows. Turning it on starts the timer under the newest answer, and
+   * turning it off stops it.
+   */
   setBusy(busy: boolean): void;
   /** Puts the cursor in the text box. */
   focus(): void;
@@ -211,6 +223,48 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   let busy = false;
   const views: ChatMessageView[] = [];
 
+  // The time each answer took, shown under it. Only one ticks at a time.
+  const now = options.now ?? (() => performance.now());
+  interface Timer {
+    label: HTMLElement;
+    startedAt: number;
+    finishedAt?: number;
+  }
+  const timers = new WeakMap<HTMLElement, Timer>();
+  let ticking: Timer | undefined;
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  const showTime = (timer: Timer, prefix = '') => {
+    timer.label.textContent = prefix + formatElapsed((timer.finishedAt ?? now()) - timer.startedAt);
+  };
+  const startTimer = (answer: HTMLElement) => {
+    if (timers.has(answer)) return;
+    const follow = nearBottom();
+    const label = doc.createElement('p');
+    label.className = 'elapsed';
+    label.setAttribute('aria-hidden', 'true');
+    answer.after(label);
+    const timer: Timer = { label, startedAt: now() };
+    timers.set(answer, timer);
+    ticking = timer;
+    showTime(timer);
+    if (follow) scrollToEnd();
+    ticker ??= setInterval(() => ticking && showTime(ticking), TICK_MS);
+  };
+  const stopTicking = () => {
+    clearInterval(ticker);
+    ticker = undefined;
+    ticking = undefined;
+  };
+  // Freezes an answer's time (once) and says how it ended.
+  const finishTimer = (answer: HTMLElement, prefix: string) => {
+    const timer = timers.get(answer);
+    if (!timer) return;
+    if (ticking === timer) stopTicking();
+    timer.finishedAt ??= now();
+    timer.label.removeAttribute('aria-hidden');
+    showTime(timer, prefix);
+  };
+
   const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < FOLLOW_SLACK;
   const scrollToEnd = () => {
     list.scrollTop = list.scrollHeight;
@@ -247,6 +301,7 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
         change(() => render(role, element, next));
       },
       showError(message, fix) {
+        finishTimer(element, 'Failed after ');
         change(() => {
           element.dataset.status = 'failed';
           element.setAttribute('role', 'alert');
@@ -260,6 +315,7 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
         });
       },
       showStopped() {
+        finishTimer(element, 'Stopped after ');
         change(() => {
           element.dataset.status = 'stopped';
           const note = doc.createElement('p');
@@ -345,12 +401,20 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
     clear() {
       if (!open) return;
       views.length = 0;
+      stopTicking();
       list.replaceChildren();
     },
     setSubject(next) {
       if (open) setSubject(next);
     },
     setBusy(next) {
+      if (open && next) {
+        const answer = [...views].reverse().find((v) => v.role === 'assistant');
+        if (answer) startTimer(answer.element);
+      } else if (!next && ticking) {
+        const answer = views.find((v) => timers.get(v.element) === ticking);
+        if (answer) finishTimer(answer.element, 'Answered in ');
+      }
       busy = next;
       syncSend();
     },
@@ -362,6 +426,7 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
       // Focus inside a shadow root shows as its host on the page.
       const hadFocus = doc.activeElement === host;
       open = false;
+      stopTicking();
       stopFollowingTheme();
       host.remove();
       if (hadFocus) restoreFocus(returnFocus);
