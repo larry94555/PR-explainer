@@ -26,6 +26,7 @@ function setup(chatStream: LlmClient['chatStream'], settings: Settings = SETTING
     listModels: vi.fn(),
     loadedModels: vi.fn(),
     loadedContextTokens: vi.fn(async () => undefined),
+    runningModels: vi.fn(async () => []),
     loadModel: vi.fn(),
     modelContext: vi.fn(),
     chat: vi.fn(),

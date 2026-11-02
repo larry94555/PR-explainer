@@ -1,6 +1,6 @@
 // LlmClient for Ollama's HTTP API (https://github.com/ollama/ollama/blob/main/docs/api.md):
 // GET /api/tags lists installed models, GET /api/ps lists the loaded ones
-// (PR 8.3), POST /api/show describes one (its context window, PR 6.2),
+// (PR 8.3) and how much of each is on the GPU (PR 8.6), POST /api/show describes one (its context window, PR 6.2),
 // POST /api/chat answers a conversation,
 // either all at once (chat) or as a stream of newline-delimited JSON objects
 // (chatStream).
@@ -29,6 +29,7 @@ import {
   type LlmTimings,
   type ModelContext,
   type ModelInfo,
+  type RunningModel,
 } from './types';
 import { createLlmFetch, type FetchLike } from '../net/llmFetch';
 
@@ -62,13 +63,26 @@ export class OllamaClient implements LlmClient {
   }
 
   async loadedModels(options: { signal?: AbortSignal } = {}): Promise<string[]> {
+    return (await this.runningModels(options)).map((m) => m.name);
+  }
+
+  async runningModels(options: { signal?: AbortSignal } = {}): Promise<RunningModel[]> {
     const body = await this.request('/api/ps', { method: 'GET', signal: options.signal });
     const models = (body as { models?: unknown }).models;
     if (!Array.isArray(models)) throw badResponse('/api/ps', 'missing "models" list');
     return models.flatMap((m: unknown) => {
-      const { name, model } = (m ?? {}) as { name?: unknown; model?: unknown };
+      const { name, model, size, size_vram, context_length } = (m ?? {}) as Record<string, unknown>;
       const found = typeof name === 'string' ? name : model;
-      return typeof found === 'string' ? [found] : [];
+      if (typeof found !== 'string') return [];
+      // Older Ollama versions do not report context_length.
+      return [
+        {
+          name: found,
+          ...(isWholeNumber(size) && { sizeBytes: size }),
+          ...(isWholeNumber(size_vram) && { vramBytes: size_vram }),
+          ...(isPositiveInteger(context_length) && { contextTokens: context_length }),
+        },
+      ];
     });
   }
 
@@ -76,18 +90,8 @@ export class OllamaClient implements LlmClient {
     model: string,
     options: { signal?: AbortSignal } = {},
   ): Promise<number | undefined> {
-    const body = await this.request('/api/ps', { method: 'GET', signal: options.signal });
-    const models = (body as { models?: unknown }).models;
-    if (!Array.isArray(models)) throw badResponse('/api/ps', 'missing "models" list');
-    for (const m of models) {
-      const { name, model: id, context_length } = (m ?? {}) as Record<string, unknown>;
-      const listed = typeof name === 'string' ? name : id;
-      if (typeof listed === 'string' && isSameModel(listed, model)) {
-        // Older Ollama versions do not report context_length.
-        return isPositiveInteger(context_length) ? context_length : undefined;
-      }
-    }
-    return undefined;
+    const running = await this.runningModels(options);
+    return running.find((m) => isSameModel(m.name, model))?.contextTokens;
   }
 
   async loadModel(
@@ -254,6 +258,10 @@ export class OllamaClient implements LlmClient {
     if (isAbort(cause) || signal?.aborted) return abortedError(cause);
     return new LlmError('connection', `The connection to ${this.baseUrl} was lost.`, { cause });
   }
+}
+
+function isWholeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
 function isPositiveInteger(value: unknown): value is number {

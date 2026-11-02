@@ -1,7 +1,9 @@
 // The settings page: the Ollama URL, a model dropdown filled from the server,
 // temperature, max response length, context size, how long to keep the model
 // loaded (PR 8.3) and the Show prompt debug option (PR 6.2), Save, and Test
-// connection.
+// connection. The Speed section (PR 8.6) says whether the picked model runs on
+// the GPU, and its Speed test times each coding model and lets the user pick
+// the fastest (src/llm/speedTest.ts).
 //
 // All page logic lives here and takes its dependencies as parameters, so the
 // tests can run it against options.html in jsdom with fakes. main.ts wires in
@@ -14,7 +16,17 @@
 // call the LLM.
 
 import { describeLlmError, type ErrorContext, type Platform } from '../llm/describeLlmError';
-import type { LlmClient } from '../llm/types';
+import { gpuStatus } from '../llm/gpuStatus';
+import { MIN_NUM_CTX } from '../llm/numCtx';
+import {
+  fastestUnderGoal,
+  rankResults,
+  runSpeedTest,
+  SPEED_GOAL_MS,
+  speedTestModels,
+  type SpeedResult,
+} from '../llm/speedTest';
+import { isSameModel, type LlmClient } from '../llm/types';
 import {
   DEFAULT_SETTINGS,
   SettingsValidationError,
@@ -44,6 +56,12 @@ export interface OptionsPage {
   refreshModels(): Promise<void>;
   save(): Promise<void>;
   testConnection(): Promise<void>;
+  /** Shows whether the picked model runs on the GPU (PR 8.6). */
+  checkGpu(): Promise<void>;
+  /** Runs the Speed test (PR 8.6). Resolves when it finishes or is stopped. */
+  speedTest(): Promise<void>;
+  /** Stops a running Speed test. */
+  stopSpeedTest(): void;
 }
 
 function el<T extends HTMLElement>(doc: Document, id: string): T {
@@ -70,6 +88,11 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const modelsStatus = el(doc, 'models-status');
   const saveStatus = el(doc, 'save-status');
   const testStatus = el(doc, 'test-status');
+  const gpuLine = el(doc, 'gpu-status');
+  const speedButton = el<HTMLButtonElement>(doc, 'speed-test');
+  const stopButton = el<HTMLButtonElement>(doc, 'speed-stop');
+  const speedStatus = el(doc, 'speed-status');
+  const speedTable = el<HTMLTableElement>(doc, 'speed-results');
 
   // --- Reading and writing the form ---
 
@@ -173,6 +196,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
         models.length === 0
           ? 'No models installed. Run `ollama pull qwen2.5-coder:7b`, then click Refresh.'
           : `${models.length} model${models.length === 1 ? '' : 's'} found.`;
+      await checkGpu();
     } catch (error) {
       if (thisRefresh !== refreshCount) return;
       showLlmError(modelsStatus, 'Could not load models.', error, { url: values.llmUrl });
@@ -233,6 +257,204 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     }
   }
 
+  // Each check gets a number so a slow, older reply cannot overwrite a newer one.
+  let gpuCount = 0;
+  async function checkGpu(): Promise<void> {
+    const thisCheck = ++gpuCount;
+    const values = validForm(['llmUrl']);
+    const model = modelSelect.value;
+    if (!values || !model) {
+      gpuLine.replaceChildren();
+      return;
+    }
+    let text: string, fix: string, className: string;
+    try {
+      const running = await deps.createClient(values).runningModels();
+      const found = running.find((m) => isSameModel(m.name, model));
+      if (!found) {
+        text = `${model} is not loaded right now, so it is not known whether it runs on the GPU.`;
+        fix = 'Click Speed test, or open a PR, to load it.';
+        className = '';
+      } else {
+        const status = gpuStatus(found);
+        text = `Runs on: ${status.processor}. ${status.message}`;
+        fix = status.fix;
+        className = status.kind === 'gpu' ? 'gpu-ok' : 'gpu-warn';
+      }
+    } catch {
+      // Test connection and the model list already explain a server that is down.
+      text = '';
+      fix = '';
+      className = '';
+    }
+    if (thisCheck !== gpuCount) return;
+    gpuLine.className = className;
+    const fixLine = doc.createElement('span');
+    fixLine.className = 'fix';
+    fixLine.append(...withCode(doc, fix));
+    gpuLine.replaceChildren(text, ...(fix ? [fixLine] : []));
+  }
+
+  let speedRun: AbortController | null = null;
+  let lastResults: SpeedResult[] = [];
+
+  // The fastest is only marked once every model has been timed, not while the
+  // test runs or after it is stopped.
+  let resultsFinal = false;
+  function showResults(results: readonly SpeedResult[], final = resultsFinal): void {
+    lastResults = [...results];
+    resultsFinal = final;
+    const pick = final ? fastestUnderGoal(results) : undefined;
+    const rows = rankResults(results).map((result) => {
+      const row = doc.createElement('tr');
+      const name = doc.createElement('td');
+      name.textContent = result.model;
+      if (result.model === pick) {
+        row.className = 'pick';
+        const badge = doc.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = 'Fastest under 10 s';
+        name.append(badge);
+      }
+      row.append(name);
+      if (result.status === 'done') {
+        row.append(
+          cell(doc, `${(result.totalMs / 1000).toFixed(1)} s`, 'num'),
+          cell(doc, result.tokensPerSecond?.toFixed(1) ?? '–', 'num'),
+          cell(doc, result.gpu?.processor ?? '–'),
+        );
+        if (result.gpu && result.gpu.kind !== 'gpu') row.cells[3]!.title = result.gpu.message;
+        const action = doc.createElement('td');
+        if (result.model === modelSelect.value) {
+          action.textContent = 'In use';
+        } else {
+          const use = doc.createElement('button');
+          use.type = 'button';
+          use.textContent = 'Use this model';
+          use.addEventListener('click', () => void useModel(result.model));
+          action.append(use);
+        }
+        row.append(action);
+      } else {
+        const why = cell(doc, result.status === 'failed' ? `Failed: ${result.message}` : 'Stopped');
+        why.colSpan = 4;
+        row.append(why);
+      }
+      return row;
+    });
+    speedTable.tBodies[0]!.replaceChildren(...rows);
+    speedTable.hidden = rows.length === 0;
+  }
+
+  // Saves only the model, so other unsaved changes in the form stay unsaved,
+  // then loads it the way the warm-up does (PR 8.3), since the test unloaded
+  // every model but the one picked before.
+  async function useModel(model: string): Promise<void> {
+    let saved: Settings;
+    try {
+      saved = await deps.saveSettings({ model });
+    } catch (error) {
+      speedStatus.textContent = `Could not switch to ${model}: ${errorMessage(error)}`;
+      return;
+    }
+    if (![...modelSelect.options].some((o) => o.value === model)) {
+      modelSelect.append(new Option(model, model));
+    }
+    modelSelect.value = model;
+    speedStatus.textContent = `Now using ${model}. Saved.`;
+    showResults(lastResults);
+    if (saved.keepAliveMinutes > 0) {
+      try {
+        await deps.createClient(saved).loadModel(model, {
+          keepAliveMinutes: saved.keepAliveMinutes,
+          contextTokens: saved.contextTokens > 0 ? saved.contextTokens : MIN_NUM_CTX,
+        });
+      } catch {
+        // The first click loads it instead.
+      }
+    }
+    await checkGpu();
+  }
+
+  function summary(results: readonly SpeedResult[], stopped: boolean): string {
+    const ranked = rankResults(results);
+    const fastest = ranked[0];
+    if (stopped) return 'Stopped.';
+    if (fastest?.status !== 'done') return 'No model answered. See the table for why.';
+    const time = `${(fastest.totalMs / 1000).toFixed(1)} s`;
+    if (fastest.totalMs < SPEED_GOAL_MS)
+      return `Fastest under 10 seconds: ${fastest.model} (${time}).`;
+    return (
+      `No model answered in under 10 seconds; the fastest was ${fastest.model} at ${time}. ` +
+      'A smaller model, or one fully on the GPU, would be faster.'
+    );
+  }
+
+  async function speedTest(): Promise<void> {
+    if (speedRun) return;
+    const values = validForm(['llmUrl', 'temperature', 'maxResponseTokens', 'keepAliveMinutes']);
+    if (!values) {
+      speedStatus.textContent = 'Fix the problems above, then try again.';
+      return;
+    }
+    const run = new AbortController();
+    speedRun = run;
+    speedButton.disabled = true;
+    stopButton.hidden = false;
+    showResults([], false);
+    speedStatus.textContent = 'Listing models…';
+    try {
+      const client = deps.createClient(values);
+      let models: string[];
+      try {
+        models = speedTestModels(await client.listModels({ signal: run.signal }));
+      } catch (error) {
+        if (run.signal.aborted) {
+          speedStatus.textContent = 'Stopped.';
+        } else {
+          showLlmError(speedStatus, 'Could not list models.', error, { url: values.llmUrl });
+        }
+        return;
+      }
+      if (models.length === 0) {
+        speedStatus.replaceChildren(
+          ...withCode(
+            doc,
+            'No models installed. Run `ollama pull qwen2.5-coder:3b`, then try again.',
+          ),
+        );
+        return;
+      }
+      const results = await runSpeedTest({
+        client,
+        models,
+        current: values.model,
+        temperature: values.temperature,
+        maxResponseTokens: values.maxResponseTokens,
+        keepAliveMinutes: values.keepAliveMinutes,
+        signal: run.signal,
+        now,
+        onProgress: (sofar, next) => {
+          showResults(sofar, false);
+          if (next && !run.signal.aborted) {
+            speedStatus.textContent = `Timing ${next} (${sofar.length + 1} of ${models.length})…`;
+          }
+        },
+      });
+      showResults(results, !run.signal.aborted);
+      speedStatus.textContent = summary(results, run.signal.aborted);
+    } finally {
+      speedRun = null;
+      speedButton.disabled = false;
+      stopButton.hidden = true;
+    }
+    await checkGpu();
+  }
+
+  function stopSpeedTest(): void {
+    speedRun?.abort();
+  }
+
   // --- Start up ---
 
   temperatureInput.addEventListener('input', () => {
@@ -241,6 +463,12 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   urlInput.addEventListener('change', () => void refreshModels());
   refreshButton.addEventListener('click', () => void refreshModels());
   testButton.addEventListener('click', () => void testConnection());
+  modelSelect.addEventListener('change', () => {
+    showResults(lastResults);
+    void checkGpu();
+  });
+  speedButton.addEventListener('click', () => void speedTest());
+  stopButton.addEventListener('click', stopSpeedTest);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     void save();
@@ -256,7 +484,14 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   fillForm(settings);
   await refreshModels();
 
-  return { refreshModels, save, testConnection };
+  return { refreshModels, save, testConnection, checkGpu, speedTest, stopSpeedTest };
+}
+
+function cell(doc: Document, text: string, className?: string): HTMLTableCellElement {
+  const td = doc.createElement('td');
+  td.textContent = text;
+  if (className) td.className = className;
+  return td;
 }
 
 function errorMessage(error: unknown): string {

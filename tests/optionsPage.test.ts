@@ -29,6 +29,7 @@ function fakeClient(overrides: Partial<LlmClient> = {}): LlmClient {
     modelContext: vi.fn(async () => ({})),
     loadedModels: vi.fn(async () => []),
     loadedContextTokens: vi.fn(async () => undefined),
+    runningModels: vi.fn(async () => []),
     loadModel: vi.fn(async () => {}),
     chat: vi.fn(async (_messages, options) => ({ content: 'OK', model: options.model })),
     chatStream: vi.fn(),
@@ -189,10 +190,10 @@ describe('options page', () => {
     const url = $<HTMLInputElement>('llmUrl');
     url.value = 'http://127.0.0.1:8080/';
     url.dispatchEvent(new Event('change'));
-    await vi.waitFor(() => expect(deps.createClient).toHaveBeenCalledTimes(2));
-
-    expect(deps.createClient).toHaveBeenLastCalledWith(
-      expect.objectContaining({ llmUrl: 'http://127.0.0.1:8080' }),
+    await vi.waitFor(() =>
+      expect(deps.createClient).toHaveBeenLastCalledWith(
+        expect.objectContaining({ llmUrl: 'http://127.0.0.1:8080' }),
+      ),
     );
   });
 
@@ -243,7 +244,8 @@ describe('options page', () => {
 
     expect(errorFor('llmUrl')).toContain('must point to this computer');
     expect(text('models-status')).toBe('Fix the URL to load models.');
-    expect(deps.createClient).toHaveBeenCalledTimes(1); // only the first load
+    // Only the first load and its GPU check.
+    expect(deps.createClient).toHaveBeenCalledTimes(2);
   });
 
   it('saves the form and clears old errors', async () => {
@@ -370,5 +372,214 @@ describe('options page privacy note (PR 7.4)', () => {
 
   it('is outside the form, so it is not a setting', () => {
     expect(doc.querySelector('#settings-form #privacy')).toBeNull();
+  });
+});
+
+describe('options page Speed section (PR 8.6)', () => {
+  const GB = 1_000_000_000;
+  const rows = () =>
+    [...$<HTMLTableElement>('speed-results').tBodies[0]!.rows].map((r) =>
+      [...r.cells].map((c) => c.textContent),
+    );
+
+  // Each model answers after `ms` on the page's clock.
+  function timedClient(times: Record<string, number>, overrides: Partial<LlmClient> = {}) {
+    let t = 0;
+    const client = fakeClient({
+      listModels: vi.fn(async () => Object.keys(times).map((name) => ({ name }))),
+      chat: vi.fn(async (_messages, options) => {
+        t += times[options.model]!;
+        return {
+          content: 'ok',
+          model: options.model,
+          timings: { answerTokens: 100, answerMs: 2000 },
+        };
+      }),
+      ...overrides,
+    });
+    return { client, now: () => t };
+  }
+
+  it('says the picked model runs fully on the GPU', async () => {
+    const client = fakeClient({
+      runningModels: vi.fn(async () => [
+        { name: 'qwen2.5-coder:7b', sizeBytes: 5 * GB, vramBytes: 5 * GB },
+      ]),
+    });
+    await initOptionsPage(document, fakeDeps(client));
+    expect(text('gpu-status')).toBe('Runs on: 100% GPU. qwen2.5-coder:7b runs fully on the GPU.');
+    expect($('gpu-status').className).toBe('gpu-ok');
+  });
+
+  it('warns when the picked model is partly on the CPU, with a fix', async () => {
+    const client = fakeClient({
+      runningModels: vi.fn(async () => [
+        { name: 'qwen2.5-coder:7b', sizeBytes: 6 * GB, vramBytes: 3 * GB },
+      ]),
+    });
+    await initOptionsPage(document, fakeDeps(client));
+    expect(text('gpu-status')).toContain('Runs on: 50%/50% CPU/GPU.');
+    expect($('gpu-status').className).toBe('gpu-warn');
+    expect($('gpu-status').querySelector('.fix code')?.textContent).toBe('q4_K_M');
+  });
+
+  it('says when the picked model is not loaded, and checks again when the model changes', async () => {
+    const runningModels = vi.fn(async () => [
+      { name: 'llama3.2:3b', sizeBytes: 2 * GB, vramBytes: 0 },
+    ]);
+    await initOptionsPage(document, fakeDeps(fakeClient({ runningModels })));
+    expect(text('gpu-status')).toContain('qwen2.5-coder:7b is not loaded right now');
+
+    $<HTMLSelectElement>('model').value = 'llama3.2:3b';
+    $('model').dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(text('gpu-status')).toContain('Runs on: 100% CPU.'));
+  });
+
+  it('shows nothing about the GPU when Ollama cannot be reached', async () => {
+    const client = fakeClient({
+      runningModels: vi.fn(async () => {
+        throw new LlmError('connection', 'down');
+      }),
+    });
+    await initOptionsPage(document, fakeDeps(client));
+    expect(text('gpu-status')).toBe('');
+  });
+
+  it('times each coding model, fastest first, and marks the fastest under 10 s', async () => {
+    const { client, now } = timedClient({
+      'qwen2.5-coder:7b': 14_000,
+      'qwen2.5-coder:3b': 4_200,
+      'llama3.2:3b': 1_000,
+    });
+    const deps = { ...fakeDeps(client), now };
+    const page = await initOptionsPage(document, deps);
+    expect($('speed-results').hidden).toBe(true);
+
+    await page.speedTest();
+
+    // llama3.2 is not a coding model, so it is not timed.
+    expect(rows()).toEqual([
+      ['qwen2.5-coder:3bFastest under 10 s', '4.2 s', '50.0', '–', 'Use this model'],
+      ['qwen2.5-coder:7b', '14.0 s', '50.0', '–', 'In use'],
+    ]);
+    expect($('speed-results').hidden).toBe(false);
+    expect($('speed-results').querySelector('tr.pick')?.textContent).toContain('qwen2.5-coder:3b');
+    expect(text('speed-status')).toBe('Fastest under 10 seconds: qwen2.5-coder:3b (4.2 s).');
+  });
+
+  it('switches and saves the model with Use this model', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:7b': 14_000, 'qwen2.5-coder:3b': 4_200 });
+    const deps = { ...fakeDeps(client), now };
+    const page = await initOptionsPage(document, deps);
+    await page.speedTest();
+    // An unsaved change elsewhere in the form is not saved with it.
+    $<HTMLInputElement>('maxResponseTokens').value = '999';
+
+    $('speed-results').querySelector<HTMLButtonElement>('button')!.click();
+
+    await vi.waitFor(() => expect(text('speed-status')).toBe('Now using qwen2.5-coder:3b. Saved.'));
+    expect(deps.saveSettings).toHaveBeenCalledWith({ model: 'qwen2.5-coder:3b' });
+    expect(await deps.getSettings()).toMatchObject({
+      model: 'qwen2.5-coder:3b',
+      maxResponseTokens: 512,
+    });
+    expect($<HTMLSelectElement>('model').value).toBe('qwen2.5-coder:3b');
+    expect(rows().map((r) => r[4])).toEqual(['In use', 'Use this model']);
+    // Loaded again (the test unloaded it), the way the warm-up loads a model.
+    await vi.waitFor(() =>
+      expect(client.loadModel).toHaveBeenLastCalledWith('qwen2.5-coder:3b', {
+        keepAliveMinutes: 30,
+        contextTokens: 2048,
+      }),
+    );
+  });
+
+  it('says so when no model answers in under 10 seconds', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:7b': 14_000 });
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    await page.speedTest();
+    expect($('speed-results').querySelector('.badge')).toBeNull();
+    expect(text('speed-status')).toContain(
+      'No model answered in under 10 seconds; the fastest was qwen2.5-coder:7b at 14.0 s.',
+    );
+  });
+
+  it('shows where each model ran and why a model failed', async () => {
+    const { client, now } = timedClient(
+      { 'qwen2.5-coder:7b': 3_000, 'codellama:7b': 1 },
+      {
+        runningModels: vi.fn(async () => [
+          { name: 'qwen2.5-coder:7b', sizeBytes: 6 * GB, vramBytes: 3 * GB },
+        ]),
+      },
+    );
+    vi.mocked(client.loadModel).mockImplementation(async (model) => {
+      if (model === 'codellama:7b') throw new LlmError('http', 'out of memory');
+    });
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    await page.speedTest();
+    expect(rows()).toEqual([
+      ['qwen2.5-coder:7bFastest under 10 s', '3.0 s', '50.0', '50%/50% CPU/GPU', 'In use'],
+      ['codellama:7b', 'Failed: out of memory'],
+    ]);
+  });
+
+  it('stops the test with the Stop button, marking no model as fastest', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:7b': 1, 'qwen2.5-coder:3b': 1 });
+    let started: () => void = () => {};
+    const waiting = new Promise<void>((r) => (started = r));
+    // The 3b model answers; the 7b one (the picked model, so timed last) hangs.
+    vi.mocked(client.chat).mockImplementation((_messages, options) =>
+      options.model === 'qwen2.5-coder:3b'
+        ? Promise.resolve({ content: 'ok', model: options.model })
+        : new Promise((_resolve, reject) => {
+            started();
+            options.signal?.addEventListener('abort', () =>
+              reject(new LlmError('aborted', 'cancelled')),
+            );
+          }),
+    );
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+
+    const running = page.speedTest();
+    await waiting;
+    expect($<HTMLButtonElement>('speed-test').disabled).toBe(true);
+    expect($('speed-stop').hidden).toBe(false);
+    expect(text('speed-status')).toBe('Timing qwen2.5-coder:7b (2 of 2)…');
+    // Not marked while the test is still running.
+    expect(rows()).toEqual([['qwen2.5-coder:3b', '0.0 s', '–', '–', 'Use this model']]);
+    $('speed-stop').click();
+    await running;
+
+    expect(text('speed-status')).toBe('Stopped.');
+    expect(rows()).toEqual([
+      ['qwen2.5-coder:3b', '0.0 s', '–', '–', 'Use this model'],
+      ['qwen2.5-coder:7b', 'Stopped'],
+    ]);
+    expect($('speed-results').querySelector('.badge')).toBeNull();
+    expect($<HTMLButtonElement>('speed-test').disabled).toBe(false);
+    expect($('speed-stop').hidden).toBe(true);
+  });
+
+  it('says how to get a model when none is installed', async () => {
+    const client = fakeClient({ listModels: vi.fn(async () => []) });
+    const page = await initOptionsPage(document, fakeDeps(client));
+    await page.speedTest();
+    expect(text('speed-status')).toBe(
+      'No models installed. Run ollama pull qwen2.5-coder:3b, then try again.',
+    );
+    expect($('speed-status').querySelector('code')?.textContent).toBe(
+      'ollama pull qwen2.5-coder:3b',
+    );
+    expect(client.chat).not.toHaveBeenCalled();
+  });
+
+  it('explains a server that is down', async () => {
+    const client = fakeClient();
+    const page = await initOptionsPage(document, fakeDeps(client));
+    vi.mocked(client.listModels).mockRejectedValue(new LlmError('connection', 'down'));
+    await page.speedTest();
+    expect(text('speed-status')).toContain('Could not list models.');
+    expect(client.chat).not.toHaveBeenCalled();
   });
 });

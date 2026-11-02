@@ -106,6 +106,33 @@
         <p id="test-status" role="status"></p>
       </form>
 
+      <section id="speed" class="speed" aria-labelledby="speed-title">
+        <h2 id="speed-title">Speed</h2>
+        <p id="gpu-status" role="status"></p>
+        <div class="row">
+          <button id="speed-test" type="button">Speed test</button>
+          <button id="speed-stop" type="button" hidden>Stop</button>
+        </div>
+        <p class="hint">
+          Times one short explanation on each installed coding model, with the settings above, and
+          marks the fastest one that answers in under 10 seconds. The size of the model and whether
+          it runs on the GPU make the biggest difference.
+        </p>
+        <p id="speed-status" role="status"></p>
+        <table id="speed-results" hidden>
+          <thead>
+            <tr>
+              <th scope="col">Model</th>
+              <th scope="col">Time</th>
+              <th scope="col">Tokens/s</th>
+              <th scope="col">Runs on</th>
+              <th scope="col"><span class="visually-hidden">Action</span></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
       <section id="privacy" class="privacy" aria-labelledby="privacy-title">
         <h2 id="privacy-title">Privacy</h2>
         <p>
