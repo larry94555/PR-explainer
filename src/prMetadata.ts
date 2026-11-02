@@ -3,7 +3,7 @@
 //
 // The Files changed tab shows the title but not the description, so when the
 // page has no description it is read from the PR's Conversation tab, fetched
-// once per PR with the user's GitHub cookies (a same-origin request, so
+// once per PR and page with the user's GitHub cookies (a same-origin request, so
 // private repos work while signed in). Reading never fails: anything that goes
 // wrong leaves the description empty and the explanation goes ahead without
 // it.
@@ -125,15 +125,33 @@ export interface PrMetadataLoaderDeps {
   /** Fetches a github.com path's HTML. Rejects on a failed request. */
   fetchHtml(path: string, signal: AbortSignal): Promise<string>;
   timeoutMs?: number;
+  /**
+   * The page the user is on (its path). The title and description are read
+   * again after the user moves to another page, so an edit made on the
+   * Conversation tab is picked up back on Files changed. Defaults to the
+   * document's path.
+   */
+  currentPage?(): string;
 }
 
 export interface PrMetadataLoader {
-  /** The PR's title and description. Never rejects. Asked once per PR. */
+  /**
+   * The PR's title and description. Never rejects. Asked once per PR and
+   * page: clicks on the same page reuse the answer, and moving to another
+   * page (even of the same PR) reads it again.
+   */
   load(pr: PrRef): Promise<PrMetadata>;
+  /**
+   * Forgets every answer, so the next load reads the page (or the
+   * Conversation tab) again. Called after each of GitHub's in-page
+   * navigations, which may come back from editing the description.
+   */
+  forget(): void;
 }
 
 export function createPrMetadataLoader(deps: PrMetadataLoaderDeps): PrMetadataLoader {
-  const loaded = new Map<string, Promise<PrMetadata>>();
+  const loaded = new Map<string, { page: string; result: Promise<PrMetadata> }>();
+  const currentPage = deps.currentPage ?? (() => deps.doc.location?.pathname ?? '');
   const timeoutMs = deps.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
 
   // Resolves with `ok: false` when the Conversation tab could not be read.
@@ -160,21 +178,28 @@ export function createPrMetadataLoader(deps: PrMetadataLoaderDeps): PrMetadataLo
   return {
     load(pr) {
       const key = conversationPath(pr);
+      const where = currentPage();
       const known = loaded.get(key);
-      if (known) return known;
+      if (known && known.page === where) return known.result;
       const page = readPrMetadata(deps.doc);
       if (page.description !== null) {
         const result = Promise.resolve({ title: page.title, description: page.description });
-        loaded.set(key, result);
+        loaded.set(key, { page: where, result });
         return result;
       }
-      const result = fetchConversation(pr, page.title).then(({ metadata, ok }) => {
-        // A failed fetch is tried again on the next click.
-        if (!ok) loaded.delete(key);
-        return metadata;
-      });
-      loaded.set(key, result);
-      return result;
+      const entry = {
+        page: where,
+        result: fetchConversation(pr, page.title).then(({ metadata, ok }) => {
+          // A failed fetch is tried again on the next click.
+          if (!ok && loaded.get(key) === entry) loaded.delete(key);
+          return metadata;
+        }),
+      };
+      loaded.set(key, entry);
+      return entry.result;
+    },
+    forget() {
+      loaded.clear();
     },
   };
 }

@@ -86,12 +86,19 @@ sendRequest('ping', undefined).then(
 // GitHub changes pages without a full reload (Turbo), so this script keeps
 // running when the user moves from a PR to, say, an issue. Re-check the URL
 // after each of those navigations and on back/forward.
+// Each navigation may come back from editing the PR's title or description,
+// so they are read again (PR 6.1): ahead of time once the new page has loaded,
+// or on the next click after back/forward.
 document.addEventListener('turbo:load', () => {
   update();
+  prMetadata.forget();
   void loadPrMetadata();
 });
 document.addEventListener('turbo:render', update);
-window.addEventListener('popstate', update);
+window.addEventListener('popstate', () => {
+  update();
+  prMetadata.forget();
+});
 
 // Click a diff line to explain it: a popup opens next to the line and the
 // model's answer streams into it (see src/clickHandler.ts). There is no

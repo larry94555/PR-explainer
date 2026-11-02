@@ -146,6 +146,43 @@ describe('createPrMetadataLoader', () => {
     expect(fetchHtml).toHaveBeenCalledTimes(2);
   });
 
+  // The user edits the description on the Conversation tab and comes back to
+  // Files changed without a reload.
+  function editedSetup() {
+    let where = '/larry94555/PR-explainer/pull/24/files';
+    const edited = conversation.replaceAll('Roadmap PR 5.4', 'Edited description');
+    const fetchHtml = vi
+      .fn<(path: string, signal: AbortSignal) => Promise<string>>()
+      .mockResolvedValueOnce(conversation)
+      .mockResolvedValueOnce(edited);
+    const loader = createPrMetadataLoader({
+      doc: page(fixture('github-diff-classic.html')),
+      fetchHtml,
+      currentPage: () => where,
+    });
+    return { loader, fetchHtml, moveTo: (path: string) => (where = path) };
+  }
+
+  it('reads the description again after GitHub moves to another page (forget)', async () => {
+    const { loader, fetchHtml } = editedSetup();
+    expect((await loader.load(PR)).description).toContain('Roadmap PR 5.4');
+    await loader.load(PR);
+    expect(fetchHtml).toHaveBeenCalledTimes(1);
+    loader.forget();
+    const { description } = await loader.load(PR);
+    expect(description).toContain('Edited description');
+    expect(description).not.toContain('Roadmap PR 5.4');
+    expect(fetchHtml).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads it again when the page changed, even without a navigation event', async () => {
+    const { loader, fetchHtml, moveTo } = editedSetup();
+    await loader.load(PR);
+    moveTo('/larry94555/PR-explainer/pull/24/files/abc123');
+    expect((await loader.load(PR)).description).toContain('Edited description');
+    expect(fetchHtml).toHaveBeenCalledTimes(2);
+  });
+
   it('uses the page when it shows the description, without fetching', async () => {
     const fetchHtml = vi.fn(async () => '');
     const loader = createPrMetadataLoader({ doc: page(conversation), fetchHtml });
