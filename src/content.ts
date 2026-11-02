@@ -14,6 +14,8 @@ import { createClickHandler, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
 import { openAfter, openChatStream, openExplainStream, sendRequest } from './messaging/client';
 import { currentPopup, openPopup } from './popup/popup';
+import { createFileContextLoader, type CodeSpan } from './fileContext';
+import type { FileContext } from './explain/explainPrompt';
 import { createPrMetadataLoader, type PrMetadata } from './prMetadata';
 import { parsePrUrl } from './prUrl';
 import { installSelection } from './selection';
@@ -39,6 +41,24 @@ const prMetadata = createPrMetadataLoader({
 function loadPrMetadata(): Promise<PrMetadata | undefined> {
   const pr = parsePrUrl(location.href);
   return pr ? prMetadata.load(pr) : Promise.resolve(undefined);
+}
+
+// The function or block around clicked code, from the full file at the PR's
+// head (PR 6.3). Files are fetched once per page, from the page's own raw
+// URL (signed in, so private repos work) or raw.githubusercontent.com.
+const fileContexts = createFileContextLoader({
+  doc: document,
+  fetchText: async (url, signal) => {
+    const response = await fetch(url, { credentials: 'same-origin', signal });
+    if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
+    return response.text();
+  },
+});
+
+/** Starts reading the block around `code`, if on a PR and it is in the new file. */
+function loadFileContext(code: CodeSpan | undefined): Promise<FileContext | undefined> {
+  const pr = parsePrUrl(location.href);
+  return pr && code ? fileContexts.load(pr, code) : Promise.resolve(undefined);
 }
 
 let workerStatus = 'Service worker: checking…';
@@ -92,12 +112,14 @@ sendRequest('ping', undefined).then(
 document.addEventListener('turbo:load', () => {
   update();
   prMetadata.forget();
+  fileContexts.forget();
   void loadPrMetadata();
 });
 document.addEventListener('turbo:render', update);
 window.addEventListener('popstate', () => {
   update();
   prMetadata.forget();
+  fileContexts.forget();
 });
 
 // Click a diff line to explain it: a popup opens next to the line and the
@@ -110,16 +132,27 @@ const explainDeps: ClickHandlerDeps = {
   // The PR names the cache entry, so the same code in two PRs is asked
   // separately (src/explain/explainCache.ts). The PR's title and description
   // go with the code, so the answer can say why the PR needs it (PR 6.1).
-  explain: (context, onChunk, { fresh }) => {
+  // The block around the code in the full file goes too (PR 6.3).
+  explain: (context, onChunk, { fresh, code }) => {
     const pr = prName(location.href);
-    return openAfter(loadPrMetadata(), (prInfo) => {
-      if (import.meta.env.MODE === 'development' && prInfo) {
+    const ready = Promise.all([loadPrMetadata(), loadFileContext(code)]);
+    return openAfter(ready, ([prInfo, fileContext]) => {
+      if (import.meta.env.MODE === 'development') {
+        if (prInfo) {
+          console.log(
+            `[PR Explainer] PR title for the model: ${prInfo.title || '(none)'}\n` +
+              `PR description for the model:\n${prInfo.description || '(none)'}`,
+          );
+        }
         console.log(
-          `[PR Explainer] PR title for the model: ${prInfo.title || '(none)'}\n` +
-            `PR description for the model:\n${prInfo.description || '(none)'}`,
+          '[PR Explainer] full file context for the model: ' +
+            (fileContext
+              ? `${fileContext.kind}, lines ${fileContext.startLine} to ` +
+                `${fileContext.startLine + fileContext.lines.length - 1}`
+              : '(none)'),
         );
       }
-      return openExplainStream({ context, pr, fresh, prInfo }, onChunk);
+      return openExplainStream({ context, pr, fresh, prInfo, fileContext }, onChunk);
     });
   },
   openPopup: (anchor, options) => openPopup(anchor, options),

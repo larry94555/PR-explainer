@@ -16,6 +16,7 @@
 // cleared when that popup closes.
 
 import { explainCode, isInteractive, type ClickHandlerDeps } from './clickHandler';
+import type { CodeSpan } from './fileContext';
 import { locateRange, locateRow, type DiffRange } from './diffDom';
 import {
   formatSelection,
@@ -87,6 +88,23 @@ export function selectionSubject(context: SelectionContext): ChatSubject {
     filePath: context.filePath,
     startLine: Math.min(...numbers),
     endLine: Math.max(...numbers),
+  };
+}
+
+/**
+ * Where a selection is in the new file (PR 6.3), for reading its enclosing
+ * block from the full file. Undefined when it is only removed lines.
+ */
+export function selectionCode(context: SelectionContext): CodeSpan | undefined {
+  const kept = context.lines.filter((line) => line.side !== 'removed');
+  if (!kept.length) return undefined;
+  const numbers = kept.map((line) => line.lineNumber);
+  const startLine = Math.min(...numbers);
+  return {
+    filePath: context.filePath,
+    startLine,
+    endLine: Math.max(...numbers),
+    text: kept.find((line) => line.lineNumber === startLine)!.text,
   };
 }
 
@@ -232,7 +250,12 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
       explaining = true;
       const selected = rows;
       const context = selectionContext(range);
-      const request = { text: formatSelection(context), subject: selectionSubject(context) };
+      const code = selectionCode(context);
+      const request = {
+        text: formatSelection(context),
+        subject: selectionSubject(context),
+        ...(code && { code }),
+      };
       explainCode(deps, request, blockAnchor(selected), () => {
         // Only clear the highlight if no newer selection replaced it.
         if (rows === selected) {

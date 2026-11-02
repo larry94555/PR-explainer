@@ -350,6 +350,7 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     click(code('R44'));
     expect(env.deps.explain).toHaveBeenCalledWith(expect.any(String), expect.any(Function), {
       fresh: false,
+      code: expect.objectContaining({ filePath: 'docs/roadmap.md', startLine: 44, endLine: 44 }),
     });
     await flush();
     expect(env.popups[0]!.calls).toEqual([
@@ -358,6 +359,19 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(env.timings).toEqual([
       { elapsedMs: 1234, status: 'done', model: DONE.model, cached: true },
     ]);
+  });
+
+  it('says where the clicked line is in the new file, but not for a removed line (PR 6.3)', () => {
+    env = setup();
+    click(code('R44'));
+    expect(vi.mocked(env.deps.explain).mock.calls[0]![2].code).toEqual({
+      filePath: 'docs/roadmap.md',
+      startLine: 44,
+      endLine: 44,
+      text: '| 2.4 | Friendly LLM error messages | Small | ✅ Done ([#10](https://github.com/larry94555/PR-explainer/pull/10)) |',
+    });
+    click(code('L44'));
+    expect(vi.mocked(env.deps.explain).mock.calls[1]![2]).toEqual({ fresh: false });
   });
 
   it('Regenerate asks again without the cache and shows the new answer', async () => {
@@ -372,7 +386,10 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     await flush();
     env.popups[0]!.pressRegenerate();
     expect(env.deps.explain).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(env.deps.explain).mock.calls[1]![2]).toEqual({ fresh: true });
+    expect(vi.mocked(env.deps.explain).mock.calls[1]![2]).toEqual({
+      fresh: true,
+      code: vi.mocked(env.deps.explain).mock.calls[0]![2].code,
+    });
     expect(env.contexts[1]).toBe(env.contexts[0]);
     expect(env.stops[0]).toHaveBeenCalledOnce();
 
@@ -449,6 +466,7 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(addToChat).toHaveBeenCalledWith({
       text: expect.stringContaining('docs/roadmap.md'),
       subject: { filePath: 'docs/roadmap.md', startLine: 44 },
+      code: expect.objectContaining({ startLine: 44, endLine: 44 }),
     });
     expect(env.deps.explain).not.toHaveBeenCalled();
     expect(env.popups).toEqual([]);

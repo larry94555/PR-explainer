@@ -149,6 +149,63 @@ function demoPrompt(row: Element): PromptReport {
   };
 }
 
+// What Show prompt shows with the full file context (PR 6.3): the clicked
+// line sits in a long function, mostly collapsed in the diff, so the
+// function is read from the file and cut to fit around the line.
+function demoFilePrompt(row: Element): PromptReport {
+  const cells = (row as HTMLTableRowElement).cells;
+  // Placed further down the file than the demo diff's numbers, so the
+  // function has room to start above it.
+  const lineNumber = Number(cells[0]!.textContent) + 50;
+  const clicked = (cells[1]!.textContent ?? '').replace(/^(.) /, '$1');
+  const context = [
+    'File: src/llm/retry.ts (TypeScript)',
+    `Clicked line: line ${lineNumber} of the new file`,
+    clicked,
+    '',
+    'Surrounding diff (the clicked line starts with >):',
+    `@@ -${lineNumber - 1},3 +${lineNumber - 1},3 @@`,
+    ' const delay = backoff(attempt);',
+    `>${clicked}`,
+    ' log(attempt, delay);',
+  ].join('\n');
+  // The function the line is in: 40 lines above it and 40 below.
+  const startLine = lineNumber - 41;
+  const body = (from: number, n: number) =>
+    Array.from({ length: n }, (_, i) => `  const step${from + i} = await load(${from + i});`);
+  const lines = [
+    'export async function loadModel(',
+    '  name: string,',
+    '): Promise<Model> {',
+    ...body(startLine + 3, 38),
+    clicked.slice(1),
+    ...body(lineNumber + 1, 39),
+    '}',
+  ];
+  const contextTokens = 2048;
+  const budget = promptBudget(contextTokens, 1024);
+  const fitted = buildFittedExplainPrompt(
+    context,
+    { title: 'Retry the first request while the model loads', description: 'Fixes #12.' },
+    budget,
+    {
+      kind: 'block',
+      startLine,
+      lines,
+      focusStart: lineNumber,
+      focusEnd: lineNumber,
+      headerLines: 3,
+    },
+  );
+  return {
+    text: fitted.messages.map((m) => `[${m.role}]\n${m.content}`).join('\n\n'),
+    tokens: fitted.tokens,
+    budget,
+    contextTokens,
+    trimmed: fitted.trimmed,
+  };
+}
+
 const chosen = () =>
   document.querySelector<HTMLInputElement>('input[name="state"]:checked')?.value ?? 'done';
 
@@ -189,6 +246,10 @@ document.addEventListener('click', (event) => {
     case 'prompt':
       popup.showExplanation(SAMPLE, MODEL);
       popup.showPrompt(demoPrompt(row));
+      break;
+    case 'file':
+      popup.showExplanation(SAMPLE, MODEL);
+      popup.showPrompt(demoFilePrompt(row));
       break;
     case 'slow':
       popup.showLoading(MODEL);

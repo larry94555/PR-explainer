@@ -1,6 +1,6 @@
-import { createExplainHandler, toPrInfo } from '../src/explain/explainHandler';
+import { createExplainHandler, toFileContext, toPrInfo } from '../src/explain/explainHandler';
 import { EXPLAIN_SYSTEM_PROMPT } from '../src/explain/explainPrompt';
-import { SAMPLE_CONTEXT } from '../src/explain/sampleContext';
+import { SAMPLE_CONTEXT, SAMPLE_FILE_CONTEXT } from '../src/explain/sampleContext';
 import {
   LlmError,
   type ChatMessage,
@@ -97,6 +97,42 @@ describe('explain handler', () => {
       title: 'T',
       description: 'D',
     });
+  });
+
+  it('adds the block from the full file to the prompt (PR 6.3)', async () => {
+    const { handler, client } = setup(streamOf(['## What it does\nA.']));
+    await handler({ context: SAMPLE_CONTEXT, fileContext: SAMPLE_FILE_CONTEXT });
+    const [messages] = vi.mocked(client.chatStream).mock.calls[0] as [ChatMessage[], ChatOptions];
+    expect(messages[1]!.content).toContain('The lines around the code in the full file');
+    expect(messages[1]!.content).toContain(
+      "> const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);",
+    );
+  });
+
+  it('ignores file context that is not in the right shape', async () => {
+    const { handler, client } = setup(streamOf(['## What it does\nA.']));
+    await handler({
+      context: SAMPLE_CONTEXT,
+      fileContext: {
+        ...SAMPLE_FILE_CONTEXT,
+        lines: [1, 2],
+      } as unknown as typeof SAMPLE_FILE_CONTEXT,
+    });
+    const [messages] = vi.mocked(client.chatStream).mock.calls[0] as [ChatMessage[], ChatOptions];
+    expect(messages[1]!.content).not.toContain('full file');
+    expect(toFileContext(SAMPLE_FILE_CONTEXT)).toEqual(SAMPLE_FILE_CONTEXT);
+    expect(toFileContext({ ...SAMPLE_FILE_CONTEXT, extra: 1 })).toEqual(SAMPLE_FILE_CONTEXT);
+    for (const bad of [
+      'text',
+      { ...SAMPLE_FILE_CONTEXT, kind: 'file' },
+      { ...SAMPLE_FILE_CONTEXT, startLine: 0 },
+      { ...SAMPLE_FILE_CONTEXT, focusEnd: 1.5 },
+      { ...SAMPLE_FILE_CONTEXT, focusStart: 50, focusEnd: 40 },
+      { ...SAMPLE_FILE_CONTEXT, lines: [] },
+      { ...SAMPLE_FILE_CONTEXT, lines: Array(2001).fill('x') },
+    ]) {
+      expect(toFileContext(bad)).toBeUndefined();
+    }
   });
 
   it('works without onChunk', async () => {

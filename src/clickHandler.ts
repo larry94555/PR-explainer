@@ -24,18 +24,21 @@ import type { ChatSeed } from './chat/chatSession';
 import { locateRow } from './diffDom';
 import { extractContext, formatContext } from './lineContext';
 import type { Explanation } from './explain/parseExplanation';
+import type { CodeSpan } from './fileContext';
 import type { ExplainStream } from './messaging/client';
 import type { Popup, PopupAnchor, PopupOptions } from './popup/popup';
 
 export interface ClickHandlerDeps {
   /**
    * Sends the formatted context to the service worker, calling `onChunk`
-   * with each piece of the reply as it arrives.
+   * with each piece of the reply as it arrives. `code` says where the code
+   * is in the new file, so its enclosing block can be read from the full
+   * file (PR 6.3); it is left out for removed lines.
    */
   explain(
     context: string,
     onChunk: (text: string) => void,
-    options: { fresh: boolean },
+    options: { fresh: boolean; code?: CodeSpan },
   ): ExplainStream;
   /**
    * False while the user has turned click-to-explain off with the toolbar
@@ -82,6 +85,8 @@ export interface ExplainRequest {
   text: string;
   /** The file and lines, for the chat panel's header. */
   subject: ChatSubject;
+  /** Where the code is in the new file (PR 6.3). Left out when it is only removed lines. */
+  code?: CodeSpan;
 }
 
 export interface ExplainTiming {
@@ -161,10 +166,18 @@ export function createClickHandler(deps: ClickHandlerDeps): (event: MouseEvent) 
     const context = row && extractContext(target);
     if (!row || !context) return;
 
-    const { filePath, lineNumber } = context.line;
+    const { filePath, lineNumber, side, text } = context.line;
+    const code =
+      side === 'removed'
+        ? undefined
+        : { filePath, startLine: lineNumber, endLine: lineNumber, text };
     explainCode(
       deps,
-      { text: formatContext(context), subject: { filePath, startLine: lineNumber } },
+      {
+        text: formatContext(context),
+        subject: { filePath, startLine: lineNumber },
+        ...(code && { code }),
+      },
       row,
     );
   };
@@ -200,7 +213,7 @@ export function explainCode(
  */
 export function explainInPopup(
   deps: Pick<ClickHandlerDeps, 'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat'>,
-  { text, subject }: ExplainRequest,
+  { text, subject, code }: ExplainRequest,
   anchor: PopupAnchor,
   onClose?: () => void,
 ): void {
@@ -258,7 +271,7 @@ export function explainInPopup(
         reply += chunk;
         popup.showPartial(reply);
       },
-      { fresh },
+      { fresh, ...(code && { code }) },
     );
     latest = request;
     request.result.then(

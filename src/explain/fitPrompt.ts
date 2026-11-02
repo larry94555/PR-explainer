@@ -1,17 +1,21 @@
 // Builds an explain prompt that fits the model's context window (PR 6.2).
 //
 // What is kept, most important first: the instructions and the PR title, the
-// clicked line or selected block, the lines around it, and the PR
-// description. When the whole prompt is over the budget, the description is
-// cut first (at a word break), then the lines around the code, farthest from
-// the clicked code first. The instructions and the clicked code are never
+// clicked line or selected block, the lines around it, the PR description,
+// and the enclosing block from the full file (PR 6.3). When the whole prompt
+// is over the budget, the file context is cut first (farthest from the
+// clicked code first, keeping the block's opening, then left out), then the
+// description (at a word break), then the lines around the code, farthest
+// from the clicked code first. The instructions and the clicked code are never
 // cut; when they alone do not fit, fitToBudget throws PromptTooLargeError.
 
 import type { ChatMessage } from '../llm/types';
 import {
   assembleExplainPrompt,
   descriptionBlock,
+  fileContextSection,
   isSelectionContext,
+  type FileContext,
   type ExplainPromptParts,
   type PrInfo,
 } from './explainPrompt';
@@ -40,6 +44,7 @@ export const PART_LABELS = {
   instructions: 'instructions',
   code: 'lines around the code',
   description: 'PR description',
+  file: 'full file context',
 } as const;
 
 /**
@@ -134,6 +139,29 @@ function contextPart(text: string): BudgetPart {
   };
 }
 
+// The file context as a budget part: whole, cut down line by line (farthest
+// from the clicked code first, the block's opening kept), or left out.
+function fileContextPart(context: FileContext): BudgetPart {
+  const focusFrom = Math.max(0, context.focusStart - context.startLine);
+  const focusTo = Math.min(context.lines.length - 1, context.focusEnd - context.startLine);
+  return {
+    label: PART_LABELS.file,
+    text: fileContextSection(context),
+    floor: '',
+    shrink(maxTokens) {
+      let from = 0;
+      let to = context.lines.length - 1;
+      let result = fileContextSection(context, from, to);
+      while (estimateTokens(result) > maxTokens && (from < focusFrom || to > focusTo)) {
+        if (focusFrom - from >= to - focusTo) from++;
+        else to--;
+        result = fileContextSection(context, from, to);
+      }
+      return estimateTokens(result) > maxTokens ? '' : result;
+    },
+  };
+}
+
 // The description as a budget part: whole, cut at a word break, or left out.
 function descriptionPart(description: string): BudgetPart {
   const block = descriptionBlock;
@@ -198,6 +226,7 @@ export function buildFittedExplainPrompt(
   contextText: string,
   pr: PrInfo | undefined,
   budget: number,
+  file?: FileContext,
 ): FittedPrompt {
   const title = pr?.title.trim() ?? '';
   const description = pr?.description.trim() ?? '';
@@ -213,7 +242,8 @@ export function buildFittedExplainPrompt(
   const parts: BudgetPart[] = [
     { label: PART_LABELS.instructions, text: bare.map((m) => m.content).join('\n') },
     contextPart(contextText),
-    ...(description ? [descriptionPart(description)] : []),
+    description ? descriptionPart(description) : { label: PART_LABELS.description, text: '' },
+    ...(file ? [fileContextPart(file)] : []),
   ];
   const overhead = bare.length * MESSAGE_OVERHEAD;
   const fitted = fitToBudget(parts, budget - overhead);
@@ -221,6 +251,7 @@ export function buildFittedExplainPrompt(
     context: fitted.texts[1]!,
     title,
     description: fitted.texts[2] ?? '',
+    fileContext: fitted.texts[3] ?? '',
   };
   const messages = assembleExplainPrompt(prompt);
   return { messages, tokens: estimateMessages(messages), trimmed: fitted.trimmed };

@@ -80,6 +80,63 @@ function prSection(title: string, description: string): string[] {
   ];
 }
 
+/**
+ * Lines from the full file at the PR's head commit (PR 6.3, read by
+ * src/fileContext.ts): the function or block around the clicked code, or a
+ * window of lines when there is no block.
+ */
+export interface FileContext {
+  kind: 'block' | 'window';
+  /** The file's line number of `lines[0]`. */
+  startLine: number;
+  lines: string[];
+  /** The clicked line or selected block, as line numbers in the file. */
+  focusStart: number;
+  focusEnd: number;
+  /** How many of the first lines open the block (its signature). 0 for a window. */
+  headerLines: number;
+}
+
+/** The heading over the file context in the prompt. */
+export function fileContextHeading(context: FileContext, first: number, last: number): string {
+  const where = `lines ${first} to ${last} of the file at the PR's head commit`;
+  const what =
+    context.kind === 'block'
+      ? 'The function or block the code is in'
+      : 'The lines around the code in the full file';
+  return `${what} (${where}; the clicked code starts with >):`;
+}
+
+/**
+ * The file context as it goes in the prompt, with only the lines from index
+ * `from` to index `to` (inclusive) of `context.lines`, plus the block's
+ * opening, which is always kept. Lines left out are replaced with a note.
+ */
+export function fileContextSection(
+  context: FileContext,
+  from = 0,
+  to = context.lines.length - 1,
+): string {
+  const { lines, startLine, focusStart, focusEnd } = context;
+  const header = Math.min(context.headerLines, lines.length);
+  const kept = (i: number) => i < header || (i >= from && i <= to);
+  const out: string[] = [];
+  let gap = 0;
+  lines.forEach((line, i) => {
+    if (!kept(i)) {
+      gap++;
+      return;
+    }
+    if (gap) out.push(`(${gap} ${gap === 1 ? 'line' : 'lines'} left out)`);
+    gap = 0;
+    const n = startLine + i;
+    out.push((n >= focusStart && n <= focusEnd ? '> ' : '  ') + line);
+  });
+  if (gap) out.push(`(${gap} ${gap === 1 ? 'line' : 'lines'} left out)`);
+  const last = startLine + lines.length - 1;
+  return [fileContextHeading(context, startLine, last), '```', ...out, '```'].join('\n');
+}
+
 /** The description as it goes in the prompt: inside a block it cannot close early. */
 export function descriptionBlock(description: string): string {
   const text = description.trim();
@@ -96,6 +153,8 @@ export interface ExplainPromptParts {
   title: string;
   /** descriptionBlock() of the PR's description, a note that it was left out, or ''. */
   description: string;
+  /** fileContextSection() of the file context (PR 6.3), or ''. */
+  fileContext?: string;
   /**
    * Whether the context is a selected block. Left out, it is read from
    * `context`; fitPrompt sets it when measuring the prompt without the context.
@@ -122,17 +181,24 @@ export function assembleExplainPrompt(parts: ExplainPromptParts): ChatMessage[] 
         '```',
         parts.context.trimEnd(),
         '```',
+        ...(parts.fileContext ? ['', parts.fileContext] : []),
       ].join('\n'),
     },
   ];
 }
 
 // The messages for one explain request, uncut. `contextText` is formatContext
-// or formatSelection output; `pr` is the PR's title and description, when known.
-export function buildExplainPrompt(contextText: string, pr?: PrInfo): ChatMessage[] {
+// or formatSelection output; `pr` is the PR's title and description, when
+// known, and `file` the lines around the code in the full file (PR 6.3).
+export function buildExplainPrompt(
+  contextText: string,
+  pr?: PrInfo,
+  file?: FileContext,
+): ChatMessage[] {
   return assembleExplainPrompt({
     context: contextText,
     title: pr?.title.trim() ?? '',
     description: descriptionBlock(pr?.description ?? ''),
+    fileContext: file ? fileContextSection(file) : '',
   });
 }

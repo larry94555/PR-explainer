@@ -20,13 +20,17 @@
 // src/explain/fitPrompt.ts), and the model is run with that window. When even
 // the code is too long, the result says so with a fix. With the Show prompt
 // setting on, the result carries the prompt as sent.
+//
+// The content script may also send the function or block around the code,
+// read from the full file at the PR's head (PR 6.3). It is checked here, and
+// it is the first thing cut when the prompt is too long.
 
 import { FALLBACK_CONTEXT_TOKENS, promptBudget, type ContextSizer } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
 import type { ChatMessage, LlmClient } from '../llm/types';
 import type { Settings } from '../settings';
 import { explainCacheKey, type ExplainCache } from './explainCache';
-import type { PrInfo } from './explainPrompt';
+import type { FileContext, PrInfo } from './explainPrompt';
 import { buildFittedExplainPrompt, type PromptReport } from './fitPrompt';
 import { parseExplanation, type Explanation } from './parseExplanation';
 import { PromptTooLargeError } from './tokenBudget';
@@ -43,6 +47,34 @@ export interface ExplainPayload {
   fresh?: boolean;
   /** The PR's title and description (PR 6.1), added to the prompt. */
   prInfo?: PrInfo;
+  /** The block around the code in the full file (PR 6.3), added to the prompt. */
+  fileContext?: FileContext;
+}
+
+/** The most file lines accepted, so a bad message cannot make a huge prompt. */
+const MAX_FILE_CONTEXT_LINES = 2000;
+
+/** `value` as a FileContext, or undefined when it is not one (it is never trusted). */
+export function toFileContext(value: unknown): FileContext | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const v = value as Partial<Record<keyof FileContext, unknown>>;
+  const whole = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0;
+  if (v.kind !== 'block' && v.kind !== 'window') return undefined;
+  if (!whole(v.startLine) || !whole(v.focusStart) || !whole(v.focusEnd)) return undefined;
+  if (!whole(v.headerLines) || v.startLine < 1 || v.focusEnd < v.focusStart) return undefined;
+  const { lines } = v;
+  if (!Array.isArray(lines) || lines.length === 0 || lines.length > MAX_FILE_CONTEXT_LINES) {
+    return undefined;
+  }
+  if (!lines.every((l) => typeof l === 'string')) return undefined;
+  return {
+    kind: v.kind,
+    startLine: v.startLine,
+    lines: lines as string[],
+    focusStart: v.focusStart,
+    focusEnd: v.focusEnd,
+    headerLines: v.headerLines,
+  };
 }
 
 /** `value` as a PrInfo, or undefined when it is not one (it is never trusted). */
@@ -134,7 +166,12 @@ export function createExplainHandler(deps: ExplainDeps) {
     const budget = promptBudget(contextTokens, settings.maxResponseTokens);
     let fitted;
     try {
-      fitted = buildFittedExplainPrompt(payload.context, toPrInfo(payload.prInfo), budget);
+      fitted = buildFittedExplainPrompt(
+        payload.context,
+        toPrInfo(payload.prInfo),
+        budget,
+        toFileContext(payload.fileContext),
+      );
     } catch (error) {
       if (!(error instanceof PromptTooLargeError)) throw error;
       return {
