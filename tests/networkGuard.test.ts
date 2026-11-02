@@ -1,8 +1,11 @@
+// @vitest-environment node
 // PR 7.4: code from a PR may only go to GitHub (where it came from) and to
 // the LLM on this computer. These tests check the two guarded fetches, and
 // scan the source so a new fetch (or any other way to reach the network)
 // that skips them fails here.
 import { readdirSync, readFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { dirname, join, relative, resolve } from 'node:path';
 import { describeLlmError } from '../src/llm/describeLlmError';
 import { OllamaClient } from '../src/llm/ollamaClient';
@@ -43,7 +46,7 @@ describe('createGithubFetch (content script)', () => {
     const init = { credentials: 'same-origin' as const };
     const response = await createGithubFetch(base, () => PAGE)(input, init);
     expect(await response.text()).toBe('ok');
-    expect(base).toHaveBeenCalledExactlyOnceWith(sent, init);
+    expect(base).toHaveBeenCalledExactlyOnceWith(sent, { ...init, redirect: 'error' });
   });
 
   it.each([
@@ -87,7 +90,10 @@ describe('createLlmFetch (service worker and settings page)', () => {
   it('sends requests to the configured local server', async () => {
     const base = okFetch();
     await createLlmFetch(LLM, base)(`${LLM}/api/chat`, { method: 'POST' });
-    expect(base).toHaveBeenCalledExactlyOnceWith(`${LLM}/api/chat`, { method: 'POST' });
+    expect(base).toHaveBeenCalledExactlyOnceWith(`${LLM}/api/chat`, {
+      method: 'POST',
+      redirect: 'error',
+    });
   });
 
   it.each([
@@ -137,6 +143,91 @@ describe('createLlmFetch (service worker and settings page)', () => {
     expect(describeLlmError(error, { url: 'https://ollama.example.com' }).message).toContain(
       'only sends code to an LLM on this computer',
     );
+  });
+});
+
+// Two real HTTP servers on this computer: "allowed" answers every request
+// with a redirect to "outside", which counts what reaches it. The guards are
+// given Node's real fetch, pointed at "allowed", so this checks the browser
+// behaviour the guards rely on, not a fake.
+describe('redirects are refused, so they cannot reach another host', () => {
+  let outside: Server;
+  let allowed: Server;
+  let outsideHits = 0;
+  let allowedUrl = '';
+  let status = 302;
+
+  const listen = (server: Server) =>
+    new Promise<string>((done) =>
+      server.listen(0, '127.0.0.1', () => {
+        done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+      }),
+    );
+
+  beforeAll(async () => {
+    outside = createServer((_req, res) => {
+      outsideHits++;
+      res.end('collected');
+    });
+    const outsideUrl = await listen(outside);
+    allowed = createServer((_req, res) => {
+      res.writeHead(status, { Location: `${outsideUrl}/collect` });
+      res.end();
+    });
+    allowedUrl = await listen(allowed);
+  });
+
+  afterAll(() => {
+    outside.close();
+    allowed.close();
+  });
+
+  beforeEach(() => {
+    outsideHits = 0;
+  });
+
+  it.each([301, 302, 303, 307, 308])(
+    'the LLM fetch fails on a %i and sends nothing to the other address',
+    async (code) => {
+      status = code;
+      const llmFetch = createLlmFetch(allowedUrl);
+      const error = await rejection(
+        llmFetch(`${allowedUrl}/api/chat`, { method: 'POST', body: 'secret code' }),
+      );
+      expect(error).toBeInstanceOf(TypeError); // fetch's own "redirect mode is error"
+      expect(outsideHits).toBe(0);
+    },
+  );
+
+  it('OllamaClient reports a redirect as a failed connection, not an answer', async () => {
+    status = 307;
+    const client = new OllamaClient({ baseUrl: allowedUrl });
+    const error = await rejection(client.listModels());
+    expect((error as LlmError).kind).toBe('connection');
+    expect(outsideHits).toBe(0);
+  });
+
+  it.each([301, 302, 307])(
+    'the GitHub fetch fails on a %i and sends nothing to the other address',
+    async (code) => {
+      status = code;
+      // Real fetch, with github.com swapped for the local "allowed" server
+      // after the guard has checked the URL.
+      const githubFetch = createGithubFetch(
+        (input, init) => fetch(input.replace('https://github.com', allowedUrl), init),
+        () => PAGE,
+      );
+      const error = await rejection(githubFetch('/owner/repo/raw/abc/a.ts'));
+      expect(error).toBeInstanceOf(TypeError);
+      expect(outsideHits).toBe(0);
+    },
+  );
+
+  it('without the guard, the same redirect does reach the other address', async () => {
+    // Shows the test above would catch a guard that let redirects through.
+    status = 302;
+    expect(await (await fetch(`${allowedUrl}/x`)).text()).toBe('collected');
+    expect(outsideHits).toBe(1);
   });
 });
 

@@ -1,6 +1,8 @@
 // The only way the content script reaches the network (PR 7.4). It reads a
 // PR's description and files from GitHub, with the user's GitHub cookies, and
-// nothing else: a request to any other address is refused before it is sent.
+// nothing else: a request to any other address is refused before it is sent,
+// and redirects are refused too, since the browser would follow one to an
+// address this guard never saw.
 // The content script never talks to the LLM; that goes through the service
 // worker and src/net/llmFetch.ts.
 //
@@ -11,8 +13,7 @@
 /** The only places the content script may fetch from. */
 export const GITHUB_ORIGINS: readonly string[] = [
   'https://github.com',
-  // Where github.com/<owner>/<repo>/raw/... redirects, and where public files
-  // are read from directly (src/fileContext.ts).
+  // Where public files are read from (src/fileContext.ts).
   'https://raw.githubusercontent.com',
 ];
 
@@ -53,6 +54,7 @@ export function createGithubFetch(
   return async (input, init) => {
     const url = allowedGithubUrl(input, pageUrl());
     if (!url) throw new BlockedRequestError(input);
-    return baseFetch(url.href, init);
+    // A redirect fails the request instead of being followed (PR 7.4 review).
+    return baseFetch(url.href, { ...init, redirect: 'error' });
   };
 }

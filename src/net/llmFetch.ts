@@ -2,7 +2,9 @@
 // (PR 7.4): every request goes to the LLM server the user set, and that
 // server must be on this computer. A request to any other address is refused
 // before it is sent, so code from a PR cannot leave the laptop even if a bug
-// built the wrong URL or a bad URL got into storage.
+// built the wrong URL or a bad URL got into storage. Redirects are refused
+// too: a 307 or 308 would make the browser send the prompt again to an
+// address this guard never saw.
 //
 // Not imported by the content script (see src/net/githubFetch.ts).
 
@@ -48,6 +50,6 @@ export function createLlmFetch(
           : `Refused to send code to ${llmUrl}: the LLM must run on this computer.`,
       );
     }
-    return baseFetch(target.href, init);
+    return baseFetch(target.href, { ...init, redirect: 'error' });
   };
 }

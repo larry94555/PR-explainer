@@ -319,9 +319,9 @@ describe('headShaFromPage and rawFileUrls', () => {
     expect(headShaFromPage(document, PR)).toBeNull();
   });
 
-  it("lists the page's raw URL first, then raw.githubusercontent.com", () => {
+  it('lists the head commit, then the PR head, on raw.githubusercontent.com (no redirects)', () => {
     expect(rawFileUrls(PR, 'src/my file#1.ts', SHA)).toEqual([
-      `/octo/shop/raw/${SHA}/src/my%20file%231.ts`,
+      `https://raw.githubusercontent.com/octo/shop/${SHA}/src/my%20file%231.ts`,
       'https://raw.githubusercontent.com/octo/shop/refs/pull/7/head/src/my%20file%231.ts',
     ]);
     expect(rawFileUrls(PR, 'a.ts', null)).toEqual([
@@ -354,10 +354,10 @@ describe('createFileContextLoader', () => {
     expect(fetchText).toHaveBeenCalledTimes(2);
   });
 
-  it("tries raw.githubusercontent.com when the page's raw URL fails", async () => {
+  it("tries the PR's head ref when the head commit's URL fails", async () => {
     document.body.innerHTML = `<a href="/octo/shop/blob/${SHA}/src/cart.ts">View file</a>`;
     const fetchText = vi.fn(async (url: string) => {
-      if (url.startsWith('/')) throw new Error('GitHub answered 404');
+      if (url.includes(SHA)) throw new Error('GitHub answered 404');
       return file;
     });
     const loader = createFileContextLoader({ doc: document, fetchText });

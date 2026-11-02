@@ -311,15 +311,19 @@ export function headShaFromPage(doc: Document, pr: Pick<PrRef, 'owner' | 'repo'>
 const encodePath = (path: string) => path.split('/').map(encodeURIComponent).join('/');
 
 /**
- * Where the file can be read, most likely first: the page's own raw URL at
- * the head commit (works for private repos while signed in), then the PR's
- * head on raw.githubusercontent.com (public repos).
+ * Where the file can be read, most likely first: the head commit on
+ * raw.githubusercontent.com, then the PR's head ref there. Both work for
+ * public repositories only. github.com's own /raw/ link is not used: it
+ * answers with a redirect, and the content script follows no redirects
+ * (src/net/githubFetch.ts, PR 7.4), so a private repository's file cannot be
+ * read and the explanation uses the diff alone.
  */
 export function rawFileUrls(pr: PrRef, filePath: string, headSha: string | null): string[] {
   const path = encodePath(filePath);
+  const raw = `https://raw.githubusercontent.com/${pr.owner}/${pr.repo}`;
   return [
-    ...(headSha ? [`/${pr.owner}/${pr.repo}/raw/${headSha}/${path}`] : []),
-    `https://raw.githubusercontent.com/${pr.owner}/${pr.repo}/refs/pull/${pr.number}/head/${path}`,
+    ...(headSha ? [`${raw}/${headSha}/${path}`] : []),
+    `${raw}/refs/pull/${pr.number}/head/${path}`,
   ];
 }
 
