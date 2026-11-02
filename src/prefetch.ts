@@ -17,6 +17,8 @@
 //   src/selection.ts).
 // - A click on other code cancels the prefetch, so the click's request is the
 //   only one.
+// - Moving off the code (the gutter, a header, the popup) ends the wait.
+// - Moving to another page, or GitHub redrawing this one, cancels it all.
 // A line whose prefetch finished is not asked for again on this page.
 //
 // The setting is off by default. It is saved with the other settings in
@@ -129,8 +131,12 @@ export interface Prefetcher {
   explain: ClickHandlerDeps['explain'];
   /** Ends the wait and cancels a prefetch no click has joined (leaving the page, turning off). */
   cancel(): void;
-  /** Forgets which lines were already prefetched (the page's code may have changed). */
-  forget(): void;
+  /**
+   * For every page change or redraw: ends the wait, stops a prefetch no click
+   * has joined (its code may be gone), and forgets which lines were already
+   * prefetched (the page's code may have changed).
+   */
+  pageChanged(): void;
   /** The line being prefetched, if any (for tests and logging). */
   running(): string | undefined;
 }
@@ -215,8 +221,15 @@ export function createPrefetcher(deps: PrefetchDeps): Prefetcher {
       return;
     }
     const line = locate(event.target);
-    // Off the code (the popup, the gutter, a header): keep what is running.
-    if (!line || line.key === hoverKey) return;
+    // Off the code (the popup, the gutter, a header): the pointer is no longer
+    // resting on a line, so the wait ends. A running prefetch keeps going, so
+    // moving to the popup or the line number to click does not lose it.
+    if (!line) {
+      clearTimer();
+      hoverKey = undefined;
+      return;
+    }
+    if (line.key === hoverKey) return;
     hoverKey = line.key;
     clearTimer();
     if (current && current.key !== line.key) cancelRunning();
@@ -255,16 +268,21 @@ export function createPrefetcher(deps: PrefetchDeps): Prefetcher {
     return deps.explain(context, onChunk, options);
   };
 
+  const cancel = () => {
+    clearTimer();
+    hoverKey = undefined;
+    cancelRunning();
+  };
+
   return {
     onMouseOver,
     onMouseDown: clearTimer,
     explain,
-    cancel: () => {
-      clearTimer();
-      hoverKey = undefined;
-      cancelRunning();
+    cancel,
+    pageChanged: () => {
+      cancel();
+      done.clear();
     },
-    forget: () => done.clear(),
     running: () => current?.key,
   };
 }

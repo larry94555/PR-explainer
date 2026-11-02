@@ -281,7 +281,8 @@ function onPageChanged(url: string): void {
   features.sync(url);
   prMetadata.forget();
   fileContexts.forget();
-  prefetcher.forget();
+  // A prefetch or wait from before the move is for code that may be gone.
+  prefetcher.pageChanged();
   void loadPrMetadata();
 }
 watchNavigation(window, onPageChanged, { onRedraw: onPageChanged });

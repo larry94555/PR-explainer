@@ -4,6 +4,7 @@ import { explainLineAt, lineRequest, type ClickHandlerDeps } from '../src/clickH
 import type { StorageChange } from '../src/enabledState';
 import type { ExplainResult } from '../src/explain/explainHandler';
 import type { ExplainStream } from '../src/messaging/client';
+import { watchNavigation } from '../src/navigation';
 import { currentPopup, openPopup } from '../src/popup/popup';
 import {
   createPrefetcher,
@@ -144,13 +145,33 @@ describe('explain on hover', () => {
     expect(env.explain).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps waiting when the pointer leaves the code (the gutter, the popup)', () => {
+  it('ends the wait when the pointer leaves the code before 800 ms (the gutter, the popup)', () => {
     const env = setup();
     env.hover('a');
     vi.advanceTimersByTime(500);
     env.hover('gutter');
-    vi.advanceTimersByTime(300);
-    expect(env.streams.map((s) => s.text)).toEqual(['context of a']);
+    vi.advanceTimersByTime(5000);
+    expect(env.explain).not.toHaveBeenCalled();
+
+    // Coming back starts a new 800 ms wait.
+    env.hover('a');
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS - 1);
+    expect(env.explain).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(env.explain).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a running prefetch when the pointer leaves the code (to click the popup or gutter)', () => {
+    const env = setup();
+    env.hover('a');
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+    env.hover('gutter');
+    expect(env.streams[0]!.stopped).toBe(false);
+    expect(env.prefetcher.running()).toBe('a');
+    // Back on the same line: still the one request.
+    env.hover('a');
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+    expect(env.explain).toHaveBeenCalledTimes(1);
   });
 
   it('restarts the wait on another line, so passing over a line asks nothing', () => {
@@ -279,7 +300,7 @@ describe('explain on hover', () => {
     expect(env.explain).toHaveBeenCalledTimes(2);
 
     // After the page changes, the line may be asked for again.
-    env.prefetcher.forget();
+    env.prefetcher.pageChanged();
     env.hover('b');
     env.hover('a');
     vi.advanceTimersByTime(PREFETCH_DELAY_MS);
@@ -361,6 +382,74 @@ describe('explain on hover', () => {
     env.prefetcher.cancel();
     vi.advanceTimersByTime(5000);
     expect(env.streams.map((s) => s.stopped)).toEqual([true]);
+  });
+});
+
+describe('explain on hover across page changes', () => {
+  // A stand-in window whose address the test sets, as GitHub's pushState would.
+  function fakeWindow(href: string) {
+    const doc = new EventTarget();
+    return Object.assign(new EventTarget(), {
+      location: { href },
+      document: doc,
+      setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+      setInterval: () => 0,
+      clearInterval: () => {},
+    }) as unknown as Window & { location: { href: string }; document: EventTarget };
+  }
+  const FILES = 'https://github.com/o/r/pull/1/files';
+
+  // Wired as src/content.ts wires it: every move and redraw calls pageChanged.
+  function watch(prefetcher: ReturnType<typeof setup>['prefetcher'], win: Window) {
+    const onPage = () => prefetcher.pageChanged();
+    return watchNavigation(win, onPage, { onRedraw: onPage });
+  }
+
+  it('stops a running prefetch when GitHub moves to another PR', () => {
+    const env = setup();
+    const win = fakeWindow(FILES);
+    const stop = watch(env.prefetcher, win);
+    env.hover('a');
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+    win.location.href = 'https://github.com/o/r/pull/2/files';
+    win.document.dispatchEvent(new Event('turbo:load'));
+    expect(env.streams[0]!.stopped).toBe(true);
+    expect(env.prefetcher.running()).toBeUndefined();
+    expect(env.events).toContainEqual({ type: 'cancelled', key: 'a' });
+    stop();
+  });
+
+  it('drops a pending wait when GitHub redraws the page, so nothing starts for old code', () => {
+    const env = setup();
+    const win = fakeWindow(FILES);
+    const stop = watch(env.prefetcher, win);
+    env.hover('a');
+    vi.advanceTimersByTime(500);
+    win.document.dispatchEvent(new Event('turbo:render'));
+    vi.advanceTimersByTime(5000);
+    expect(env.explain).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('lets a line prefetched before the redraw be prefetched again after it', async () => {
+    const env = setup();
+    env.hover('a');
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+    env.streams[0]!.finish();
+    await settle();
+    env.prefetcher.pageChanged();
+    env.hover('a');
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+    expect(env.explain).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a prefetch a click has joined (its popup closes itself if its code goes)', () => {
+    const env = setup();
+    env.hover('a');
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+    env.prefetcher.explain('context of a', () => {}, { fresh: false });
+    env.prefetcher.pageChanged();
+    expect(env.streams[0]!.stopped).toBe(false);
   });
 });
 
