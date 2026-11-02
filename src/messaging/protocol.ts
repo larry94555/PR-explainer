@@ -5,6 +5,7 @@
 // is erased at build time, so it never becomes a shared chunk (content scripts
 // cannot load chunks; see src/content.ts).
 
+import type { ChatPayload, ChatResult } from '../chat/chatHandler';
 import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
 
 // Each request type maps to the payload it takes and the result it returns.
@@ -63,10 +64,23 @@ export type ExplainPortName = 'pr-explainer:explain';
 
 export type ExplainPortRequest = { type: 'start' } & ExplainPayload;
 
-export type ExplainPortMessage =
+/** What the service worker sends back over a stream port with result type R. */
+export type StreamPortMessage<R> =
   | { type: 'chunk'; text: string }
-  | { type: 'result'; result: ExplainResult }
+  | { type: 'result'; result: R }
   | { type: 'error'; error: SerializedError };
+
+export type ExplainPortMessage = StreamPortMessage<ExplainResult>;
+
+// Chat answers (PR 5.3) stream over their own port in the same way: one
+// `start` carrying the whole message list the ChatSession built, then chunks
+// and one result. Disconnecting (the chat panel's Stop button, or closing the
+// panel) aborts the request.
+export type ChatPortName = 'pr-explainer:chat';
+
+export type ChatPortRequest = { type: 'start' } & ChatPayload;
+
+export type ChatPortMessage = StreamPortMessage<ChatResult>;
 
 // The parts of a chrome.runtime.Port this layer uses.
 export interface PortLike {

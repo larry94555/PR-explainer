@@ -1,10 +1,14 @@
 import type { ExplainResult, ExplainStreamOptions } from '../src/explain/explainHandler';
-import { openExplainStream, RequestError } from '../src/messaging/client';
+import type { ChatResult } from '../src/chat/chatHandler';
+import { openChatStream, openExplainStream, RequestError } from '../src/messaging/client';
 import type { PortLike, PortRuntime } from '../src/messaging/protocol';
 import {
+  CHAT_PORT,
   EXPLAIN_PORT,
+  listenForChatPorts,
   listenForExplainPorts,
   serveExplainPort,
+  type StreamingChat,
   type StreamingExplain,
 } from '../src/messaging/streamPort';
 
@@ -306,5 +310,55 @@ describe('openExplainStream', () => {
     await flush();
     workerPorts[0]!.disconnect();
     await expect(stream.result).rejects.toThrow('closed before the answer arrived');
+  });
+});
+
+describe('chat stream over a port', () => {
+  const MESSAGES = [{ role: 'user' as const, content: 'How would I unit test this?' }];
+
+  it('sends the messages, forwards chunks, then the answer', async () => {
+    const { runtime } = fakeRuntime();
+    const done: ChatResult = { status: 'done', answer: 'Use fake timers.', model: 'm' };
+    const chat = vi.fn<StreamingChat>(async (_payload, { onChunk }) => {
+      onChunk?.('Use ');
+      onChunk?.('fake timers.');
+      return done;
+    });
+    listenForChatPorts(runtime, chat);
+    // The explain listener does not answer chat ports.
+    const explain = controllableExplain();
+    listenForExplainPorts(runtime, explain.explain);
+
+    const chunks: string[] = [];
+    const stream = openChatStream({ messages: MESSAGES }, (t) => chunks.push(t), runtime);
+    await expect(stream.result).resolves.toEqual(done);
+    expect(chunks).toEqual(['Use ', 'fake timers.']);
+    expect(chat).toHaveBeenCalledWith({ messages: MESSAGES }, expect.anything());
+    expect(explain.explain).not.toHaveBeenCalled();
+  });
+
+  it('Stop aborts the chat request in the service worker', async () => {
+    const { runtime, workerPorts } = fakeRuntime();
+    let signal!: AbortSignal;
+    listenForChatPorts(runtime, (_payload, options) => {
+      signal = options.signal!;
+      return new Promise(() => {});
+    });
+    const stream = openChatStream({ messages: MESSAGES }, () => {}, runtime);
+    await flush();
+    expect(workerPorts[0]!.name).toBe(CHAT_PORT);
+    stream.stop();
+    await expect(stream.result).rejects.toMatchObject({ name: 'AbortError' });
+    await flush();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('turns a handler that throws at once into an error', async () => {
+    const { runtime } = fakeRuntime();
+    listenForChatPorts(runtime, () => {
+      throw new Error('chat needs a list of messages that ends with a question');
+    });
+    const stream = openChatStream({ messages: [] }, () => {}, runtime);
+    await expect(stream.result).rejects.toThrow(/ends with a question/);
   });
 });

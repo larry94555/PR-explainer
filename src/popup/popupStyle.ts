@@ -58,6 +58,29 @@ export const POPUP_STYLE = `
   .regenerate:hover, .regenerate:focus-visible { background: #ddf4ff; border-color: #0969da; color: #0969da; }
   /* Regenerate only makes sense once the model has stopped working. */
   .popup:not([data-state='done']):not([data-state='failed']):not([data-state='stopped']) .regenerate { display: none; }
+  .footer {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 12px;
+    background: #ffffff;
+    border-top: 1px solid #eaeef2;
+  }
+  /* Ask a question only makes sense once there is an explanation to ask about. */
+  .popup:not([data-state='done']) .footer, .footer:empty { display: none; }
+  .ask {
+    border: 1px solid #1f883d;
+    background: #1f883d;
+    color: #ffffff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .ask:hover, .ask:focus-visible { background: #1a7f37; }
   .partial { padding-top: 8px; }
   /* A blinking caret after the newest text while the model is still writing. */
   .popup[data-state='streaming'] .partial > :last-child::after {

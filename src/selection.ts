@@ -16,7 +16,13 @@
 
 import { explainInPopup, isInteractive, type ClickHandlerDeps } from './clickHandler';
 import { locateRange, locateRow, type DiffRange } from './diffDom';
-import { formatSelection, MAX_SELECTED_LINES, selectionContext } from './lineContext';
+import {
+  formatSelection,
+  MAX_SELECTED_LINES,
+  selectionContext,
+  type SelectionContext,
+} from './lineContext';
+import type { ChatSubject } from './chat/chatPanel';
 import type { AnchorRect, PopupAnchor } from './popup/popup';
 
 /** Set on each highlighted row. GitHub's own markup never uses it. */
@@ -68,9 +74,24 @@ const UI_STYLE = `
   .note { padding: 2px 6px; }
 `;
 
+/**
+ * The file and lines a selection covers, for the chat panel's header. Uses
+ * the new file's line numbers, or the old file's when only removed lines are
+ * selected.
+ */
+export function selectionSubject(context: SelectionContext): ChatSubject {
+  const kept = context.lines.filter((line) => line.side !== 'removed');
+  const numbers = (kept.length ? kept : context.lines).map((line) => line.lineNumber);
+  return {
+    filePath: context.filePath,
+    startLine: Math.min(...numbers),
+    endLine: Math.max(...numbers),
+  };
+}
+
 export interface SelectionDeps extends Pick<
   ClickHandlerDeps,
-  'explain' | 'openPopup' | 'onContext' | 'onTiming'
+  'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat'
 > {
   /** False while click-to-explain is off (toolbar button). */
   isEnabled?(): boolean;
@@ -209,7 +230,9 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
       removeUi();
       explaining = true;
       const selected = rows;
-      explainInPopup(deps, formatSelection(selectionContext(range)), blockAnchor(selected), () => {
+      const context = selectionContext(range);
+      const request = { text: formatSelection(context), subject: selectionSubject(context) };
+      explainInPopup(deps, request, blockAnchor(selected), () => {
         // Only clear the highlight if no newer selection replaced it.
         if (rows === selected) {
           explaining = false;

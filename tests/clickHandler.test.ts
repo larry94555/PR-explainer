@@ -52,11 +52,13 @@ function fakePopup(anchor: PopupAnchor, hooks: PopupHooks) {
   const finished = () => state === 'closed' || state === 'stopped';
   const popup: Popup & {
     anchor: PopupAnchor;
+    hooks: PopupHooks;
     calls: string[];
     pressStop(): void;
     pressRegenerate(): void;
   } = {
     anchor,
+    hooks,
     calls,
     host: document.createElement('div'),
     elapsedMs: 1234,
@@ -398,6 +400,31 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     second.resolve({ ...DONE, explanation: { ...DONE.explanation, what: 'Fresh.' } });
     await flush();
     expect(env.popups[0]!.calls.at(-1)).toBe(`done:${DONE.model}:Fresh.`);
+  });
+
+  it('Ask a question opens the chat with the code, the explanation, and the line', async () => {
+    env = setup();
+    const openChat = vi.fn();
+    click(code('R44'));
+    expect(env.popups[0]!.hooks.onAsk).toBeUndefined();
+
+    env.deps.openChat = openChat;
+    click(code('R44'));
+    await flush();
+    env.popups[1]!.hooks.onAsk!();
+    expect(openChat).toHaveBeenCalledWith({
+      context: env.contexts[1],
+      explanation: DONE.explanation,
+      subject: { filePath: 'docs/roadmap.md', startLine: 44 },
+    });
+  });
+
+  it('Ask a question does nothing until there is an explanation', () => {
+    env = setup(() => new Promise(() => {}));
+    env.deps.openChat = vi.fn();
+    click(code('R44'));
+    env.popups[0]!.hooks.onAsk!();
+    expect(env.deps.openChat).not.toHaveBeenCalled();
   });
 
   it('closing the popup stops the request', async () => {

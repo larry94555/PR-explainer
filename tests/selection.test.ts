@@ -20,6 +20,7 @@ import {
 import type { Popup, PopupAnchor } from '../src/popup/popup';
 import {
   installSelection,
+  selectionSubject,
   NOTE_MS,
   OTHER_FILE_NOTE,
   SELECTED_ATTR,
@@ -381,5 +382,31 @@ describe.each(layouts)('selecting lines on the $name layout', ({ code, file, add
     // Closing the first block's popup leaves the new highlight alone.
     env.popups[0]!.hooks.onClose();
     expect(highlighted()).toEqual(['R45', 'R46'].map(row));
+  });
+});
+
+describe('selectionSubject', () => {
+  const line = (lineNumber: number, side: 'added' | 'removed' | 'context') => ({
+    filePath: 'src/a.ts',
+    lineNumber,
+    side,
+    text: '',
+  });
+  const context = (lines: ReturnType<typeof line>[]) =>
+    ({ filePath: 'src/a.ts', lines }) as Parameters<typeof selectionSubject>[0];
+
+  it("uses the new file's lines, or the old file's when only removed lines are selected", () => {
+    expect(
+      selectionSubject(context([line(9, 'removed'), line(12, 'added'), line(14, 'context')])),
+    ).toEqual({
+      filePath: 'src/a.ts',
+      startLine: 12,
+      endLine: 14,
+    });
+    expect(selectionSubject(context([line(30, 'removed'), line(31, 'removed')]))).toEqual({
+      filePath: 'src/a.ts',
+      startLine: 30,
+      endLine: 31,
+    });
   });
 });

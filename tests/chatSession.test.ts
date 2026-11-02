@@ -163,4 +163,14 @@ describe('ChatSessions', () => {
     expect(() => sessions.sessionFor('owner/repo#1', { ...SEED, context: '' })).toThrow();
     expect(sessions.get('owner/repo#1')).toBeUndefined();
   });
+
+  it('restart replaces the PR session with a new one', () => {
+    const sessions = new ChatSessions();
+    const first = sessions.sessionFor('owner/repo#1', SEED);
+    first.addTurn('Q', 'A');
+    const next = sessions.restart('owner/repo#1', { ...SEED, context: 'File: other.ts' });
+    expect(next).not.toBe(first);
+    expect(next.turns).toEqual([]);
+    expect(sessions.get('owner/repo#1')).toBe(next);
+  });
 });

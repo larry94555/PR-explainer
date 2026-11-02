@@ -1,29 +1,39 @@
-// Service worker side of the explain port (see ExplainPortName in
-// protocol.ts): runs one explanation per port, forwards each piece of the
-// reply as it arrives, and aborts the request when the content script
-// disconnects (Stop button, popup closed, tab closed or reloaded).
+// Service worker side of the stream ports (see ExplainPortName and
+// ChatPortName in protocol.ts): runs one request per port, forwards each
+// piece of the reply as it arrives, and aborts the request when the content
+// script disconnects (Stop button, popup or chat panel closed, tab closed or
+// reloaded).
 
+import type { ChatPayload, ChatResult, ChatStreamOptions } from '../chat/chatHandler';
 import type {
   ExplainPayload,
   ExplainResult,
   ExplainStreamOptions,
 } from '../explain/explainHandler';
 import type {
-  ExplainPortMessage,
+  ChatPortName,
   ExplainPortName,
-  ExplainPortRequest,
   PortLike,
   PortRuntime,
+  StreamPortMessage,
 } from './protocol';
 
 export const EXPLAIN_PORT: ExplainPortName = 'pr-explainer:explain';
+export const CHAT_PORT: ChatPortName = 'pr-explainer:chat';
 
 export type StreamingExplain = (
   payload: ExplainPayload,
   options: ExplainStreamOptions,
 ) => Promise<ExplainResult>;
 
-function isStart(message: unknown): message is ExplainPortRequest {
+export type StreamingChat = (
+  payload: ChatPayload,
+  options: ChatStreamOptions,
+) => Promise<ChatResult>;
+
+type Start = { type: 'start' } & Record<string, unknown>;
+
+function isStart(message: unknown): message is Start {
   return (
     typeof message === 'object' &&
     message !== null &&
@@ -31,8 +41,15 @@ function isStart(message: unknown): message is ExplainPortRequest {
   );
 }
 
-/** Handles one connected port. Exported for the tests. */
-export function serveExplainPort(port: PortLike, explain: StreamingExplain): void {
+/**
+ * Handles one connected port: waits for its `start` message, turns it into
+ * the handler's payload with `read`, and streams `run`'s reply back.
+ */
+function serveStreamPort<P, R>(
+  port: PortLike,
+  read: (start: Start) => P,
+  run: (payload: P, options: { signal: AbortSignal; onChunk(text: string): void }) => Promise<R>,
+): void {
   const controller = new AbortController();
   let open = true;
   const close = () => {
@@ -42,7 +59,7 @@ export function serveExplainPort(port: PortLike, explain: StreamingExplain): voi
   port.onDisconnect.addListener(close);
   // Posting to a port the other side has closed throws. That must not stop the
   // service worker, so a failed post is treated like a disconnect.
-  const send = (message: ExplainPortMessage) => {
+  const send = (message: StreamPortMessage<R>) => {
     if (!open) return;
     try {
       port.postMessage(message);
@@ -55,31 +72,64 @@ export function serveExplainPort(port: PortLike, explain: StreamingExplain): voi
   port.onMessage.addListener((message) => {
     if (started || !isStart(message)) return;
     started = true;
-    explain(
-      {
-        context: message.context,
-        pr: typeof message.pr === 'string' ? message.pr : undefined,
-        fresh: message.fresh === true,
-      },
-      { signal: controller.signal, onChunk: (text) => send({ type: 'chunk', text }) },
-    ).then(
-      (result) => send({ type: 'result', result }),
-      (error: unknown) =>
-        send({
-          type: 'error',
-          error:
-            error instanceof Error
-              ? { name: error.name, message: error.message }
-              : { name: 'Error', message: String(error) },
-        }),
-    );
+    const fail = (error: unknown) =>
+      send({
+        type: 'error',
+        error:
+          error instanceof Error
+            ? { name: error.name, message: error.message }
+            : { name: 'Error', message: String(error) },
+      });
+    // A payload `read` cannot use is reported like a handler that rejects.
+    let reply: Promise<R>;
+    try {
+      reply = run(read(message), {
+        signal: controller.signal,
+        onChunk: (text) => send({ type: 'chunk', text }),
+      });
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    reply.then((result) => send({ type: 'result', result }), fail);
+  });
+}
+
+/** Handles one connected explain port. Exported for the tests. */
+export function serveExplainPort(port: PortLike, explain: StreamingExplain): void {
+  serveStreamPort(
+    port,
+    (message) => ({
+      context: message.context as string,
+      pr: typeof message.pr === 'string' ? message.pr : undefined,
+      fresh: message.fresh === true,
+    }),
+    explain,
+  );
+}
+
+/** Handles one connected chat port. Exported for the tests. */
+export function serveChatPort(port: PortLike, chat: StreamingChat): void {
+  serveStreamPort(
+    port,
+    (message) => ({ messages: message.messages as ChatPayload['messages'] }),
+    chat,
+  );
+}
+
+function listen(runtime: PortRuntime, name: string, serve: (port: PortLike) => void): void {
+  runtime.onConnect.addListener((port) => {
+    if (port.name !== name || port.sender?.id !== runtime.id) return;
+    serve(port);
   });
 }
 
 /** Answers explain ports from our own extension's pages and content scripts. */
 export function listenForExplainPorts(runtime: PortRuntime, explain: StreamingExplain): void {
-  runtime.onConnect.addListener((port) => {
-    if (port.name !== EXPLAIN_PORT || port.sender?.id !== runtime.id) return;
-    serveExplainPort(port, explain);
-  });
+  listen(runtime, EXPLAIN_PORT, (port) => serveExplainPort(port, explain));
+}
+
+/** Answers chat ports from our own extension's pages and content scripts. */
+export function listenForChatPorts(runtime: PortRuntime, chat: StreamingChat): void {
+  listen(runtime, CHAT_PORT, (port) => serveChatPort(port, chat));
 }

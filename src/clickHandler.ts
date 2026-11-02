@@ -5,7 +5,9 @@
 // worker into it as the model writes, and shows the three sections at the
 // end. The popup's Stop button, or closing the popup, stops the request. Its
 // Regenerate button asks again with `fresh` set, so the service worker skips
-// its cache. Clicks on GitHub's own controls
+// its cache. Once the explanation is shown, its Ask a question button opens
+// the chat about the same code (openChat, src/chat/chatFlow.ts). Clicks on
+// GitHub's own controls
 // (the comment "+" button, links, menus, form fields), clicks that finish a
 // text selection, and modified clicks (Shift, Ctrl, Alt, Cmd) are left alone
 // so GitHub keeps working as before. Drags and Shift-clicks across several
@@ -15,8 +17,11 @@
 // The parts that talk to Chrome and draw the popup are passed in, so the
 // tests can use fakes.
 
+import type { ChatSubject } from './chat/chatPanel';
+import type { ChatSeed } from './chat/chatSession';
 import { locateRow } from './diffDom';
 import { extractContext, formatContext } from './lineContext';
+import type { Explanation } from './explain/parseExplanation';
 import type { ExplainStream } from './messaging/client';
 import type { Popup, PopupAnchor, PopupOptions } from './popup/popup';
 
@@ -38,8 +43,14 @@ export interface ClickHandlerDeps {
   /** Opens a popup next to the clicked row, closing any other popup. */
   openPopup(
     anchor: PopupAnchor,
-    options: Required<Pick<PopupOptions, 'onStop' | 'onClose' | 'onRegenerate'>>,
+    options: Required<Pick<PopupOptions, 'onStop' | 'onClose' | 'onRegenerate'>> &
+      Pick<PopupOptions, 'onAsk'>,
   ): Popup;
+  /**
+   * Opens the chat about an explanation (the popup's Ask a question button).
+   * Leaving it out hides the button.
+   */
+  openChat?(chat: ChatStart): void;
   /** Called with each context block sent to the model (dev logging). */
   onContext?(context: string): void;
   /**
@@ -48,6 +59,19 @@ export interface ClickHandlerDeps {
    * across models.
    */
   onTiming?(timing: ExplainTiming): void;
+}
+
+/** What a chat starts from: the code, its explanation, and where the code is. */
+export interface ChatStart extends ChatSeed {
+  subject: ChatSubject;
+}
+
+/** The code to explain: the context block for the model, and where it is. */
+export interface ExplainRequest {
+  /** From formatContext or formatSelection (src/lineContext.ts). */
+  text: string;
+  /** The file and lines, for the chat panel's header. */
+  subject: ChatSubject;
 }
 
 export interface ExplainTiming {
@@ -127,19 +151,24 @@ export function createClickHandler(deps: ClickHandlerDeps): (event: MouseEvent) 
     const context = row && extractContext(target);
     if (!row || !context) return;
 
-    explainInPopup(deps, formatContext(context), row);
+    const { filePath, lineNumber } = context.line;
+    explainInPopup(
+      deps,
+      { text: formatContext(context), subject: { filePath, startLine: lineNumber } },
+      row,
+    );
   };
 }
 
 /**
- * Sends `text` to the model and streams the answer into a popup next to
- * `anchor`, with Stop and Regenerate wired up. Used for one clicked line and
- * for a selected block (src/selection.ts). `onClose` runs when the popup
- * closes.
+ * Sends `request.text` to the model and streams the answer into a popup next
+ * to `anchor`, with Stop, Regenerate and Ask a question wired up. Used for
+ * one clicked line and for a selected block (src/selection.ts). `onClose`
+ * runs when the popup closes.
  */
 export function explainInPopup(
-  deps: Pick<ClickHandlerDeps, 'explain' | 'openPopup' | 'onContext' | 'onTiming'>,
-  text: string,
+  deps: Pick<ClickHandlerDeps, 'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat'>,
+  { text, subject }: ExplainRequest,
   anchor: PopupAnchor,
   onClose?: () => void,
 ): void {
@@ -150,6 +179,9 @@ export function explainInPopup(
   let firstChunkMs: number | undefined;
   const report = (timing: Omit<ExplainTiming, 'elapsedMs' | 'firstChunkMs'>) =>
     deps.onTiming?.({ elapsedMs: popup.elapsedMs, ...timing, firstChunkMs });
+  // The explanation the popup shows, for Ask a question.
+  let explanation: Explanation | undefined;
+  const { openChat } = deps;
   // The popup's callbacks only run after a user action, by which time
   // `stream` (below) is set.
   const popup = deps.openPopup(anchor, {
@@ -166,6 +198,13 @@ export function explainInPopup(
       stream.stop();
       stream = ask(true);
     },
+    // The popup has closed when this runs, and shows the button only once an
+    // explanation is shown.
+    ...(openChat && {
+      onAsk: () => {
+        if (explanation) openChat({ context: text, explanation, subject });
+      },
+    }),
   });
   const waiting = () => popup.state === 'loading' || popup.state === 'streaming';
 
@@ -174,6 +213,7 @@ export function explainInPopup(
   let latest: ExplainStream | undefined;
   const ask = (fresh: boolean): ExplainStream => {
     firstChunkMs = undefined;
+    explanation = undefined;
     let reply = '';
     const current = () => latest === request && waiting();
     const request: ExplainStream = deps.explain(
@@ -191,6 +231,7 @@ export function explainInPopup(
       (result) => {
         if (!current()) return;
         if (result.status === 'done') {
+          explanation = result.explanation;
           popup.showExplanation(result.explanation, result.model, result.cached);
         } else popup.showError(result.message, result.fix);
         report({

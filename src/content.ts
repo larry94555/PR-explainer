@@ -7,9 +7,12 @@
 // code into a chunk loaded with `import`, which fails in a content script.
 // Type-only imports (such as src/messaging/protocol.ts) are fine.
 import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
+import { chatSessionFor, startChat } from './chat/chatFlow';
+import { currentChatPanel, openChatPanel } from './chat/chatPanel';
+import { ChatSessions } from './chat/chatSession';
 import { createClickHandler, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
-import { openExplainStream, sendRequest } from './messaging/client';
+import { openChatStream, openExplainStream, sendRequest } from './messaging/client';
 import { currentPopup, openPopup } from './popup/popup';
 import { parsePrUrl } from './prUrl';
 import { installSelection } from './selection';
@@ -25,8 +28,12 @@ let workerStatus = 'Service worker: checking…';
 // src/toolbarToggle.ts). Until the saved state is read, clicks are ignored
 // and the badge keeps its default look.
 const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (value) => {
-  // Turning it off also closes an open popup; a late answer is then ignored.
-  if (!value) currentPopup()?.close();
+  // Turning it off also closes an open popup or chat; a late answer is then
+  // ignored.
+  if (!value) {
+    currentPopup()?.close();
+    currentChatPanel()?.close();
+  }
   update();
 });
 
@@ -61,6 +68,9 @@ window.addEventListener('popstate', update);
 // Click a diff line to explain it: a popup opens next to the line and the
 // model's answer streams into it (see src/clickHandler.ts). There is no
 // timeout: the popup's Stop button ends a request that takes too long.
+// One chat per PR, kept for as long as the tab is open (never stored).
+const chats = new ChatSessions();
+
 const explainDeps: ClickHandlerDeps = {
   isEnabled: () => enabled.current() === true,
   // The PR names the cache entry, so the same code in two PRs is asked
@@ -68,6 +78,20 @@ const explainDeps: ClickHandlerDeps = {
   explain: (context, onChunk, { fresh }) =>
     openExplainStream({ context, pr: prName(location.href), fresh }, onChunk),
   openPopup: (anchor, options) => openPopup(anchor, options),
+  // The popup's Ask a question button: chat about the explained code, with
+  // answers streamed from the service worker (src/chat/chatFlow.ts).
+  openChat: ({ subject, ...seed }) => {
+    const session = chatSessionFor(chats, prName(location.href), seed);
+    const panel = startChat(
+      {
+        ask: (messages, onChunk) => openChatStream({ messages }, onChunk),
+        openPanel: (options) => openChatPanel(options),
+      },
+      session,
+      subject,
+    );
+    panel.focus();
+  },
   // Dev builds also log the context block sent to the model.
   onContext:
     import.meta.env.MODE === 'development'

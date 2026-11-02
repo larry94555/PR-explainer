@@ -10,13 +10,17 @@
 // being written (setBusy). The list keeps the newest message in view, unless
 // the user has scrolled up to read an older one.
 //
-// This PR adds only the UI. The panel does not talk to the LLM or keep the
-// conversation: it reports each question through onSend, and the caller adds
-// the answer with addMessage and fills it in with update. PR 5.3 opens it from
-// the popup with a ChatSession (src/chat/chatSession.ts); until then only the
-// demo page (`npm run demo:chat`) opens it.
+// While an answer is being written a Stop button replaces Send (onStop). An
+// answer that failed shows the message and fix in red (showError), and a
+// stopped one keeps its text with a "Stopped" note (showStopped).
+//
+// The panel does not talk to the LLM or keep the conversation: it reports
+// each question through onSend, and the caller adds the answer with
+// addMessage and fills it in with update. src/chat/chatFlow.ts does that with
+// a ChatSession when the popup's Ask a question button is pressed, and the
+// demo page (`npm run demo:chat`) does it with fake answers.
 
-import { renderMarkdown } from '../popup/renderMarkdown';
+import { appendInline, renderMarkdown } from '../popup/renderMarkdown';
 import { CHAT_PANEL_STYLE } from './chatPanelStyle';
 
 export const CHAT_PANEL_ID = 'pr-explainer-chat';
@@ -51,7 +55,16 @@ export interface ChatMessageView {
   readonly role: ChatRole;
   /** Replaces the message's text (markdown for an answer). */
   update(text: string): void;
+  /** Shows that the answer failed: `message` and `fix` replace its text. */
+  showError(message: string, fix: string): void;
+  /** Marks the answer as stopped, keeping any text it has. */
+  showStopped(): void;
 }
+
+/** Shown in a stopped answer, after any text the model wrote. */
+export const STOPPED_NOTE = 'Stopped.';
+/** Shown in place of the answer when Stop is pressed before any text arrived. */
+export const STOPPED_EMPTY = 'Stopped before the model wrote anything.';
 
 export interface ChatPanelOptions {
   subject: ChatSubject;
@@ -62,6 +75,8 @@ export interface ChatPanelOptions {
    * the text box cleared.
    */
   onSend?: (question: string) => void;
+  /** Called when Stop is pressed while an answer is being written. */
+  onStop?: () => void;
   /** Called once when the panel closes, however it was closed. */
   onClose?: () => void;
 }
@@ -73,7 +88,7 @@ export interface ChatPanel {
   readonly messages: readonly ChatMessageView[];
   /** Adds a message at the bottom of the list. */
   addMessage(role: ChatRole, text: string): ChatMessageView;
-  /** While busy (an answer is being written), Send and Enter do nothing. */
+  /** While busy (an answer is being written), Send and Enter do nothing and Stop shows. */
   setBusy(busy: boolean): void;
   /** Puts the cursor in the text box. */
   focus(): void;
@@ -143,10 +158,16 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   sendButton.className = 'send';
   sendButton.type = 'submit';
   sendButton.textContent = 'Send';
+  // Takes Send's place while an answer is being written (see chatPanelStyle.ts).
+  const stopButton = doc.createElement('button');
+  stopButton.className = 'stop';
+  stopButton.type = 'button';
+  stopButton.textContent = 'Stop';
+  stopButton.title = 'Stop the model';
   const hint = doc.createElement('span');
   hint.className = 'hint';
   hint.textContent = 'Enter to send · Shift+Enter for a new line';
-  form.append(input, sendButton, hint);
+  form.append(input, sendButton, stopButton, hint);
 
   panel.append(header, list, form);
   shadow.append(style, panel);
@@ -178,14 +199,39 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
     element.dataset.role = role;
     render(role, element, text);
     list.append(element);
+    const change = (fill: () => void) => {
+      if (!open) return;
+      const keep = nearBottom();
+      fill();
+      if (keep) scrollToEnd();
+    };
     const view: ChatMessageView = {
       element,
       role,
       update(next) {
-        if (!open) return;
-        const keep = nearBottom();
-        render(role, element, next);
-        if (keep) scrollToEnd();
+        change(() => render(role, element, next));
+      },
+      showError(message, fix) {
+        change(() => {
+          element.dataset.status = 'failed';
+          element.setAttribute('role', 'alert');
+          const messageEl = doc.createElement('p');
+          messageEl.className = 'error-message';
+          appendInline(messageEl, message);
+          const fixEl = doc.createElement('p');
+          fixEl.className = 'fix';
+          appendInline(fixEl, fix);
+          element.replaceChildren(messageEl, fixEl);
+        });
+      },
+      showStopped() {
+        change(() => {
+          element.dataset.status = 'stopped';
+          const note = doc.createElement('p');
+          note.className = 'stopped-note';
+          note.textContent = element.textContent?.trim() ? STOPPED_NOTE : STOPPED_EMPTY;
+          element.append(note);
+        });
       },
     };
     views.push(view);
@@ -213,6 +259,9 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     send();
+  });
+  stopButton.addEventListener('click', () => {
+    if (open && busy) options.onStop?.();
   });
   closeButton.addEventListener('click', () => chat.close());
   // Key presses inside the shadow root reach GitHub's page with the panel's
