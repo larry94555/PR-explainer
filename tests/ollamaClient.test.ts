@@ -401,6 +401,49 @@ describe('OllamaClient.loadedModels (PR 8.3)', () => {
   });
 });
 
+describe('OllamaClient.runningModels (PR 8.6)', () => {
+  it('reads each loaded model with its size, video memory and window from /api/ps', async () => {
+    const fetch = fakeFetch(() =>
+      jsonResponse({
+        models: [
+          {
+            name: 'qwen2.5-coder:7b',
+            size: 6_000_000_000,
+            size_vram: 3_000_000_000,
+            context_length: 2048,
+          },
+          { model: 'llama3.2:latest', size: 2_000_000_000, size_vram: 0 },
+          { name: 'old:1b', size: 'big', size_vram: -1 },
+          { size: 1 },
+        ],
+      }),
+    );
+    const running = await new OllamaClient({ baseUrl: BASE, fetch }).runningModels();
+    expect(running).toEqual([
+      {
+        name: 'qwen2.5-coder:7b',
+        sizeBytes: 6_000_000_000,
+        vramBytes: 3_000_000_000,
+        contextTokens: 2048,
+      },
+      { name: 'llama3.2:latest', sizeBytes: 2_000_000_000, vramBytes: 0 },
+      { name: 'old:1b' },
+    ]);
+    expect(fetch).toHaveBeenCalledWith(
+      `${BASE}/api/ps`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('raises bad-response when the reply has no models list', async () => {
+    const fetch = fakeFetch(() => jsonResponse({ models: 'none' }));
+    await expectLlmError(
+      new OllamaClient({ baseUrl: BASE, fetch }).runningModels(),
+      'bad-response',
+    );
+  });
+});
+
 describe('OllamaClient.loadedContextTokens (PR 8.5)', () => {
   const ps = (models: unknown[]) => fakeFetch(() => jsonResponse({ models }));
 

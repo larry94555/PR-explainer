@@ -20,6 +20,7 @@ function setup(
     chatStream: vi.fn(),
     loadedModels: vi.fn(options.loaded ?? (async () => [])),
     loadedContextTokens: vi.fn(async () => undefined),
+    runningModels: vi.fn(async () => []),
     loadModel: vi.fn(options.load ?? (async () => {})),
   };
   const createClient = vi.fn(() => client);

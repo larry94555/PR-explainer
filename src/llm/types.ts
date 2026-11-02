@@ -73,6 +73,17 @@ export interface ModelInfo {
   sizeBytes?: number;
 }
 
+/** One model loaded in memory right now, as /api/ps lists it (PR 8.6). */
+export interface RunningModel {
+  name: string;
+  /** How much memory the loaded model takes, in bytes, when the server says. */
+  sizeBytes?: number;
+  /** How much of that is in the GPU's video memory, in bytes, when the server says. */
+  vramBytes?: number;
+  /** The context window it is loaded with, when the server says. */
+  contextTokens?: number;
+}
+
 /** What the server says about one model's context window (PR 6.2). */
 export interface ModelContext {
   /** The longest context the model was trained for, when the server says. */
@@ -90,6 +101,11 @@ export interface LlmClient {
   listModels(options?: { signal?: AbortSignal }): Promise<ModelInfo[]>;
   /** The models loaded in memory right now, by name (PR 8.3). */
   loadedModels(options?: { signal?: AbortSignal }): Promise<string[]>;
+  /**
+   * The models loaded in memory right now, with how much of each is on the
+   * GPU (PR 8.6).
+   */
+  runningModels(options?: { signal?: AbortSignal }): Promise<RunningModel[]>;
   /**
    * The context window `model` is loaded with right now (PR 8.5), or
    * undefined when it is not loaded or the server does not say.

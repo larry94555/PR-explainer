@@ -80,12 +80,14 @@ label.check {
   align-items: center;
 }
 
+.speed,
 .privacy {
   margin-top: 2rem;
   padding-top: 1rem;
   border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent);
 }
 
+.speed h2,
 .privacy h2 {
   font-size: 1.05rem;
   margin: 0 0 0.5rem;
@@ -93,4 +95,78 @@ label.check {
 
 .privacy p {
   margin: 0.5rem 0 0;
+}
+
+.speed table {
+  width: 100%;
+  margin-top: 0.75rem;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+.speed th,
+.speed td {
+  padding: 0.3rem 0.4rem;
+  text-align: left;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+}
+
+.speed td.num,
+.speed td button {
+  white-space: nowrap;
+}
+
+.speed td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.speed tr.pick {
+  background: color-mix(in srgb, #1a7f37 14%, transparent);
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #fff;
+  background: #1a7f37;
+}
+
+#gpu-status .fix {
+  color: CanvasText;
+}
+
+.gpu-ok {
+  color: #1a7f37;
+}
+
+.gpu-warn {
+  color: #9a6700;
+}
+
+@media (prefers-color-scheme: dark) {
+  #gpu-status .fix {
+    color: CanvasText;
+  }
+
+  .gpu-ok {
+    color: #3fb950;
+  }
+
+  .gpu-warn {
+    color: #d29922;
+  }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

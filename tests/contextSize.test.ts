@@ -14,6 +14,7 @@ function setup(modelContext: () => Promise<ModelContext>) {
     listModels: vi.fn(),
     loadedModels: vi.fn(),
     loadedContextTokens: vi.fn(async () => undefined),
+    runningModels: vi.fn(async () => []),
     loadModel: vi.fn(),
     modelContext: vi.fn(modelContext),
     chat: vi.fn(),
