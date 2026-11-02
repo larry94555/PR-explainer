@@ -207,17 +207,18 @@ void loadPrMetadata();
 // React views), so this script keeps running when the user moves from a PR
 // to, say, an issue, or from the Conversation tab to Files changed. Each move
 // to another page updates the badge and attaches or removes click-to-explain.
-// It may also come back from editing the PR's title or description, so they
-// (and the files) are read again (PR 6.1, 6.3).
-watchNavigation(window, (url) => {
+// It may also come back from editing the PR's title or description, or Turbo
+// may redraw the same page after an edit or a push, so the description and
+// the files are read again (PR 6.1, 6.3).
+function onPageChanged(url: string): void {
   // A popup or chat whose part of the page GitHub replaced is closed, so
   // its request stops and clicks do not go to it.
   closeDetached([currentPopup(), currentChatPanel()]);
+  // A redraw can also drop the badge.
   update();
   features.sync(url);
   prMetadata.forget();
   fileContexts.forget();
   void loadPrMetadata();
-});
-// Turbo can also redraw the same page (after a form is sent), dropping the badge.
-document.addEventListener('turbo:render', update);
+}
+watchNavigation(window, onPageChanged, { onRedraw: onPageChanged });

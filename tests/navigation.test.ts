@@ -1,8 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { createPrMetadataLoader } from '../src/prMetadata';
 import {
   closeDetached,
   DiffPageFeatures,
   pageOf,
   POLL_MS,
+  REDRAW_MERGE_MS,
   showsDiffs,
   watchNavigation,
 } from '../src/navigation';
@@ -99,8 +103,8 @@ describe('watchNavigation', () => {
   let document: EventTarget;
   let navigation: EventTarget | undefined;
 
-  function makeWindow(withNavigation = false) {
-    document = new EventTarget();
+  function makeWindow(withNavigation = false, doc: EventTarget = new EventTarget()) {
+    document = doc;
     navigation = withNavigation ? new EventTarget() : undefined;
     win = Object.assign(new EventTarget(), {
       location: { href: CONVERSATION },
@@ -192,6 +196,77 @@ describe('watchNavigation', () => {
     fakeAddress(CONVERSATION);
     vi.advanceTimersByTime(POLL_MS);
     expect(onChange).toHaveBeenCalledExactlyOnceWith(CONVERSATION, `${FILES}?w=1#diff-abcR12`);
+  });
+
+  it('reports a Turbo redraw of the same page once per visit', () => {
+    const onChange = vi.fn();
+    const onRedraw = vi.fn();
+    stop = watchNavigation(win, onChange, { onRedraw });
+    // Turbo sends turbo:render and then turbo:load for one visit.
+    document.dispatchEvent(new Event('turbo:render'));
+    document.dispatchEvent(new Event('turbo:load'));
+    expect(onRedraw).toHaveBeenCalledExactlyOnceWith(CONVERSATION);
+    vi.advanceTimersByTime(REDRAW_MERGE_MS);
+    document.dispatchEvent(new Event('turbo:load'));
+    expect(onRedraw).toHaveBeenCalledTimes(2);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not also report a redraw for the Turbo events of a move', () => {
+    const onChange = vi.fn();
+    const onRedraw = vi.fn();
+    stop = watchNavigation(win, onChange, { onRedraw });
+    fakeAddress(FILES);
+    vi.advanceTimersByTime(POLL_MS);
+    document.dispatchEvent(new Event('turbo:render'));
+    document.dispatchEvent(new Event('turbo:load'));
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(FILES, CONVERSATION);
+    expect(onRedraw).not.toHaveBeenCalled();
+  });
+
+  it('ignores popstate and address checks on the same page for redraws', () => {
+    const onRedraw = vi.fn();
+    stop = watchNavigation(win, vi.fn(), { onRedraw });
+    win.dispatchEvent(new PopStateEvent('popstate'));
+    vi.advanceTimersByTime(POLL_MS * 3);
+    expect(onRedraw).not.toHaveBeenCalled();
+  });
+
+  it('reads an edited PR description again after a same-page Turbo redraw', async () => {
+    const conversation = readFileSync(
+      resolve(import.meta.dirname, 'fixtures', 'github-pr-conversation.html'),
+      'utf8',
+    );
+    const page = new DOMParser().parseFromString(conversation, 'text/html');
+    makeWindow(false, page);
+    const fetchHtml = vi.fn(async () => '');
+    const loader = createPrMetadataLoader({
+      doc: page,
+      fetchHtml,
+      currentPage: () => new URL(win.location.href).pathname,
+    });
+    const pr = {
+      owner: 'larry94555',
+      repo: 'PR-explainer',
+      number: 42,
+      tab: 'conversation' as const,
+    };
+    stop = watchNavigation(win, () => loader.forget(), { onRedraw: () => loader.forget() });
+    expect((await loader.load(pr)).description).toContain('Roadmap PR 5.4');
+
+    // The description is edited and Turbo redraws the same address.
+    const edited = new DOMParser().parseFromString(
+      conversation.replaceAll('Roadmap PR 5.4', 'Edited description'),
+      'text/html',
+    );
+    page.body.replaceWith(page.adoptNode(edited.body));
+    page.dispatchEvent(new Event('turbo:render'));
+    page.dispatchEvent(new Event('turbo:load'));
+
+    const { description } = await loader.load(pr);
+    expect(description).toContain('Edited description');
+    expect(description).not.toContain('Roadmap PR 5.4');
+    expect(fetchHtml).not.toHaveBeenCalled();
   });
 
   it('stops listening and checking when stopped', () => {

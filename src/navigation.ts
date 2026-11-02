@@ -10,6 +10,22 @@ import { parsePrUrl } from './prUrl';
 /** How often the address is checked, for navigations that send no event. */
 export const POLL_MS = 500;
 
+/**
+ * A Turbo redraw this soon after a reported move or redraw belongs to it
+ * (Turbo sends `turbo:render` and then `turbo:load` for one visit).
+ */
+export const REDRAW_MERGE_MS = 1000;
+
+export interface WatchNavigationOptions {
+  /**
+   * Called when Turbo redraws the page without moving to another page (for
+   * example after the PR's title or description is edited), so what was
+   * read from the page can be read again. At most once per visit.
+   */
+  onRedraw?: (url: string) => void;
+  pollMs?: number;
+}
+
 /** The page part of `url` (no query or hash), so a `#diff-…` jump is not a new page. */
 export function pageOf(url: string): string {
   try {
@@ -26,36 +42,48 @@ export function pageOf(url: string): string {
  * forward (`popstate`), the Navigation API's `navigate` (pushState and
  * replaceState by GitHub's React views), and a check every `pollMs` for
  * anything that sends no event. A change to only the query or hash does not
- * count. Returns a function that stops watching.
+ * count. A Turbo event on the same page calls `onRedraw` instead, unless a
+ * move or redraw was reported in the last REDRAW_MERGE_MS. Returns a function
+ * that stops watching.
  */
 export function watchNavigation(
   win: Window,
   onChange: (url: string, previous: string) => void,
-  pollMs: number = POLL_MS,
+  { onRedraw, pollMs = POLL_MS }: WatchNavigationOptions = {},
 ): () => void {
   let last = win.location.href;
-  const check = () => {
+  let reportedAt = -Infinity;
+  /** Reports a move; returns false when the page did not change. */
+  const check = (): boolean => {
     const url = win.location.href;
     if (pageOf(url) === pageOf(last)) {
       last = url;
-      return;
+      return false;
     }
     const previous = last;
     last = url;
+    reportedAt = Date.now();
     onChange(url, previous);
+    return true;
+  };
+  const onTurbo = () => {
+    if (check() || !onRedraw) return;
+    if (Date.now() - reportedAt < REDRAW_MERGE_MS) return;
+    reportedAt = Date.now();
+    onRedraw(last);
   };
   // `navigate` fires before the address changes, so check just after it.
   const checkSoon = () => win.setTimeout(check, 0);
   const doc = win.document;
-  doc.addEventListener('turbo:load', check);
-  doc.addEventListener('turbo:render', check);
+  doc.addEventListener('turbo:load', onTurbo);
+  doc.addEventListener('turbo:render', onTurbo);
   win.addEventListener('popstate', check);
   const navigation = (win as Window & { navigation?: EventTarget }).navigation;
   navigation?.addEventListener('navigate', checkSoon);
   const timer = win.setInterval(check, pollMs);
   return () => {
-    doc.removeEventListener('turbo:load', check);
-    doc.removeEventListener('turbo:render', check);
+    doc.removeEventListener('turbo:load', onTurbo);
+    doc.removeEventListener('turbo:render', onTurbo);
     win.removeEventListener('popstate', check);
     navigation?.removeEventListener('navigate', checkSoon);
     win.clearInterval(timer);
