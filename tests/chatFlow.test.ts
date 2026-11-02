@@ -1,4 +1,10 @@
-import { chatSessionFor, EMPTY_ANSWER, panelMessages, startChat } from '../src/chat/chatFlow';
+import {
+  chatSessionFor,
+  CurrentChat,
+  EMPTY_ANSWER,
+  panelMessages,
+  startChat,
+} from '../src/chat/chatFlow';
 import type { ChatResult } from '../src/chat/chatHandler';
 import {
   CHAT_PANEL_ID,
@@ -320,6 +326,19 @@ describe('chat across lines (PR 5.4)', () => {
     expect(last().messages).toHaveLength(4);
   });
 
+  it('reopening the chat names the code it moved on to in the header', () => {
+    const { panel, session } = setup();
+    panel.addCode(OTHER, OTHER_SUBJECT);
+    panel.close();
+    // Reopened from the first line's Ask a question: same session.
+    setup(session);
+    expect(header()).toBe('src/settings.tsline 42');
+    expect(notes()).toEqual(['Now looking at src/settings.ts line 42']);
+    // New chat still goes back to where the chat started.
+    root().querySelector<HTMLButtonElement>('.new-chat')!.click();
+    expect(header()).toBe('src/settings.tsline 14');
+  });
+
   it('reopening the chat shows the notes for code moved on to', () => {
     const session = new ChatSession(SEED);
     session.addTurn('Q', 'A');
@@ -332,6 +351,51 @@ describe('chat across lines (PR 5.4)', () => {
     ]);
     setup(session);
     expect(notes()).toEqual(['Now looking at src/settings.ts line 42']);
+  });
+});
+
+describe('CurrentChat (moving between PRs without a reload)', () => {
+  const OTHER = 'File: b.ts\n  3 + b';
+  const B_SUBJECT = { filePath: 'b.ts', startLine: 3 };
+
+  it('adds clicked code only while the page is on the chat PR', () => {
+    const { panel, session } = setup();
+    const current = new CurrentChat();
+    current.set(panel, 'o/r#1');
+    expect(current.addCode('o/r#1', OTHER, B_SUBJECT)).toBe(true);
+    expect(session.entries).toHaveLength(1);
+  });
+
+  it('closes a chat left open from another PR instead of adding its code', () => {
+    const { panel, session, ask } = setup();
+    const current = new CurrentChat();
+    current.set(panel, 'o/r#1');
+    // GitHub navigated to PR 2 (Turbo) and a line there was clicked.
+    expect(current.addCode('o/r#2', OTHER, B_SUBJECT)).toBe(false);
+    expect(panel.isOpen).toBe(false);
+    expect(session.entries).toEqual([]);
+    expect(ask).not.toHaveBeenCalled();
+    // Nothing is held any more, so later clicks explain in the popup.
+    expect(current.addCode('o/r#1', OTHER, B_SUBJECT)).toBe(false);
+  });
+
+  it('leave closes the chat on navigation away from its PR, and keeps it otherwise', () => {
+    const { panel } = setup();
+    const current = new CurrentChat();
+    current.leave('o/r#1');
+    current.set(panel, 'o/r#1');
+    current.leave('o/r#1');
+    expect(panel.isOpen).toBe(true);
+    current.leave(undefined);
+    expect(panel.isOpen).toBe(false);
+  });
+
+  it('refuses code once the chat panel was closed', () => {
+    const { panel } = setup();
+    const current = new CurrentChat();
+    current.set(panel, 'o/r#1');
+    panel.close();
+    expect(current.addCode('o/r#1', OTHER, B_SUBJECT)).toBe(false);
   });
 });
 

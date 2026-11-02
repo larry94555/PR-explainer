@@ -13,6 +13,7 @@
 // checks against src/explain/explainPrompt.ts.
 
 import type { Explanation } from '../explain/parseExplanation';
+import type { ChatSubject } from './chatPanel';
 import type { ChatMessage } from '../llm/types';
 
 export const CHAT_SYSTEM_PROMPT = [
@@ -55,6 +56,8 @@ export interface ChatTurn {
 export interface ChatCode {
   context: string;
   about: string;
+  /** Where the code is, so a reopened chat names it in its header. */
+  subject?: ChatSubject;
 }
 
 /** What the conversation holds, in order: questions and answers, and code moved on to. */
@@ -114,7 +117,7 @@ export class ChatSession {
       throw new Error('Code added to a chat cannot be empty');
     }
     if (code.context === this.currentContext) return false;
-    this.#entries.push({ kind: 'code', context: code.context, about: code.about });
+    this.#entries.push({ kind: 'code', ...code });
     return true;
   }
 

@@ -204,8 +204,10 @@ export function startChat(
     panel.focus();
   };
 
+  // A reused session may have moved on to other code: name that in the header.
+  const codes = session.entries.filter((entry) => entry.kind === 'code');
   const panel = deps.openPanel({
-    subject,
+    subject: codes.at(-1)?.subject ?? subject,
     messages: panelMessages(session),
     onSend: send,
     onStop: stop,
@@ -217,7 +219,7 @@ export function startChat(
     if (!panel.isOpen) return false;
     const latest = queued.at(-1)?.context ?? session.currentContext;
     if (context === latest) return true;
-    const code = { context, about: describeSubject(next) };
+    const code = { context, about: describeSubject(next), subject: next };
     if (pending) queued.push(code);
     else session.addCode(code);
     panel.setSubject(next);
@@ -227,4 +229,38 @@ export function startChat(
   };
 
   return Object.assign(panel, { addCode });
+}
+
+/**
+ * The chat open in this tab and the PR it belongs to. GitHub moves between
+ * PRs without reloading the page, so clicked code only goes to the chat
+ * while the page is still on that chat's PR; leaving the PR closes it.
+ */
+export class CurrentChat {
+  #chat: ActiveChat | undefined;
+  #pr: string | undefined;
+
+  /** Remembers `chat`, opened on `pr`, as the one clicked code goes to. */
+  set(chat: ActiveChat, pr: string | undefined): void {
+    this.#chat = chat;
+    this.#pr = pr;
+  }
+
+  /**
+   * Adds clicked code to the chat (ActiveChat.addCode) if it is open on `pr`,
+   * the PR the page is on now. Returns false otherwise, closing a chat left
+   * open from another PR, so the code is explained in the popup.
+   */
+  addCode(pr: string | undefined, context: string, subject: ChatSubject): boolean {
+    this.leave(pr);
+    return this.#chat?.addCode(context, subject) ?? false;
+  }
+
+  /** Closes the chat if the page is no longer on its PR (after GitHub navigation). */
+  leave(pr: string | undefined): void {
+    if (!this.#chat || pr === this.#pr) return;
+    this.#chat.close();
+    this.#chat = undefined;
+    this.#pr = undefined;
+  }
 }
