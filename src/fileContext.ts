@@ -119,16 +119,19 @@ function codeOnly(line: string, state: { inComment: boolean }): string {
 const count = (text: string, char: string) => text.split(char).length - 1;
 
 // Moves a block's start up over the rest of a signature that spans lines,
-// such as parameters on their own lines, or a "{" alone on its line.
-function signatureStart(code: string[], open: number): number {
+// such as parameters on their own lines, or a "{" alone on its line. It looks
+// at most MAX_SIGNATURE_LINES up, so an unmatched ")" cannot make it scan the
+// whole file for every block.
+const MAX_SIGNATURE_LINES = 30;
+function signatureStart(code: (i: number) => string, open: number): number {
   let start = open;
-  if (code[start]!.trim() === '{' && start > 0) start--;
-  let depth = count(code[start]!, ')') - count(code[start]!, '(');
-  while (depth > 0 && start > 0) {
+  if (code(start).trim() === '{' && start > 0) start--;
+  let depth = count(code(start), ')') - count(code(start), '(');
+  while (depth > 0 && start > 0 && open - start < MAX_SIGNATURE_LINES) {
     start--;
-    depth += count(code[start]!, ')') - count(code[start]!, '(');
+    depth += count(code(start), ')') - count(code(start), '(');
   }
-  return start;
+  return depth > 0 ? open : start;
 }
 
 function braceBlocks(lines: string[]): Block[] {
@@ -143,7 +146,11 @@ function braceBlocks(lines: string[]): Block[] {
         const from = open.pop();
         // A block opened and closed on one line, such as `{ a: 1 }`, is not a block here.
         if (from !== undefined && from < i) {
-          blocks.push({ start: signatureStart(code, from) + 1, end: i + 1, headerEnd: from + 1 });
+          blocks.push({
+            start: signatureStart((k) => code[k]!, from) + 1,
+            end: i + 1,
+            headerEnd: from + 1,
+          });
         }
       }
     }
@@ -154,7 +161,16 @@ function braceBlocks(lines: string[]): Block[] {
 const indentOf = (line: string) => line.length - line.trimStart().length;
 const isBlank = (line: string | undefined) => line === undefined || line.trim() === '';
 
-function indentBlocks(lines: string[], style: 'python' | 'ruby'): Block[] {
+// The blocks around lines `startLine` to `endLine` (1-based), in one pass up
+// from the code and one pass down from it, so the work grows with the file's
+// length and not with how many blocks it has (a large, deeply nested file
+// must not freeze the tab).
+function indentBlocks(
+  lines: string[],
+  style: 'python' | 'ruby',
+  startLine: number,
+  endLine: number,
+): Block[] {
   const isHeader = (line: string) => {
     const text = line.replace(/\s+#.*$/, '').trimEnd();
     return style === 'python'
@@ -163,35 +179,60 @@ function indentBlocks(lines: string[], style: 'python' | 'ruby'): Block[] {
           /\bdo(\s*\|[^|]*\|)?$/.test(text);
   };
   // Comments dropped, so parentheses in them do not move a signature's start.
-  const code = lines.map((l) => l.replace(/#.*$/, ''));
-  const blocks: Block[] = [];
-  lines.forEach((line, i) => {
-    if (isBlank(line) || !isHeader(line)) return;
-    // A signature over several lines is indented from its first line.
-    const start = signatureStart(code, i);
-    const indent = indentOf(lines[start]!);
-    let end = i;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (isBlank(lines[j])) continue;
-      if (indentOf(lines[j]!) <= indent) {
-        // Ruby closes a block with `end` at the header's indentation.
-        if (style === 'ruby' && indentOf(lines[j]!) === indent && /^\s*end\b/.test(lines[j]!)) {
-          end = j;
-        }
-        break;
-      }
-      end = j;
+  const code = (i: number) => lines[i]!.replace(/#.*$/, '');
+
+  // Up: each header indented less than everything between it and the code
+  // opens a block around the code. Innermost first.
+  const open: { start: number; header: number; indent: number }[] = [];
+  let least = Infinity;
+  // The last line with code at or before the end of the selection.
+  let last = -1;
+  for (let i = Math.min(endLine, lines.length) - 1; i >= 0 && least > 0; i--) {
+    if (isBlank(lines[i])) continue;
+    if (last < 0) last = i;
+    if (i < startLine && isHeader(lines[i]!)) {
+      // A signature over several lines is indented from its first line.
+      const start = signatureStart(code, i);
+      const indent = indentOf(lines[start]!);
+      if (indent < least) open.push({ start, header: i, indent });
+      least = Math.min(least, indent);
+      i = start;
+      continue;
     }
-    if (end > i) blocks.push({ start: start + 1, end: end + 1, headerEnd: i + 1 });
-  });
-  return blocks;
+    least = Math.min(least, indentOf(lines[i]!));
+  }
+
+  // Down: a block ends before the first line indented no more than its header.
+  const ends: number[] = [];
+  let closed = 0;
+  for (let j = endLine; j < lines.length && closed < open.length; j++) {
+    if (isBlank(lines[j])) continue;
+    const indent = indentOf(lines[j]!);
+    while (closed < open.length && indent <= open[closed]!.indent) {
+      // Ruby closes a block with `end` at the header's indentation.
+      const isEnd =
+        style === 'ruby' && indent === open[closed]!.indent && /^\s*end\b/.test(lines[j]!);
+      ends[closed] = isEnd ? j : Math.max(last, open[closed]!.header);
+      closed++;
+    }
+    last = j;
+  }
+  for (; closed < open.length; closed++) ends[closed] = Math.max(last, open[closed]!.header);
+
+  // A block that ends before the selection does (on a blank line after it) is not around it.
+  return open.flatMap((b, k) =>
+    ends[k]! > b.header && ends[k]! >= endLine - 1
+      ? [{ start: b.start + 1, end: ends[k]! + 1, headerEnd: b.header + 1 }]
+      : [],
+  );
 }
 
 /**
  * The block that holds lines `startLine` to `endLine` (1-based): the nearest
  * named function, method or type around them, else the nearest unnamed
- * function (a callback, such as a test's), else the nearest block of any kind. Null when the code is not inside a block, or the language has
- * none (plain text, Markdown).
+ * function (a callback, such as a test's), else the nearest block of any
+ * kind. Null when the code is not inside a block, or the language has none
+ * (plain text, Markdown).
  */
 export function findEnclosingBlock(
   lines: string[],
@@ -201,7 +242,8 @@ export function findEnclosingBlock(
 ): Block | null {
   const style = styleFor(language);
   if (style === 'none') return null;
-  const blocks = style === 'braces' ? braceBlocks(lines) : indentBlocks(lines, style);
+  const blocks =
+    style === 'braces' ? braceBlocks(lines) : indentBlocks(lines, style, startLine, endLine);
   const around = blocks
     .filter((b) => b.start <= startLine && b.end >= endLine)
     // Innermost first.

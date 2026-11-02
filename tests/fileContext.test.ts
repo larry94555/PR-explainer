@@ -193,6 +193,49 @@ end`;
   });
 });
 
+describe('findEnclosingBlock on large files', () => {
+  // Each case took seconds or more when every header scanned the rest of the
+  // file; now each is one pass, well under the limit even on a slow machine.
+  const LIMIT_MS = 1000;
+  const timed = <T>(run: () => T): T => {
+    const started = performance.now();
+    const result = run();
+    expect(performance.now() - started).toBeLessThan(LIMIT_MS);
+    return result;
+  };
+
+  it('handles deep nesting followed by many blank lines (Python)', () => {
+    // 1,000 nested headers, then 400,000 blank lines and a line at the deepest level.
+    const depth = 1000;
+    const stairs = Array.from({ length: depth }, (_, i) => `${' '.repeat(i)}if a${i}:`);
+    const file = [...stairs, ...Array<string>(400_000).fill(''), `${' '.repeat(depth)}x = 1`];
+    const block = timed(() => findEnclosingBlock(file, file.length, file.length, 'Python'));
+    // The innermost header holds the line.
+    expect(block).toEqual({ start: depth, end: file.length, headerEnd: depth });
+  });
+
+  it('handles a file made mostly of headers (YAML)', () => {
+    const file = ['root:'];
+    for (let i = 0; i < 50_000; i++) file.push(`  key${i}:`, `    value: ${i}`);
+    const block = timed(() => findEnclosingBlock(file, 80_001, 80_001, 'YAML'));
+    expect(block).toEqual({ start: 80_000, end: 80_001, headerEnd: 80_000 });
+    expect(timed(() => findEnclosingBlock(file, 1, 1, 'YAML'))).toEqual({
+      start: 1,
+      end: file.length,
+      headerEnd: 1,
+    });
+  });
+
+  it('handles many blocks after unmatched parentheses (braces)', () => {
+    // Every block's opening ends with ")" that is never opened, which used to
+    // send the signature search to the top of the file for each block.
+    const file: string[] = [];
+    for (let i = 0; i < 30_000; i++) file.push(`x${i}) {`, `  y${i}();`, '}');
+    const block = timed(() => findEnclosingBlock(file, 89_999, 89_999, 'TypeScript'));
+    expect(block).toEqual({ start: 89_998, end: 90_000, headerEnd: 89_998 });
+  });
+});
+
 const span = (startLine: number, text: string, endLine = startLine): CodeSpan => ({
   filePath: 'src/cart.ts',
   startLine,
