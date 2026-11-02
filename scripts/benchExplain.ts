@@ -8,21 +8,38 @@
 
 import { createExplainHandler } from '../src/explain/explainHandler';
 import { createContextSizer } from '../src/llm/contextSize';
+import { gpuStatus } from '../src/llm/gpuStatus';
 import { OllamaClient } from '../src/llm/ollamaClient';
+import { isSameModel } from '../src/llm/types';
 import type { Platform } from '../src/llm/describeLlmError';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 import type { BenchRun, BenchSample } from './benchStats.ts';
 
 export { DEFAULT_SETTINGS };
 
-export function createBench(llmUrl: string, platform: Platform) {
+export function createBench(llmUrl: string, platform: Platform, overrides: Partial<Settings> = {}) {
   const client = new OllamaClient({ baseUrl: llmUrl });
   const createClient = () => client;
   const contextSizer = createContextSizer(createClient);
-  const settingsFor = (model: string): Settings => ({ ...DEFAULT_SETTINGS, llmUrl, model });
+  const settingsFor = (model: string): Settings => ({
+    ...DEFAULT_SETTINGS,
+    ...overrides,
+    llmUrl,
+    model,
+  });
 
   return {
     listModels: () => client.listModels(),
+
+    /** Unloads `model` (keep_alive 0), so the next run starts cold. */
+    unload: (model: string) => client.loadModel(model, { keepAliveMinutes: 0 }),
+
+    /** Where `model` runs, worded like `ollama ps` ("100% GPU"), or undefined when not loaded. */
+    async ranOn(model: string): Promise<string | undefined> {
+      const running = await client.runningModels().catch(() => []);
+      const found = running.find((m) => isSameModel(m.name, model));
+      return found && gpuStatus(found).processor;
+    },
 
     /** The context window explanations with `model` run with. */
     contextTokens: (model: string) => contextSizer(settingsFor(model)),
