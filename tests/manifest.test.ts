@@ -3,7 +3,9 @@ import { resolve } from 'node:path';
 import manifest from '../public/manifest.json';
 
 const root = resolve(import.meta.dirname, '..');
-const PR_PATTERN = 'https://github.com/*/*/pull/*';
+// Every github.com page, since GitHub moves to a PR without a reload and
+// Chrome injects content scripts only on a full load (PR 7.1).
+const GITHUB_PATTERN = 'https://github.com/*';
 
 // Turns a Chrome match pattern (scheme://host/path, no wildcards in scheme or
 // host) into a RegExp. In Chrome, `*` in the path matches any characters,
@@ -43,9 +45,9 @@ describe('manifest.json', () => {
     expect(manifest).not.toHaveProperty('background.page');
   });
 
-  it('injects one content script, only on PR URLs', () => {
+  it('injects one content script, on github.com pages only', () => {
     expect(manifest.content_scripts).toHaveLength(1);
-    expect(manifest.content_scripts[0]?.matches).toEqual([PR_PATTERN]);
+    expect(manifest.content_scripts[0]?.matches).toEqual([GITHUB_PATTERN]);
     expect(manifest.content_scripts[0]?.js).toEqual(['content.js']);
   });
 
@@ -54,15 +56,16 @@ describe('manifest.json', () => {
     'https://github.com/owner/repo/pull/123/files',
     'https://github.com/owner/repo/pull/123/commits',
     'https://github.com/owner/repo/pull/123/files?w=1#diff-abc',
+    // Pages a PR is often reached from without a reload.
+    'https://github.com/owner/repo',
+    'https://github.com/owner/repo/pulls',
+    'https://github.com/owner/repo/issues/1',
+    'https://github.com/pulls',
   ])('runs the content script on %s', (url) => {
     expect(matchesContentScript(url)).toBe(true);
   });
 
   it.each([
-    'https://github.com/owner/repo',
-    'https://github.com/owner/repo/pulls',
-    'https://github.com/owner/repo/issues/1',
-    'https://github.com/pulls',
     'http://github.com/owner/repo/pull/1',
     'https://gist.github.com/owner/repo/pull/1',
     'https://example.com/owner/repo/pull/1',

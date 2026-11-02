@@ -60,7 +60,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 6.1 | Include PR title and description | Small | ✅ Done ([#25](https://github.com/larry94555/PR-explainer/pull/25)) |
 | 6.2 | Token budget and context trimming | Medium | ✅ Done ([#26](https://github.com/larry94555/PR-explainer/pull/26)) |
 | 6.3 | Expanded file context | Medium | ✅ Done ([#27](https://github.com/larry94555/PR-explainer/pull/27)) |
-| 7.1 | Handle GitHub's in-page navigation | Small | Not started |
+| 7.1 | Handle GitHub's in-page navigation | Small | ✅ Done ([#28](https://github.com/larry94555/PR-explainer/pull/28)) |
 | 7.2 | Split view and lazy-loaded diffs | Medium | Not started |
 | 7.3 | Theme support and accessibility | Small | Not started |
 | 7.4 | Privacy check and packaging | Small | Not started |
@@ -508,14 +508,22 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 
 **Demo:** Move between the Conversation and Files changed tabs without reloading, switch to split view and dark mode, scroll through a huge PR where diffs load lazily, and click-to-explain keeps working everywhere. A packaged `.zip` is ready to share.
 
-### PR 7.1: Handle GitHub's in-page navigation (Small)
+### PR 7.1: Handle GitHub's in-page navigation (Small) ✅ Done
+- **Status:** Done ([#28](https://github.com/larry94555/PR-explainer/pull/28)).
 - **Why it's needed:** GitHub changes pages without a full reload, so a content script that only runs on load stops working after you switch tabs.
-- **Problem it solves:** Listens for GitHub's navigation events and URL changes, and re-attaches handlers (and removes old ones) when the PR or tab changes.
-- **Unit tests added:** `navigation.test.ts` checks that handlers attach on entering the Files tab, detach on leaving, and do not attach twice.
-- **How to test:**
-  1. Open a PR's Conversation tab.
-  2. Click **Files changed** (no reload) and confirm click-to-explain works.
-  3. Go back and forth several times and confirm only one popup appears per click.
+- **Problem it solves:** Chrome injects a content script only on a full page load, and it was injected only on PR addresses, so a PR reached from the repository, the pull request list or an issue without a reload had no badge and no click-to-explain until you refreshed. The content script is now injected on every `github.com` page (`public/manifest.json`); off PRs it does nothing but wait, and it pings the service worker only on the first PR page. Turbo's events and back/forward were the only moves it noticed, so a move made by GitHub's React views with `history.pushState` (such as the new Files changed page) was missed: the badge kept the old tab and clicks kept being explained after leaving the diff. Adds `src/navigation.ts`: `watchNavigation` reports each move to another page once, however it was found (`turbo:load`, `turbo:render`, `popstate`, the Navigation API's `navigate` event, and a check of the address every 500 ms for moves with no event); a change to only the query or hash (such as a `#diff-…` jump) is not a move. `DiffPageFeatures` attaches click-to-explain (the click handler and the selection) on entering a PR's Files changed or commit pages, once however often it is told, and removes it on leaving, closing an open popup and stopping its request. When Turbo redraws the same page (a `turbo:render` or `turbo:load` with no move, such as after the PR's description is edited), `onRedraw` is called once for the visit. After each move or redraw the badge is updated, the PR's description and files are read again (as before), and a popup or chat panel whose part of the page GitHub replaced is closed (`closeDetached`), so code is not sent to a chat no one can see. Code in review comments on the Conversation tab is not explained (it was never handled).
+- **Unit tests added:** `navigation.test.ts` covers handlers attaching on entering the Files tab (and `/changes` and commit pages), detaching on leaving, not attaching twice while staying (or after query and hash changes), attaching once again each time you come back, and a real click handler running once per click after many moves; `watchNavigation` finding moves from `turbo:load`, `turbo:render`, `popstate`, the Navigation API and the address check, reporting each move once with the page it came from, ignoring hash and query changes, a same-page Turbo redraw reported once per visit (and not for the Turbo events of a move), an edited PR description read again after a same-page redraw, and stopping; and `closeDetached` closing only what is no longer on the page. `manifest.test.ts` now checks the content script runs on every `github.com` page (the repository, the PR list, issues), and still not on `http://`, gists or other sites.
+- **Screenshots:** [one popup for one click on the Files changed tab, after moving between it and the Conversation tab four times without a reload](screenshots/pr-7.1/1-one-popup-after-tab-switches.png).
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass (671 tests in 33 files). Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Make sure Ollama is running with your model. Run `npm run dev`, wait for `built in`, and reload the extension (see [InstallingExtension.md](InstallingExtension.md)).
+  3. Signed in to GitHub, open a repository's **Pull requests** list and refresh the page. Confirm there is no "PR Explainer active" badge.
+  4. Click a PR in the list (no reload). Confirm the badge appears in the bottom right corner. Hover over it and confirm the tooltip says `(conversation)` and "Service worker: connected".
+  5. Click the **Files changed** tab. Confirm the tooltip now says `(files)`. Press `F12` to open the **Console**, click a diff line, and confirm one popup opens and the console shows one `[PR Explainer] explained in …` line.
+  6. Click **Conversation**, then **Files changed**, and repeat four times. Click a diff line and confirm one popup and one `explained in …` line again.
+  7. Click a diff line, and while the popup is open, click **Conversation**. Confirm the popup is gone.
+  8. Click a diff line, click **Ask a question**, then click **Conversation** and back to **Files changed**. Click a diff line: if the chat panel is still showing, confirm the code joins it ("Now looking at …"); if it is gone, confirm the popup opens instead.
+  9. Click the repository's **Issues** tab (no reload) and confirm the badge is gone. Press the browser's **Back** button and confirm the badge comes back and clicking a line still explains it.
 
 ### PR 7.2: Split view and lazy-loaded diffs (Medium)
 - **Why it's needed:** Many reviewers use split view, and large PRs load file diffs as you scroll.
