@@ -339,6 +339,29 @@ describe.each(layouts)('selecting lines on the $name layout', ({ code, file, add
     expect(ui()).toBeNull();
   });
 
+  it('does not bring back an old selection on a later click', () => {
+    env = setup();
+    mouse('mousedown', code('R42'));
+    dragSelect(code('R42'), code('R44'));
+    mouse('mouseup', code('R44'));
+    expect(highlighted()).toHaveLength(4);
+    // The browser can keep the old text selection through the next click.
+    click(document.body);
+    expect(document.getSelection()!.isCollapsed).toBe(false);
+    expect(highlighted()).toEqual([]);
+    expect(ui()).toBeNull();
+    // The same after Esc, and for a click on a line inside the old selection.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    click(code('R43'));
+    expect(highlighted()).toEqual([]);
+    expect(ui()).toBeNull();
+    // A new drag still works.
+    mouse('mousedown', code('R45'));
+    dragSelect(code('R45'), code('R46'));
+    mouse('mouseup', code('R46'));
+    expect(highlighted()).toEqual(['R45', 'R46'].map(row));
+  });
+
   it('does nothing while click-to-explain is off', () => {
     env = setup(() => false);
     dragSelect(code('R42'), code('R45'));

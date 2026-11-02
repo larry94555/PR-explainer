@@ -91,6 +91,21 @@ export function blockAnchor(rows: readonly Element[]): PopupAnchor {
   };
 }
 
+/**
+ * The current text selection as plain values, or null when nothing is
+ * selected, so a mouseup can tell whether its own gesture changed it.
+ */
+function selectionKey(doc: Document): readonly unknown[] | null {
+  const selection = doc.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  const r = selection.getRangeAt(0);
+  return [r.startContainer, r.startOffset, r.endContainer, r.endOffset];
+}
+
+function sameKey(a: readonly unknown[] | null, b: readonly unknown[] | null): boolean {
+  return a !== null && b !== null && a.every((value, i) => value === b[i]);
+}
+
 /** The first and last rows a text selection touches, or null. */
 function selectionEnds(doc: Document): [Node, Node] | null {
   const selection = doc.getSelection();
@@ -120,6 +135,10 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
   let ui: HTMLElement | null = null;
   let noteTimer: ReturnType<typeof setTimeout> | undefined;
   let explaining = false;
+  // The text selection when the current gesture's mousedown happened. A drag
+  // that ends with the browser still showing this same selection (for
+  // example a click on blank space after an earlier drag) made no new one.
+  let selectionAtDown: readonly unknown[] | null = null;
 
   const ensureStyle = () => {
     if (doc.getElementById(STYLE_ID)) return;
@@ -213,7 +232,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
       // Shift-click also stretches the browser's text selection; it is noise here.
       doc.getSelection()?.removeAllRanges();
     } else {
-      const fromText = selectionEnds(doc);
+      const fromText = sameKey(selectionKey(doc), selectionAtDown) ? null : selectionEnds(doc);
       if (fromText && locateRow(fromText[0]) !== locateRow(fromText[1])) ends = fromText;
     }
 
@@ -237,6 +256,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
   };
 
   const onMouseDown = (event: MouseEvent) => {
+    selectionAtDown = selectionKey(doc);
     if (ui && event.composedPath().includes(ui)) return;
     clear();
   };
