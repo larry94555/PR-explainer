@@ -92,6 +92,7 @@ export function createChatHandler(deps: ChatDeps) {
       await deps.thinking?.(settings, signal, undefined, roundTrips),
       settings.letModelThink,
     );
+    const windowTicket = deps.loadedWindow?.start(settings, contextTokens);
     try {
       const stream = deps.createClient(settings, { roundTrips }).chatStream(payload.messages, {
         model: settings.model,
@@ -110,10 +111,10 @@ export function createChatHandler(deps: ChatDeps) {
         next = await stream.next();
       }
       // Without a window the server used its own, which is not known here.
-      deps.loadedWindow?.remember(settings, contextTokens);
+      windowTicket?.done();
       return { status: 'done', answer, model: next.value.model };
     } catch (error) {
-      deps.loadedWindow?.forget();
+      windowTicket?.failed();
       const { message, fix } = describeLlmError(error, {
         url: settings.llmUrl,
         model: settings.model,

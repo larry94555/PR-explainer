@@ -243,12 +243,12 @@ describe('warm-up and the remembered window (PR 9.7)', () => {
 
   it('forgets when /api/ps does not say, or the warm-up fails', async () => {
     const loadedWindow = createLoadedWindowMemory();
-    loadedWindow.remember(at, 8192);
+    loadedWindow.start(at, 8192).done();
     const old = setup({ loaded: async () => ['qwen2.5-coder:7b'], loadedWindow });
     await old.warmup.warmUp(1, PR);
     expect(loadedWindow.known(at)).toBeUndefined();
 
-    loadedWindow.remember(at, 8192);
+    loadedWindow.start(at, 8192).done();
     const down = setup({
       load: async () => {
         throw new Error('out of memory');
@@ -269,5 +269,38 @@ describe('warm-up and the remembered window (PR 9.7)', () => {
     const unnamed = setup();
     await unnamed.warmup.warmUp(1, PR);
     expect(logOf(unnamed.createClient).roundTrips.group).not.toBe('page-1');
+  });
+
+  it('does not overwrite a click sent while the model was still loading', async () => {
+    const loadedWindow = createLoadedWindowMemory();
+    let finish!: () => void;
+    const { warmup, client } = setup({
+      contextTokens: async () => 8192,
+      load: () => new Promise<void>((resolve) => (finish = resolve)),
+      loadedWindow,
+    });
+    const warming = warmup.warmUp(1, PR);
+    await vi.waitFor(() => expect(client.loadModel).toHaveBeenCalled());
+    // A click asks for a bigger window and gets its answer first.
+    const click = loadedWindow.start(at, 4096);
+    click.done();
+    finish();
+    await expect(warming).resolves.toEqual({ outcome: 'loaded' });
+    expect(loadedWindow.known(at)).toBe(4096);
+  });
+
+  it('does not forget what a click said when the warm-up then fails', async () => {
+    const loadedWindow = createLoadedWindowMemory();
+    let fail!: (error: Error) => void;
+    const { warmup, client } = setup({
+      load: () => new Promise<void>((_, reject) => (fail = reject)),
+      loadedWindow,
+    });
+    const warming = warmup.warmUp(1, PR);
+    await vi.waitFor(() => expect(client.loadModel).toHaveBeenCalled());
+    loadedWindow.start(at, 4096).done();
+    fail(new Error('connection reset'));
+    await expect(warming).resolves.toEqual({ outcome: 'failed' });
+    expect(loadedWindow.known(at)).toBe(4096);
   });
 });

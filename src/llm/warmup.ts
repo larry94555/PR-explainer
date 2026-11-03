@@ -20,7 +20,7 @@
 import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
 import type { Settings } from '../settings';
 import type { ContextSizer } from './contextSize';
-import type { LoadedWindowMemory } from './loadedWindow';
+import type { LoadedWindowMemory, LoadedWindowTicket } from './loadedWindow';
 import { startingNumCtx } from './numCtx';
 import { isSameModel, type LlmClient } from './types';
 
@@ -96,14 +96,17 @@ export function createWarmup(deps: WarmupDeps): Warmup {
 
   async function load(settings: Settings, roundTrips: RoundTripLog): Promise<WarmupOutcome> {
     const { model, keepAliveMinutes } = settings;
+    let ticket: LoadedWindowTicket | undefined;
     try {
       const client = deps.createClient(settings, { roundTrips });
+      // Taken as /api/ps is sent, so a click sent after it wins.
+      ticket = deps.loadedWindow?.start(settings, undefined);
       const running = await client.runningModels();
       const found = running.find((m) => isSameModel(m.name, model));
       if (found) {
         log(`[PR Explainer] warm-up: ${model} is already loaded`);
         // Older Ollama versions do not say, which forgets.
-        deps.loadedWindow?.remember(settings, found.contextTokens);
+        ticket?.done(found.contextTokens);
         return 'already-loaded';
       }
       const window =
@@ -112,18 +115,21 @@ export function createWarmup(deps: WarmupDeps): Warmup {
           : deps.contextTokens &&
             startingNumCtx(await deps.contextTokens(settings, undefined, undefined, roundTrips));
       const started = Date.now();
+      // A click sent while the model loads takes a newer ticket, so this
+      // load ending later does not overwrite what the click says.
+      ticket = deps.loadedWindow?.start(settings, window);
       await client.loadModel(model, {
         keepAliveMinutes,
         ...(window !== undefined && { contextTokens: window }),
       });
-      deps.loadedWindow?.remember(settings, window);
+      ticket?.done();
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
       log(`[PR Explainer] warm-up: loaded ${model} in ${seconds} s`);
       return 'loaded';
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`[PR Explainer] warm-up: could not load ${model} (${message})`);
-      deps.loadedWindow?.forget();
+      ticket?.failed();
       return 'failed';
     }
   }

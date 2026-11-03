@@ -445,6 +445,9 @@ export function createExplainHandler(deps: ExplainDeps) {
         ...(status && { status }),
       });
     };
+    // Taken as the request is sent, so an older request ending later cannot
+    // overwrite what this one says.
+    const windowTicket = deps.loadedWindow?.start(settings, numCtx);
     try {
       const stream = client.chatStream(messages, {
         model: settings.model,
@@ -465,7 +468,7 @@ export function createExplainHandler(deps: ExplainDeps) {
       }
       modelTask();
       // The model is now loaded with this window.
-      deps.loadedWindow?.remember(settings, numCtx);
+      windowTicket?.done();
       const { model, timings, doneReason, thinking } = next.value;
       // "length" means the answer hit maxResponseTokens and stopped early.
       const explanation = await tasks.time('parse', 'Parse the answer', () =>
@@ -490,7 +493,7 @@ export function createExplainHandler(deps: ExplainDeps) {
     } catch (error) {
       modelTask('failed');
       // A failed or stopped request may not have loaded the model: ask next time.
-      deps.loadedWindow?.forget();
+      windowTicket?.failed();
       const { message, fix } = describeLlmError(error, {
         url: settings.llmUrl,
         model: settings.model,

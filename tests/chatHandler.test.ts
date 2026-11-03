@@ -231,12 +231,12 @@ describe('chat handler and the remembered window (PR 9.7)', () => {
 
   it("forgets after a question sent with the server's own window, or a failed one", async () => {
     const plain = withMemory();
-    plain.loadedWindow.remember(SETTINGS, 4096);
+    plain.loadedWindow.start(SETTINGS, 4096).done();
     await plain.handler({ messages: MESSAGES });
     expect(plain.loadedWindow.known(SETTINGS)).toBeUndefined();
 
     const failed = withMemory(new LlmError('connection', 'down'), 8192);
-    failed.loadedWindow.remember(SETTINGS, 4096);
+    failed.loadedWindow.start(SETTINGS, 4096).done();
     const result = await failed.handler({ messages: MESSAGES });
     expect(result.status).toBe('failed');
     expect(failed.loadedWindow.known(SETTINGS)).toBeUndefined();

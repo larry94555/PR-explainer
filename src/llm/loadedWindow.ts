@@ -12,6 +12,12 @@
 // - the service worker restarted (this is kept in memory only).
 // Then the next explanation asks /api/ps once, as before.
 //
+// Requests can overlap (a click while the warm-up still loads the model, or
+// a chat question while an explanation runs), and the last to start is the
+// one Ollama loads the model for. So each request takes a ticket when it is
+// sent, and only the newest ticket's end changes what is remembered: an older
+// request that ends later, well or badly, is ignored.
+//
 // If Ollama unloaded the model in the meantime (Keep model loaded ran out),
 // the next request loads it again with the remembered window, which is what
 // the last request used, so nothing is lost.
@@ -20,17 +26,33 @@ import type { Settings } from '../settings';
 
 type Target = Pick<Settings, 'llmUrl' | 'model'>;
 
+/** One request's part in what is remembered. Only the newest request's counts. */
+export interface LoadedWindowTicket {
+  /**
+   * The request finished: the model is loaded with its window, or with
+   * `loaded` when the request found out which (a warm-up's /api/ps).
+   */
+  done(loaded?: number): void;
+  /** The request failed or was stopped: the window is no longer known. */
+  failed(): void;
+}
+
 export interface LoadedWindowMemory {
   /** The window the model in `settings` was last loaded with, or undefined when not known. */
   known(settings: Target): number | undefined;
-  /** Records the window a request just used. Undefined (the server's default) forgets. */
-  remember(settings: Target, window: number | undefined): void;
+  /**
+   * Called as a request is sent with `window` (undefined: the server's
+   * default). Its ticket records how it ended, unless a newer one was sent.
+   */
+  start(settings: Target, window: number | undefined): LoadedWindowTicket;
   /** Forgets the window, so the next explanation asks /api/ps. */
   forget(): void;
 }
 
 export function createLoadedWindowMemory(): LoadedWindowMemory {
   let last: { llmUrl: string; model: string; window: number } | undefined;
+  // Counts requests sent; a ticket counts only while it is the newest.
+  let newest = 0;
   return {
     known(settings) {
       if (!last || !settings.model) return undefined;
@@ -38,13 +60,24 @@ export function createLoadedWindowMemory(): LoadedWindowMemory {
         ? last.window
         : undefined;
     },
-    remember(settings, window) {
-      last =
-        settings.model && Number.isInteger(window) && window! > 0
-          ? { llmUrl: settings.llmUrl, model: settings.model, window: window! }
-          : undefined;
+    start(settings, window) {
+      const ticket = ++newest;
+      const isNewest = () => ticket === newest;
+      return {
+        done(loaded = window) {
+          if (!isNewest()) return;
+          last =
+            settings.model && Number.isInteger(loaded) && loaded! > 0
+              ? { llmUrl: settings.llmUrl, model: settings.model, window: loaded! }
+              : undefined;
+        },
+        failed() {
+          if (isNewest()) last = undefined;
+        },
+      };
     },
     forget() {
+      newest++;
       last = undefined;
     },
   };

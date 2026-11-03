@@ -395,7 +395,7 @@ describe('explain handler', () => {
 
       it('uses a window a chat question or warm-up left, without asking', async () => {
         const { handler, client, loadedWindow } = withMemory(streamOf(DONE), () => SETTINGS);
-        loadedWindow.remember(SETTINGS, 8192);
+        loadedWindow.start(SETTINGS, 8192).done();
         await handler({ context: SAMPLE_CONTEXT });
         expect(client.loadedContextTokens).not.toHaveBeenCalled();
         expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(8192);
@@ -430,11 +430,51 @@ describe('explain handler', () => {
         expect(client.loadedContextTokens).toHaveBeenCalledTimes(2);
       });
 
+      it('lets the newer of two overlapping explanations decide, whichever ends first', async () => {
+        // The first request's reply waits until released; the second answers at once.
+        let release!: () => void;
+        const slow = new Promise<void>((resolve) => (release = resolve));
+        let calls = 0;
+        const { handler, client, loadedWindow } = withMemory(
+          async function* () {
+            if (++calls === 1) await slow;
+            yield '## What it does\nA.';
+            return { model: SETTINGS.model, doneReason: 'stop' } as ChatStreamEnd;
+          },
+          () => SETTINGS,
+        );
+        // Known to be 4096 from /api/ps for the first; the second is sent with a set size.
+        const first = handler({ context: SAMPLE_CONTEXT });
+        await vi.waitFor(() => expect(client.chatStream).toHaveBeenCalledTimes(1));
+        loadedWindow.start(SETTINGS, 8192).done();
+        release();
+        await first;
+        expect(loadedWindow.known(SETTINGS)).toBe(8192);
+      });
+
+      it('keeps a newer window when an older explanation then fails', async () => {
+        let fail!: (error: Error) => void;
+        const failing = new Promise<never>((_, reject) => (fail = reject));
+        const { handler, client, loadedWindow } = withMemory(
+          async function* () {
+            yield await failing;
+            return { model: SETTINGS.model, doneReason: 'stop' } as ChatStreamEnd;
+          },
+          () => SETTINGS,
+        );
+        const first = handler({ context: SAMPLE_CONTEXT });
+        await vi.waitFor(() => expect(client.chatStream).toHaveBeenCalledTimes(1));
+        loadedWindow.start(SETTINGS, 8192).done();
+        fail(new LlmError('connection', 'down'));
+        expect((await first).status).toBe('failed');
+        expect(loadedWindow.known(SETTINGS)).toBe(8192);
+      });
+
       it('does not touch what it knows for a cached answer', async () => {
         const store = new Map<string, unknown>();
         const { client } = setup(streamOf(DONE));
         const loadedWindow = createLoadedWindowMemory();
-        loadedWindow.remember(SETTINGS, 4096);
+        loadedWindow.start(SETTINGS, 4096).done();
         const handler = createExplainHandler({
           getSettings: async () => SETTINGS,
           createClient: () => client,
