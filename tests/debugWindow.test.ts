@@ -5,6 +5,7 @@ import {
   RECONNECT_MS,
   splitThinking,
   TICK_MS,
+  WINDOW_LIMIT,
   type DebugPort,
   type DebugWindowDeps,
 } from '../src/debug/debugWindow';
@@ -15,6 +16,7 @@ import type {
   DebugRunningEntry,
   DebugTraceEntry,
 } from '../src/debug/types';
+import { DEBUG_LOG_LIMIT } from '../src/debug/debugLog';
 import { storageKey } from '../src/settings';
 import type { RoundTrip } from '../src/trace/types';
 
@@ -399,6 +401,28 @@ describe('debug window (PR 9.4)', () => {
     await vi.waitFor(() =>
       expect(w.q('.status').textContent).toBe('Could not copy: Document is not focused.'),
     );
+  });
+
+  it('keeps only the newest entries, as the log does, without dropping running rows', async () => {
+    expect(WINDOW_LIMIT).toBe(DEBUG_LOG_LIMIT);
+    const w = setup();
+    w.port().send({ type: 'snapshot', entries: [], running: [runningEntry('live:1', T0)] });
+    // Open the first row, so its open state has to be forgotten too.
+    w.port().send({ type: 'entry', entry: entry('c0', T0) });
+    w.q<HTMLButtonElement>('section[data-group=c0] .row-button').click();
+    for (let i = 1; i <= WINDOW_LIMIT + 49; i++) {
+      w.port().send({ type: 'entry', entry: entry(`c${i}`, T0 + i) });
+    }
+    expect(w.all('.group')).toHaveLength(WINDOW_LIMIT + 1);
+    expect(w.q('section[data-group=c0]')).toBeNull();
+    expect(w.q('section[data-group=c49]')).toBeNull();
+    expect(w.q('section[data-group=c50]')).not.toBeNull();
+    expect(w.q('section[data-group=live]')).not.toBeNull();
+    w.button(/Copy as JSON/).click();
+    await vi.waitFor(() => expect(w.deps.copy).toHaveBeenCalled());
+    const data = JSON.parse(vi.mocked(w.deps.copy).mock.calls[0]![0]);
+    expect(data.groups).toHaveLength(WINDOW_LIMIT + 1);
+    expect(data.groups.some((g: { group: string }) => g.group === 'c0')).toBe(false);
   });
 
   it('works with the keyboard and a screen reader', () => {

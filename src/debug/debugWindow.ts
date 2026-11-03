@@ -37,6 +37,12 @@ export const DEBUG_PORT_NAME: DebugLogPortName = 'pr-explainer:debugLog';
 export const TICK_MS = 200;
 /** How long to wait before connecting again when the service worker goes away. */
 export const RECONNECT_MS = 1_000;
+/**
+ * The window keeps the same newest entries the service worker keeps
+ * (DEBUG_LOG_LIMIT in src/debug/debugLog.ts, which debugWindow.test.ts
+ * checks), so it never holds prompts and replies the log has dropped.
+ */
+export const WINDOW_LIMIT = 200;
 
 /** The part of a chrome.runtime.Port the window uses. */
 export interface DebugPort {
@@ -266,8 +272,14 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
   function addEntry(entry: DebugEntry) {
     entries.set(entry.id, entry);
     if (entry.kind === 'round-trip' && entry.trip.id) {
+      if (ended.size >= WINDOW_LIMIT * 5) ended.clear();
       ended.add(entry.trip.id);
       running.delete(entry.trip.id);
+    }
+    // Drop the oldest, as the log does. Running round trips are not counted.
+    if (entries.size > WINDOW_LIMIT) {
+      const ids = [...entries.keys()].sort((a, b) => a - b);
+      for (const id of ids.slice(0, entries.size - WINDOW_LIMIT)) entries.delete(id);
     }
   }
   function addRunning(entry: DebugRunningEntry) {
