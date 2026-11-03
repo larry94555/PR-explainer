@@ -8,8 +8,12 @@
 //
 // The popup's Details (src/popup/latencyBreakdown.ts) and the console line
 // (traceLine, below) both show the result.
+//
+// The trace also gathers the click's round trips (PR 9.2): the content
+// script's to GitHub (addRoundTrips) and the service worker's to Ollama,
+// which come with its tasks and are lined up the same way.
 
-import type { TraceTask, WorkerTrace } from './types';
+import type { RoundTrip, TraceTask, WorkerTrace } from './types';
 
 export interface ClickTrace {
   /** Milliseconds since the trace started (the click). */
@@ -33,12 +37,17 @@ export interface ClickTrace {
   finish(): void;
   /** The tasks so far, in the order they started. */
   tasks(): TraceTask[];
+  /** Adds the page's round trips, already timed from the click. */
+  addRoundTrips(trips: readonly RoundTrip[]): void;
+  /** The round trips so far, in the order they started. */
+  roundTrips(): RoundTrip[];
 }
 
 export function createClickTrace(clock: () => number = () => performance.now()): ClickTrace {
   const origin = clock();
   const now = () => clock() - origin;
   const list: TraceTask[] = [];
+  const trips: RoundTrip[] = [];
   let sentAt: number | undefined;
   // Where the service worker's last task ended, for Show answer.
   let workerEnd: number | undefined;
@@ -96,6 +105,10 @@ export function createClickTrace(clock: () => number = () => performance.now()):
           ...(firstChunk !== undefined && { firstChunkMs: Math.max(0, firstChunk) }),
         });
       }
+      // Round trips keep a start before the click: it says they began earlier.
+      for (const trip of trace.roundTrips ?? []) {
+        trips.push({ ...trip, startMs: offset + trip.startMs });
+      }
       workerEnd = Math.max(0, offset + trace.totalMs);
     },
     finish() {
@@ -104,6 +117,10 @@ export function createClickTrace(clock: () => number = () => performance.now()):
       add({ key: 'show', label: 'Show answer', startMs, durationMs: end - startMs });
     },
     tasks: () => [...list].sort((a, b) => a.startMs - b.startMs),
+    addRoundTrips(page) {
+      trips.push(...page);
+    },
+    roundTrips: () => [...trips].sort((a, b) => a.startMs - b.startMs),
   };
 }
 

@@ -25,11 +25,13 @@ import { createPrefetcher, trackHoverSetting, type PrefetchEvent } from './prefe
 import { createPrMetadataLoader, type PrMetadata } from './prMetadata';
 import { parsePrUrl } from './prUrl';
 import { installSelection } from './selection';
-import { createGithubFetch } from './net/githubFetch';
+import { createGithubFetch, createGithubRoundTrips } from './net/githubFetch';
 
 // Every request the content script makes goes through this, and it only
-// reaches GitHub (PR 7.4).
-const githubFetch = createGithubFetch();
+// reaches GitHub (PR 7.4). Each one is recorded as a round trip, so a click
+// can list the ones it waited on (PR 9.2).
+const githubTrips = createGithubRoundTrips();
+const githubFetch = createGithubFetch(undefined, undefined, githubTrips);
 
 /** "owner/repo#17" for the PR on this page, or undefined (no caching). */
 function prName(url: string): string | undefined {
@@ -42,7 +44,11 @@ function prName(url: string): string | undefined {
 const prMetadata = createPrMetadataLoader({
   doc: document,
   fetchHtml: async (path, signal) => {
-    const response = await githubFetch(path, { credentials: 'same-origin', signal });
+    const response = await githubFetch(
+      path,
+      { credentials: 'same-origin', signal },
+      'PR description',
+    );
     if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
     return response.text();
   },
@@ -60,7 +66,7 @@ function loadPrMetadata(): Promise<PrMetadata | undefined> {
 const fileContexts = createFileContextLoader({
   doc: document,
   fetchText: async (url, signal) => {
-    const response = await githubFetch(url, { credentials: 'same-origin', signal });
+    const response = await githubFetch(url, { credentials: 'same-origin', signal }, 'file at head');
     if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
     return response.text();
   },
@@ -144,8 +150,11 @@ const chats = new ChatSessions();
 // go with the code, so the answer can say why the PR needs it (PR 6.1).
 // The block around the code in the full file goes too (PR 6.3). Each step is
 // a task in the click's trace (PR 9.1); the two reads run at the same time.
-const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, { fresh, code, trace }) => {
+const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
+  const { fresh, code, trace, cause = 'click' } = options;
   const pr = prName(location.href);
+  // The click, on the round trips' clock (both are performance.now()).
+  const clickAt = trace ? githubTrips.now() - trace.now() : undefined;
   const description = loadPrMetadata();
   const file = loadFileContext(code);
   if (trace) {
@@ -173,9 +182,11 @@ const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, { fresh, code,
             : '(none)'),
       );
     }
+    // The GitHub round trips this click waited on (PR 9.2).
+    if (trace && clickAt !== undefined) trace.addRoundTrips(githubTrips.since(clickAt));
     trace?.markSent();
     const sent = trace?.start('send', 'Send the request');
-    const stream = openExplainStream({ context, pr, fresh, prInfo, fileContext }, onChunk);
+    const stream = openExplainStream({ context, pr, fresh, prInfo, fileContext, cause }, onChunk);
     sent?.();
     return stream;
   });

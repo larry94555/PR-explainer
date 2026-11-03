@@ -27,9 +27,13 @@
 // with Alt+E (PR 7.3). While the model is working the panel is marked
 // aria-busy.
 //
-// With the Show prompt setting on (PR 6.2), a collapsed "Prompt sent" section
-// under the explanation shows the prompt, its estimated size against the
-// budget, and what was trimmed to fit.
+// Details also counts the click's round trips to GitHub and Ollama (PR 9.2)
+// and lists each one; opening one shows where it went, when, its size and
+// status, and for the explanation the messages sent and the whole reply.
+// With the Show prompt setting on (PR 6.2), Details and the explanation's
+// round trip open by themselves, with the prompt's estimated size against
+// the budget and what was trimmed to fit. A cached answer sends nothing, so
+// its prompt gets its own row.
 //
 // Once an answer is shown, a Details button next to the time opens a small
 // waterfall of where the time went (PR 9.1, replacing PR 8.1's table): one
@@ -46,8 +50,9 @@
 import type { PromptReport } from '../explain/fitPrompt';
 import type { Explanation, SectionKey } from '../explain/parseExplanation';
 import type { LlmTimings } from '../llm/types';
-import type { TraceTask } from '../trace/types';
+import type { RoundTrip, TraceTask } from '../trace/types';
 import { buildWaterfall, formatDuration, rowDescription, rowValue } from './latencyBreakdown';
+import { roundTripFacts, roundTripLine, roundTripSummary } from './roundTrips';
 import { appendInline, renderMarkdown } from './renderMarkdown';
 import { POPUP_STYLE } from './popupStyle';
 import { restoreFocus } from '../a11y';
@@ -132,7 +137,10 @@ export interface Popup {
   /** `cached` is set when the answer came from the cache. */
   showExplanation(explanation: Explanation, model?: string, cached?: { elapsedMs: number }): void;
   showError(message: string, fix: string): void;
-  /** Adds the prompt that was sent under the explanation (the Show prompt setting). */
+  /**
+   * Opens Details on the explanation's round trip, with the prompt's size
+   * (the Show prompt setting). Call it after showTrace.
+   */
   showPrompt(report: PromptReport): void;
   /**
    * Adds the Details button and its waterfall for the answer or error shown
@@ -148,6 +156,8 @@ export interface TraceDetails {
   tasks: readonly TraceTask[];
   /** The server's timings, which split the model's task. Left out for a cached answer. */
   timings?: LlmTimings;
+  /** The click's round trips (PR 9.2). Left out: no count line. */
+  roundTrips?: readonly RoundTrip[];
   /** The whole reply, to estimate how much of it was thinking. */
   reply?: string;
 }
@@ -160,6 +170,57 @@ export function promptSummary(report: PromptReport): string {
     ? `trimmed: ${report.trimmed.join(', ')}`
     : 'nothing trimmed';
   return `Prompt sent · ${size} (${window}) · ${trimmed}`;
+}
+
+/** A heading and its text, for a round trip's message or reply. */
+function block(doc: Document, heading: string, text: string, role?: string): HTMLElement {
+  const section = doc.createElement('section');
+  section.className = 'trip-part';
+  if (role) section.dataset.role = role;
+  const title = doc.createElement('h4');
+  title.textContent = heading;
+  const pre = doc.createElement('pre');
+  pre.textContent = text;
+  section.append(title, pre);
+  return section;
+}
+
+/**
+ * The count line and the list of round trips for Details (PR 9.2). Each row
+ * opens to show its facts, and for /api/chat the messages and the reply.
+ */
+function roundTripList(doc: Document, trips: readonly RoundTrip[]): HTMLElement[] {
+  const count = doc.createElement('p');
+  count.className = 'trip-count';
+  count.textContent = roundTripSummary(trips);
+  if (trips.length === 0) return [count];
+  const list = doc.createElement('ul');
+  list.className = 'round-trips';
+  list.setAttribute('aria-label', 'Round trips');
+  for (const trip of trips) {
+    const item = doc.createElement('li');
+    item.className = 'round-trip';
+    item.dataset.target = trip.target;
+    item.dataset.status = trip.status;
+    item.dataset.cause = trip.cause;
+    // The explanation's round trip carries the prompt (Show prompt opens it).
+    if (trip.messages && trip.cause !== 'warmup') item.dataset.prompt = '';
+    const details = doc.createElement('details');
+    const summary = doc.createElement('summary');
+    summary.textContent = roundTripLine(trip);
+    const facts = doc.createElement('p');
+    facts.className = 'trip-facts';
+    facts.textContent = roundTripFacts(trip);
+    details.append(summary, facts);
+    for (const message of trip.messages ?? []) {
+      details.append(block(doc, `Sent: ${message.role}`, message.content, message.role));
+    }
+    if (trip.thinking) details.append(block(doc, 'Reply: thinking', trip.thinking));
+    if (trip.reply !== undefined) details.append(block(doc, 'Reply', trip.reply));
+    item.append(details);
+    list.append(item);
+  }
+  return [count, list];
 }
 
 /** Space between the line and the popup, and between the popup and the window edge. */
@@ -486,7 +547,7 @@ export function openPopup(
       error.append(messageEl, fixEl);
       setBody('failed', error);
     },
-    showTrace({ tasks, timings, reply }) {
+    showTrace({ tasks, timings, reply, roundTrips }) {
       // A failed answer shows its trace too: that is when it matters most.
       if ((state !== 'done' && state !== 'failed') || tasks.length === 0) return;
       const waterfall = buildWaterfall(tasks, timings, reply);
@@ -551,18 +612,38 @@ export function openPopup(
       }
       summary.textContent = parts.join(' · ');
       latency.replaceChildren(list, summary);
+      if (roundTrips) latency.append(...roundTripList(doc, roundTrips));
       detailsButton.hidden = false;
     },
     showPrompt(report) {
       if (state !== 'done') return;
-      const details = doc.createElement('details');
-      details.className = 'prompt';
-      const summary = doc.createElement('summary');
-      summary.textContent = promptSummary(report);
-      const pre = doc.createElement('pre');
-      pre.textContent = report.text;
-      details.append(summary, pre);
-      body.append(details);
+      let trips = latency.querySelector('.round-trips');
+      if (!trips) {
+        trips = doc.createElement('ul');
+        trips.className = 'round-trips';
+        latency.append(trips);
+      }
+      let row = trips.querySelector<HTMLDetailsElement>('li[data-prompt] > details');
+      if (!row) {
+        // A cached answer: nothing was sent, but the prompt is still shown.
+        const item = doc.createElement('li');
+        item.className = 'round-trip';
+        item.dataset.prompt = '';
+        row = doc.createElement('details');
+        const summary = doc.createElement('summary');
+        summary.textContent = 'Prompt · not sent: the answer came from the cache';
+        row.append(summary, block(doc, 'Prompt', report.text));
+        item.append(row);
+        trips.append(item);
+      }
+      const size = doc.createElement('p');
+      size.className = 'prompt-size';
+      size.textContent = promptSummary(report);
+      row.querySelector('summary')!.after(size);
+      row.open = true;
+      detailsButton.hidden = false;
+      showDetails(true);
+      place();
     },
     close() {
       if (state === 'closed') return;

@@ -13,7 +13,7 @@ import { describeLlmError } from '../src/llm/describeLlmError';
 import type { ChatMessage, LlmTimings } from '../src/llm/types';
 import { LlmError } from '../src/llm/types';
 import { openPopup } from '../src/popup/popup';
-import type { TraceTask } from '../src/trace/types';
+import type { RoundTrip, TraceTask } from '../src/trace/types';
 import { traceLine } from '../src/trace/clickTrace';
 import { buildWaterfall } from '../src/popup/latencyBreakdown';
 import { isExplainShortcut } from '../src/a11y';
@@ -76,6 +76,71 @@ const TASKS: TraceTask[] = [
 const THINKING_REPLY =
   `<think>${'The loop retries fetch with a growing delay. '.repeat(9)}</think>\n` +
   `## What it does\n${'Retries the fetch call up to three times. '.repeat(9)}`;
+// The click's round trips (PR 9.2), matching TASKS: the two GitHub reads,
+// the loaded window, and the explanation with its prompt and reply. The
+// warm-up's load was still running, so it is listed but not counted.
+function demoRoundTrips(messages: ChatMessage[], reply = THINKING_REPLY): RoundTrip[] {
+  const trip = (extra: Partial<RoundTrip> & Pick<RoundTrip, 'endpoint' | 'purpose'>) => ({
+    target: 'ollama' as const,
+    method: 'GET',
+    cause: 'click' as const,
+    startMs: 0,
+    durationMs: 0,
+    status: 'done' as const,
+    httpStatus: 200,
+    bytesSent: 0,
+    bytesReceived: 0,
+    ...extra,
+  });
+  const sent = JSON.stringify({ messages }).length;
+  return [
+    trip({
+      target: 'github',
+      endpoint: 'github.com/larry94555/PR-explainer/pull/12',
+      purpose: 'PR description',
+      startMs: 3,
+      durationMs: 180,
+      bytesReceived: 212_400,
+    }),
+    trip({
+      target: 'github',
+      endpoint: 'github.com/larry94555/PR-explainer/raw/3f2c9e1/src/llm/retry.ts',
+      purpose: 'file at head',
+      startMs: 3,
+      durationMs: 410,
+      bytesReceived: 4_830,
+    }),
+    trip({
+      endpoint: 'localhost:11434/api/ps',
+      purpose: 'loaded window',
+      startMs: 435,
+      durationMs: 25,
+      bytesReceived: 412,
+    }),
+    trip({
+      method: 'POST',
+      endpoint: 'localhost:11434/api/chat',
+      purpose: 'explanation',
+      startMs: 460,
+      durationMs: 13_560,
+      bytesSent: sent,
+      bytesReceived: 41_200,
+      messages,
+      reply,
+    }),
+    trip({
+      method: 'POST',
+      endpoint: 'localhost:11434/api/chat',
+      purpose: 'load the model',
+      cause: 'warmup',
+      startMs: -3_900,
+      durationMs: 4_350,
+      bytesSent: 60,
+      bytesReceived: 310,
+    }),
+  ].sort((a, b) => a.startMs - b.startMs);
+}
+
 // A cached answer: no model, a few milliseconds in all.
 const CACHED_TASKS: TraceTask[] = [
   page('find-code', 'Find the code', 0, 2),
@@ -190,7 +255,7 @@ fillDiff(document.querySelector<HTMLTableElement>('#diff-bottom')!, 120);
 const status = document.querySelector('#status')!;
 // What Show prompt (PR 6.2) shows for the clicked line in a 2048-token
 // context: a long PR description and 30 lines on each side, trimmed to fit.
-function demoPrompt(row: Element): PromptReport {
+function demoPrompt(row: Element): { report: PromptReport; messages: ChatMessage[] } {
   const cells = (row as HTMLTableRowElement).cells;
   const lineNumber = cells[0]!.textContent;
   // The cell shows "+ code"; the prompt writes it "+code".
@@ -220,18 +285,21 @@ function demoPrompt(row: Element): PromptReport {
     budget,
   );
   return {
-    text: fitted.messages.map((m) => `[${m.role}]\n${m.content}`).join('\n\n'),
-    tokens: fitted.tokens,
-    budget,
-    contextTokens,
-    trimmed: fitted.trimmed,
+    report: {
+      text: fitted.messages.map((m) => `[${m.role}]\n${m.content}`).join('\n\n'),
+      tokens: fitted.tokens,
+      budget,
+      contextTokens,
+      trimmed: fitted.trimmed,
+    },
+    messages: fitted.messages,
   };
 }
 
 // What Show prompt shows with the full file context (PR 6.3): the clicked
 // line sits in a long function, mostly collapsed in the diff, so the
 // function is read from the file and cut to fit around the line.
-function demoFilePrompt(row: Element): PromptReport {
+function demoFilePrompt(row: Element): { report: PromptReport; messages: ChatMessage[] } {
   const cells = (row as HTMLTableRowElement).cells;
   // Placed further down the file than the demo diff's numbers, so the
   // function has room to start above it.
@@ -277,11 +345,14 @@ function demoFilePrompt(row: Element): PromptReport {
     },
   );
   return {
-    text: fitted.messages.map((m) => `[${m.role}]\n${m.content}`).join('\n\n'),
-    tokens: fitted.tokens,
-    budget,
-    contextTokens,
-    trimmed: fitted.trimmed,
+    report: {
+      text: fitted.messages.map((m) => `[${m.role}]\n${m.content}`).join('\n\n'),
+      tokens: fitted.tokens,
+      budget,
+      contextTokens,
+      trimmed: fitted.trimmed,
+    },
+    messages: fitted.messages,
   };
 }
 
@@ -316,7 +387,7 @@ function explainRow(row: Element): void {
   // answer took 14.2 s, to match its Details (PR 8.1).
   let fakeTime = 0;
   const popup = openPopup(row, {
-    ...((chosen() === 'done' || chosen() === 'failed') && { now: () => fakeTime }),
+    ...(['done', 'failed', 'prompt', 'file'].includes(chosen()) && { now: () => fakeTime }),
     onClose: () => (status.textContent = 'Last event: closed'),
     onAsk: () => {
       const session = new ChatSession({
@@ -336,7 +407,12 @@ function explainRow(row: Element): void {
     case 'done':
       fakeTime = 14_200;
       popup.showExplanation(SAMPLE, MODEL);
-      popup.showTrace({ tasks: TASKS, timings: TIMINGS, reply: THINKING_REPLY });
+      popup.showTrace({
+        tasks: TASKS,
+        timings: TIMINGS,
+        reply: THINKING_REPLY,
+        roundTrips: demoRoundTrips(demoPrompt(row).messages),
+      });
       // The same line the content script logs for each click (PR 9.1).
       console.info(
         `[PR Explainer] explained in 14.2 s (${MODEL}, first text after 6.0 s, tasks: ` +
@@ -345,16 +421,23 @@ function explainRow(row: Element): void {
       break;
     case 'cached':
       popup.showExplanation(SAMPLE, MODEL, { elapsedMs: 14_200 });
-      popup.showTrace({ tasks: CACHED_TASKS });
+      popup.showTrace({ tasks: CACHED_TASKS, roundTrips: [] });
       break;
     case 'prompt':
+    case 'file': {
+      // Show prompt opens Details on the explanation's round trip (PR 9.2).
+      const { report, messages } = (chosen() === 'file' ? demoFilePrompt : demoPrompt)(row);
+      fakeTime = 14_200;
       popup.showExplanation(SAMPLE, MODEL);
-      popup.showPrompt(demoPrompt(row));
+      popup.showTrace({
+        tasks: TASKS,
+        timings: TIMINGS,
+        reply: THINKING_REPLY,
+        roundTrips: demoRoundTrips(messages),
+      });
+      popup.showPrompt(report);
       break;
-    case 'file':
-      popup.showExplanation(SAMPLE, MODEL);
-      popup.showPrompt(demoFilePrompt(row));
-      break;
+    }
     case 'slow':
       popup.showLoading(MODEL);
       setTimeout(() => {
@@ -399,6 +482,23 @@ function explainRow(row: Element): void {
           { ...worker('model', 'Wait for the model', 330, 30_000), status: 'failed' },
           page('show', 'Show answer', 30_330, 40),
         ],
+        // The explanation's round trip failed after 30 s (PR 9.2).
+        roundTrips: demoRoundTrips(demoPrompt(row).messages)
+          .filter((t) => t.cause === 'click' && t.purpose !== 'loaded window')
+          .map((t) =>
+            t.purpose === 'explanation'
+              ? {
+                  ...t,
+                  startMs: 330,
+                  durationMs: 30_000,
+                  status: 'failed' as const,
+                  bytesReceived: 0,
+                  error: 'Failed to fetch',
+                  reply: undefined,
+                  httpStatus: undefined,
+                }
+              : t,
+          ),
       });
       break;
     }

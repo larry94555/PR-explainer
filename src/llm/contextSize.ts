@@ -10,6 +10,7 @@
 // remembered: the request goes ahead with the fallback, and the next one
 // asks again.
 
+import type { RoundTripLog } from '../net/roundTrips';
 import type { Settings } from '../settings';
 import type { LlmClient } from './types';
 
@@ -28,27 +29,30 @@ export const PROMPT_MARGIN_TOKENS = 32;
 /**
  * The window for `settings`. `onLookup` is called when the answer is not
  * already known and the server is asked, so a click's trace (PR 9.1) can
- * show the lookup only when it ran.
+ * show the lookup only when it ran. That request is recorded in
+ * `roundTrips` (PR 9.2).
  */
 export type ContextSizer = (
   settings: Settings,
   signal?: AbortSignal,
   onLookup?: () => void,
+  roundTrips?: RoundTripLog,
 ) => Promise<number>;
 
-export function createContextSizer(createClient: (settings: Settings) => LlmClient): ContextSizer {
+export function createContextSizer(
+  createClient: (settings: Settings, options?: { roundTrips?: RoundTripLog }) => LlmClient,
+): ContextSizer {
   const known = new Map<string, number>();
-  return async (settings, signal, onLookup) => {
+  return async (settings, signal, onLookup, roundTrips) => {
     if (settings.contextTokens > 0) return settings.contextTokens;
     const key = `${settings.llmUrl} ${settings.model}`;
     const remembered = known.get(key);
     if (remembered !== undefined) return remembered;
     onLookup?.();
     try {
-      const { maxTokens, configuredTokens } = await createClient(settings).modelContext(
-        settings.model,
-        { signal },
-      );
+      const { maxTokens, configuredTokens } = await createClient(settings, {
+        roundTrips,
+      }).modelContext(settings.model, { signal });
       const size = Math.min(
         configuredTokens ?? AUTO_CONTEXT_TOKENS,
         maxTokens ?? Number.POSITIVE_INFINITY,

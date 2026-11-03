@@ -1,0 +1,251 @@
+// @vitest-environment node
+// PR 9.2: the service worker records each round trip to Ollama.
+import { OllamaClient } from '../src/llm/ollamaClient';
+import { chatReplyOf, createRoundTripLog, purposeOf } from '../src/net/roundTrips';
+
+const URL_CHAT = 'http://localhost:11434/api/chat';
+
+/** A clock the test moves by hand. */
+function clock(start = 1_000) {
+  let t = start;
+  return { now: () => t, advance: (ms: number) => void (t += ms) };
+}
+
+/** A response whose body arrives in `pieces`, each `stepMs` apart on `time`. */
+function streamed(pieces: string[], time: ReturnType<typeof clock>, stepMs = 100): Response {
+  const encoder = new TextEncoder();
+  let i = 0;
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      pull(controller) {
+        time.advance(stepMs);
+        if (i < pieces.length) controller.enqueue(encoder.encode(pieces[i++]!));
+        else controller.close();
+      },
+    }),
+  );
+}
+
+describe('round trip log (PR 9.2)', () => {
+  it('records a request with its endpoint, purpose, times, status and sizes', async () => {
+    const time = clock();
+    const log = createRoundTripLog('click', time.now);
+    time.advance(5);
+    const response = await log.record(
+      'http://localhost:11434/api/show',
+      { method: 'POST', body: '{"model":"m"}' },
+      async () => {
+        time.advance(20);
+        return new Response('{"model_info":{}}');
+      },
+    );
+    expect(log.list()[0]).toMatchObject({ status: 'running' });
+    expect(await response.text()).toBe('{"model_info":{}}');
+    expect(log.list()).toEqual([
+      {
+        target: 'ollama',
+        method: 'POST',
+        endpoint: 'localhost:11434/api/show',
+        purpose: 'context size',
+        cause: 'click',
+        startMs: 5,
+        durationMs: 20,
+        status: 'done',
+        httpStatus: 200,
+        bytesSent: 13,
+        bytesReceived: 17,
+      },
+    ]);
+  });
+
+  it('times the round trip until the whole reply was read', async () => {
+    const time = clock();
+    const log = createRoundTripLog('click', time.now);
+    const response = await log.record(URL_CHAT, { method: 'POST' }, async () =>
+      streamed(['{"message":{"content":"a"}}\n', '{"done":true}\n'], time),
+    );
+    await response.text();
+    // Two pieces and the end of the stream, 100 ms apart.
+    expect(log.list()[0]!.durationMs).toBe(300);
+  });
+
+  it("keeps a chat request's messages, and puts the streamed reply together from its pieces", async () => {
+    const time = clock();
+    const log = createRoundTripLog('click', time.now);
+    const body = JSON.stringify({
+      model: 'm',
+      messages: [
+        { role: 'system', content: 'Be brief.' },
+        { role: 'user', content: 'Explain x++' },
+      ],
+    });
+    const response = await log.record(URL_CHAT, { method: 'POST', body }, async () =>
+      // A line split across two pieces, and thinking in its own field.
+      streamed(
+        [
+          '{"message":{"thinking":"Hmm."}}\n{"message":{"con',
+          'tent":"<think>t</think>Adds"}}\n',
+          '{"message":{"content":" one."}}\n{"done":true}\n',
+        ],
+        time,
+      ),
+    );
+    await response.text();
+    expect(log.list()[0]).toMatchObject({
+      purpose: 'explanation',
+      messages: [
+        { role: 'system', content: 'Be brief.' },
+        { role: 'user', content: 'Explain x++' },
+      ],
+      reply: '<think>t</think>Adds one.',
+      thinking: 'Hmm.',
+      status: 'done',
+    });
+  });
+
+  it('keeps no messages or reply for other endpoints', async () => {
+    const log = createRoundTripLog('click');
+    const response = await log.record(
+      'http://localhost:11434/api/ps',
+      {},
+      async () => new Response('{"models":[]}'),
+    );
+    await response.text();
+    const [trip] = log.list();
+    expect(trip).not.toHaveProperty('messages');
+    expect(trip).not.toHaveProperty('reply');
+    expect(trip).toMatchObject({ method: 'GET', purpose: 'loaded window' });
+  });
+
+  it('records a request that could not connect as failed, with its error', async () => {
+    const log = createRoundTripLog('click');
+    await expect(
+      log.record(URL_CHAT, {}, async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    ).rejects.toThrow('Failed to fetch');
+    expect(log.list()[0]).toMatchObject({ status: 'failed', error: 'Failed to fetch' });
+    expect(log.list()[0]).not.toHaveProperty('httpStatus');
+  });
+
+  it('records an HTTP error as failed, with its status', async () => {
+    const log = createRoundTripLog('click');
+    const response = await log.record(
+      URL_CHAT,
+      {},
+      async () => new Response('{"error":"model not found"}', { status: 404 }),
+    );
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('{"error":"model not found"}');
+    expect(log.list()[0]).toMatchObject({ status: 'failed', httpStatus: 404, error: 'HTTP 404' });
+  });
+
+  it('records a cancelled request, before the answer and midway through the reply', async () => {
+    const log = createRoundTripLog('click');
+    const before = new AbortController();
+    before.abort();
+    await expect(
+      log.record(URL_CHAT, { signal: before.signal }, async () => {
+        throw new DOMException('aborted', 'AbortError');
+      }),
+    ).rejects.toThrow();
+    const time = clock();
+    const response = await log.record(URL_CHAT, {}, async () =>
+      streamed(['{"message":{"content":"a"}}\n', 'never read'], time),
+    );
+    const reader = response.body!.getReader();
+    await reader.read();
+    await reader.cancel();
+    expect(log.list().map((t) => t.status)).toEqual(['cancelled', 'cancelled']);
+    // What arrived before Stop is kept.
+    expect(log.list()[1]!.reply).toBe('a');
+  });
+
+  it('records a refused request', () => {
+    const log = createRoundTripLog('click');
+    log.refuse('https://example.com/api/chat', { method: 'POST' }, new Error('Refused'));
+    expect(log.list()[0]).toMatchObject({
+      endpoint: 'example.com/api/chat',
+      status: 'refused',
+      error: 'Refused',
+    });
+  });
+
+  it('ties each round trip to its cause, and times it from another log when asked', async () => {
+    const time = clock();
+    const warmup = createRoundTripLog('warmup', time.now);
+    await (await warmup.record(URL_CHAT, {}, async () => new Response('{}'))).text();
+    time.advance(400);
+    const click = createRoundTripLog('hover', time.now);
+    await (await click.record(URL_CHAT, {}, async () => new Response('{}'))).text();
+    expect(warmup.list(click.origin)[0]).toMatchObject({
+      cause: 'warmup',
+      purpose: 'load the model',
+      startMs: -400,
+    });
+    expect(click.list()[0]).toMatchObject({ cause: 'hover', purpose: 'explanation', startMs: 0 });
+  });
+
+  it('names why each endpoint is asked', () => {
+    expect(purposeOf('/api/show', 'click')).toBe('context size');
+    expect(purposeOf('/api/ps', 'click')).toBe('loaded window');
+    expect(purposeOf('/api/ps', 'warmup')).toBe('is the model loaded');
+    expect(purposeOf('/api/chat', 'click')).toBe('explanation');
+    expect(purposeOf('/api/chat', 'warmup')).toBe('load the model');
+    expect(purposeOf('/api/tags', 'click')).toBe('list models');
+    expect(purposeOf('/api/other', 'click')).toBe('/api/other');
+  });
+
+  it('reads a reply that is one JSON object, as well as a stream', () => {
+    expect(chatReplyOf('{"message":{"content":"All at once."},"done":true}')).toEqual({
+      reply: 'All at once.',
+      thinking: '',
+    });
+  });
+
+  it('records every request an OllamaClient makes, and the client still works', async () => {
+    const log = createRoundTripLog('click');
+    const fetch = vi.fn(async (url: string) =>
+      url.endsWith('/api/ps')
+        ? new Response(JSON.stringify({ models: [{ name: 'm:latest', context_length: 2048 }] }))
+        : new Response(
+            '{"message":{"content":"Hi"}}\n{"done":true,"done_reason":"stop","eval_count":1}\n',
+          ),
+    );
+    const client = new OllamaClient({ baseUrl: 'http://localhost:11434', fetch, roundTrips: log });
+    expect(await client.loadedContextTokens('m')).toBe(2048);
+    const stream = client.chatStream([{ role: 'user', content: 'Hello' }], { model: 'm' });
+    const pieces: string[] = [];
+    for await (const piece of stream) pieces.push(piece);
+    expect(pieces).toEqual(['Hi']);
+    expect(log.list().map((t) => [t.endpoint, t.purpose, t.status, t.reply])).toEqual([
+      ['localhost:11434/api/ps', 'loaded window', 'done', undefined],
+      ['localhost:11434/api/chat', 'explanation', 'done', 'Hi'],
+    ]);
+    expect(log.list()[1]!.messages).toEqual([{ role: 'user', content: 'Hello' }]);
+  });
+});
+
+describe('round trip log: a stream that stays open (PR 9.2)', () => {
+  it("ends the round trip at the stream's last line, as the client stops reading there", async () => {
+    const time = clock();
+    const log = createRoundTripLog('click', time.now);
+    const encoder = new TextEncoder();
+    const response = await log.record(
+      URL_CHAT,
+      {},
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode('{"message":{"content":"a"}}\n{"done":true}\n'));
+              // Never closed.
+            },
+          }),
+        ),
+    );
+    const reader = response.body!.getReader();
+    await reader.read();
+    expect(log.list()[0]).toMatchObject({ status: 'done', reply: 'a' });
+  });
+});

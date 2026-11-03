@@ -19,6 +19,10 @@ console.info('[PR Explainer] service worker started');
 // The model's context window, looked up once per model (src/llm/contextSize.ts).
 const contextTokens = createContextSizer(createLlmClient);
 
+// Loads the model when a PR's diffs open, before the first click (PR 8.3).
+// It loads it with the window the first click will ask for (PR 8.5).
+const warmup = createWarmup({ getSettings, createClient: createLlmClient, contextTokens });
+
 const explain = createExplainHandler({
   getSettings,
   createClient: createLlmClient,
@@ -27,11 +31,9 @@ const explain = createExplainHandler({
   // same line again answers at once (src/explain/explainCache.ts).
   cache: createExplainCache(chrome.storage.session),
   contextTokens,
+  // A click while the model is still loading lists the warm-up's round trips (PR 9.2).
+  warmupRoundTrips: () => warmup.inFlight(),
 });
-
-// Loads the model when a PR's diffs open, before the first click (PR 8.3).
-// It loads it with the window the first click will ask for (PR 8.5).
-const warmup = createWarmup({ getSettings, createClient: createLlmClient, contextTokens });
 chrome.tabs.onRemoved.addListener((tabId) => warmup.forgetTab(tabId));
 
 // Listeners must be added on the first run of the worker, before it goes idle,

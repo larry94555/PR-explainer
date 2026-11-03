@@ -13,6 +13,7 @@
 // ask for (PR 8.5, src/llm/numCtx.ts), since a different num_ctx would make
 // Ollama load it again on that click.
 
+import { createRoundTripLog, type RoundTripLog } from '../net/roundTrips';
 import type { Settings } from '../settings';
 import type { ContextSizer } from './contextSize';
 import { startingNumCtx } from './numCtx';
@@ -40,7 +41,10 @@ export interface WarmupResult {
 
 export interface WarmupDeps {
   getSettings(): Promise<Settings>;
-  createClient(settings: Pick<Settings, 'llmUrl'>): LlmClient;
+  createClient(
+    settings: Pick<Settings, 'llmUrl'>,
+    options?: { roundTrips?: RoundTripLog },
+  ): LlmClient;
   /**
    * The automatic context size (src/llm/contextSize.ts). Without it, the
    * model is loaded with the server's default window unless one is set.
@@ -55,6 +59,11 @@ export interface Warmup {
   warmUp(tabId: number | undefined, payload: WarmupPayload): Promise<WarmupResult>;
   /** Forgets a closed tab. */
   forgetTab(tabId: number): void;
+  /**
+   * The round trips of each warm-up still running (PR 9.2), so a click that
+   * comes while the model loads can show what it waited behind.
+   */
+  inFlight(): RoundTripLog[];
 }
 
 /** Whether `loaded` (names from /api/ps) has `model`; "llama3" is listed as "llama3:latest". */
@@ -69,11 +78,12 @@ export function createWarmup(deps: WarmupDeps): Warmup {
   // Warm-ups in progress, by server and model, so two tabs opening PRs at the
   // same time share one load.
   const running = new Map<string, Promise<WarmupOutcome>>();
+  const logs = new Set<RoundTripLog>();
 
-  async function load(settings: Settings): Promise<WarmupOutcome> {
+  async function load(settings: Settings, roundTrips: RoundTripLog): Promise<WarmupOutcome> {
     const { model, keepAliveMinutes } = settings;
     try {
-      const client = deps.createClient(settings);
+      const client = deps.createClient(settings, { roundTrips });
       if (isModelLoaded(await client.loadedModels(), model)) {
         log(`[PR Explainer] warm-up: ${model} is already loaded`);
         return 'already-loaded';
@@ -81,7 +91,8 @@ export function createWarmup(deps: WarmupDeps): Warmup {
       const window =
         settings.contextTokens > 0
           ? settings.contextTokens
-          : deps.contextTokens && startingNumCtx(await deps.contextTokens(settings));
+          : deps.contextTokens &&
+            startingNumCtx(await deps.contextTokens(settings, undefined, undefined, roundTrips));
       const started = Date.now();
       await client.loadModel(model, {
         keepAliveMinutes,
@@ -116,11 +127,16 @@ export function createWarmup(deps: WarmupDeps): Warmup {
     const key = `${settings.llmUrl} ${settings.model}`;
     let loading = running.get(key);
     if (!loading) {
-      loading = load(settings).finally(() => running.delete(key));
+      const roundTrips = createRoundTripLog('warmup');
+      logs.add(roundTrips);
+      loading = load(settings, roundTrips).finally(() => {
+        running.delete(key);
+        logs.delete(roundTrips);
+      });
       running.set(key, loading);
     }
     return { outcome: await loading };
   }
 
-  return { warmUp, forgetTab: (tabId) => void seen.delete(tabId) };
+  return { warmUp, forgetTab: (tabId) => void seen.delete(tabId), inFlight: () => [...logs] };
 }

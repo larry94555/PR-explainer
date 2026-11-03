@@ -197,7 +197,7 @@ export function createPrefetcher(deps: PrefetchDeps): Prefetcher {
         run.chunks.push(chunk);
         run.listener?.(chunk);
       },
-      { fresh: false, ...(request.code && { code: request.code }) },
+      { fresh: false, cause: 'hover', ...(request.code && { code: request.code }) },
     );
     current = run;
     deps.onEvent?.({ type: 'started', key: run.key });

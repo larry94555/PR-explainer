@@ -48,7 +48,10 @@ describe('warm-up (PR 8.3)', () => {
   it('loads the model with the Keep model loaded time when it is not loaded', async () => {
     const { warmup, client, createClient, log } = setup({ settings: { keepAliveMinutes: 45 } });
     await expect(warmup.warmUp(1, PR)).resolves.toEqual({ outcome: 'loaded' });
-    expect(createClient).toHaveBeenCalledWith(expect.objectContaining({ llmUrl: SETTINGS.llmUrl }));
+    expect(createClient).toHaveBeenCalledWith(
+      expect.objectContaining({ llmUrl: SETTINGS.llmUrl }),
+      { roundTrips: expect.objectContaining({ cause: 'warmup' }) },
+    );
     expect(client.loadModel).toHaveBeenCalledWith('qwen2.5-coder:7b', { keepAliveMinutes: 45 });
     expect(log).toHaveBeenCalledWith(
       expect.stringMatching(/^\[PR Explainer\] warm-up: loaded qwen2\.5-coder:7b in \d+\.\d s$/),
@@ -186,5 +189,25 @@ describe('warm-up (PR 8.3)', () => {
     await warmup.warmUp(undefined, PR);
     await warmup.warmUp(undefined, PR);
     expect(client.loadedModels).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('warm-up round trips (PR 9.2)', () => {
+  it('lists the log of a warm-up only while it is still running', async () => {
+    let finish!: () => void;
+    const { warmup, createClient } = setup({
+      load: () => new Promise<void>((resolve) => (finish = resolve)),
+    });
+    const running = warmup.warmUp(1, PR);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(warmup.inFlight()).toHaveLength(1);
+    expect(warmup.inFlight()[0]!.cause).toBe('warmup');
+    // The client records into that same log.
+    expect((vi.mocked(createClient).mock.calls[0] as unknown[])[1]).toEqual({
+      roundTrips: warmup.inFlight()[0],
+    });
+    finish();
+    await running;
+    expect(warmup.inFlight()).toEqual([]);
   });
 });

@@ -32,6 +32,7 @@ import {
   type RunningModel,
 } from './types';
 import { createLlmFetch, type FetchLike } from '../net/llmFetch';
+import type { RoundTripLog } from '../net/roundTrips';
 
 export type { FetchLike } from '../net/llmFetch';
 
@@ -40,6 +41,8 @@ export interface OllamaClientOptions {
   baseUrl: string;
   /** Defaults to the global fetch. Tests pass a fake. Either way it is guarded. */
   fetch?: FetchLike;
+  /** Where to record each request (PR 9.2). */
+  roundTrips?: RoundTripLog;
 }
 
 export class OllamaClient implements LlmClient {
@@ -48,7 +51,7 @@ export class OllamaClient implements LlmClient {
 
   constructor(options: OllamaClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
-    this.fetch = createLlmFetch(this.baseUrl, options.fetch);
+    this.fetch = createLlmFetch(this.baseUrl, options.fetch, options.roundTrips);
   }
 
   async listModels(options: { signal?: AbortSignal } = {}): Promise<ModelInfo[]> {

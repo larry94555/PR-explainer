@@ -38,12 +38,13 @@ export interface ClickHandlerDeps {
    * is in the new file, so its enclosing block can be read from the full
    * file (PR 6.3); it is left out for removed lines. The page's tasks for
    * the request (reading the PR description, fetching the file, sending)
-   * are recorded in `trace` (PR 9.1).
+   * are recorded in `trace` (PR 9.1). `cause` is "hover" for Explain on
+   * hover (PR 8.7), so its round trips are not counted against a click (PR 9.2).
    */
   explain(
     context: string,
     onChunk: (text: string) => void,
-    options: { fresh: boolean; code?: CodeSpan; trace?: ClickTrace },
+    options: { fresh: boolean; code?: CodeSpan; trace?: ClickTrace; cause?: 'click' | 'hover' },
   ): ExplainStream;
   /**
    * False while the user has turned click-to-explain off with the toolbar
@@ -333,6 +334,7 @@ export function explainInPopup(
         // A failed answer shows its trace too, so a slow failure can be read.
         popup.showTrace({
           tasks,
+          roundTrips: requestTrace.roundTrips(),
           reply,
           ...(result.status === 'done' && result.timings && { timings: result.timings }),
         });

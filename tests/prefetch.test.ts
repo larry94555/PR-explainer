@@ -130,6 +130,8 @@ describe('explain on hover', () => {
     expect(env.streams[0]!.text).toBe('context of a');
     expect(env.streams[0]!.options).toEqual({
       fresh: false,
+      // Its round trips are marked as Explain on hover's (PR 9.2).
+      cause: 'hover',
       code: { filePath: 'src/a.ts', startLine: 1, endLine: 1, text: 'a' },
     });
     expect(env.prefetcher.running()).toBe('a');

@@ -141,6 +141,38 @@ describe('createClickTrace', () => {
     ]);
   });
 
+  it("lines up the service worker's round trips like its tasks, with the page's own (PR 9.2)", () => {
+    const time = fakeClock();
+    const trace = createClickTrace(time.now);
+    const trip = (startMs: number, target: 'github' | 'ollama') => ({
+      target,
+      method: 'GET',
+      endpoint: 'x',
+      purpose: 'p',
+      cause: 'click' as const,
+      startMs,
+      durationMs: 5,
+      status: 'done' as const,
+      bytesSent: 0,
+      bytesReceived: 0,
+    });
+    trace.addRoundTrips([trip(-40, 'github'), trip(3, 'github')]);
+    time.advance(100);
+    trace.markSent();
+    trace.addWorker({
+      tasks: [],
+      totalMs: 50,
+      roundTrips: [trip(-20, 'ollama'), trip(10, 'ollama')],
+    });
+    expect(trace.roundTrips().map((t) => [t.target, t.startMs])).toEqual([
+      ['github', -40],
+      ['github', 3],
+      // A warm-up that started before the request keeps its earlier start.
+      ['ollama', 80],
+      ['ollama', 110],
+    ]);
+  });
+
   it('adds nothing when the result carries no trace', () => {
     const trace = createClickTrace(fakeClock().now);
     trace.addWorker(undefined);
