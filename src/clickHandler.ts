@@ -30,6 +30,7 @@ import type { ExplainStream } from './messaging/client';
 import type { Popup, PopupAnchor, PopupOptions } from './popup/popup';
 import { createClickTrace, type ClickTrace } from './trace/clickTrace';
 import type { TraceTask } from './trace/types';
+import type { DebugLogPayload } from './debug/types';
 
 export interface ClickHandlerDeps {
   /**
@@ -110,6 +111,8 @@ export interface ExplainTiming {
   tasks?: TraceTask[];
   /** The whole reply as it streamed in, to estimate the thinking share. */
   reply?: string;
+  /** What the debug log needs from the click (PR 9.3). */
+  debug?: Omit<DebugLogPayload, 'tasks'>;
 }
 
 // Elements GitHub (or the browser) already gives a meaning to a click on.
@@ -346,6 +349,12 @@ export function explainInPopup(
           ...(result.status === 'done' && result.timings ? { timings: result.timings } : {}),
           tasks,
           ...(reply && { reply }),
+          debug: {
+            group: requestTrace.id,
+            at: requestTrace.startedAt,
+            where: whereOf(subject),
+            roundTrips: requestTrace.roundTrips(),
+          },
         });
       },
       (error: unknown) => {
@@ -358,4 +367,9 @@ export function explainInPopup(
     return request;
   };
   let stream = ask(false);
+}
+
+/** "src/app.ts:12", or "src/app.ts:12-18" for a block, for the debug log. */
+export function whereOf({ filePath, startLine, endLine }: ChatSubject): string {
+  return `${filePath}:${startLine}${endLine !== undefined && endLine !== startLine ? `-${endLine}` : ''}`;
 }

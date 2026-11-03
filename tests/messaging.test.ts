@@ -5,6 +5,7 @@ import type {
   MessageSenderLike,
 } from '../src/messaging/protocol';
 import { MessageRouter } from '../src/messaging/router';
+import { createDebugLog, pageEntries } from '../src/debug/debugLog';
 
 const EXTENSION_ID = 'our-extension-id';
 
@@ -53,6 +54,63 @@ describe('messaging', () => {
       outcome: 'loaded',
     });
     expect(warmup).toHaveBeenCalledWith({ pr: 'o/r#1' }, { id: EXTENSION_ID, tab: { id: 42 } });
+  });
+
+  it("delivers the content script's round trips and trace to the debug log (PR 9.3)", async () => {
+    const data: Record<string, unknown> = {};
+    const log = createDebugLog({
+      storage: {
+        get: async () => ({ ...data }),
+        set: async (items) => void Object.assign(data, items),
+      },
+      isOn: async () => true,
+    });
+    const runtime = fakeRuntime({ id: EXTENSION_ID, tab: { id: 3 } });
+    new MessageRouter()
+      .on('debugLogAdd', async (payload) => ({
+        added: (await log.add(pageEntries(payload))).length,
+      }))
+      .on('debugLogClear', async () => {
+        await log.clear();
+        return { cleared: true as const };
+      })
+      .listen(runtime);
+    const trip = {
+      target: 'github' as const,
+      method: 'GET',
+      endpoint: 'github.com/o/r/pull/1',
+      purpose: 'PR description',
+      cause: 'page' as const,
+      startMs: -50,
+      durationMs: 80,
+      status: 'done' as const,
+      bytesSent: 0,
+      bytesReceived: 900,
+    };
+    const tasks = [
+      {
+        key: 'find-code',
+        label: 'Find the code',
+        source: 'page' as const,
+        startMs: 0,
+        durationMs: 2,
+      },
+    ];
+    await expect(
+      sendRequest(
+        'debugLogAdd',
+        { group: 'click-1', at: 10_000, where: 'a.ts:4', roundTrips: [trip], tasks },
+        { runtime },
+      ),
+    ).resolves.toEqual({ added: 2 });
+    expect(await log.read()).toMatchObject([
+      { id: 1, kind: 'trace', group: 'click-1', where: 'a.ts:4', tasks },
+      { id: 2, kind: 'round-trip', group: 'click-1', at: 9_950, trip },
+    ]);
+    await expect(sendRequest('debugLogClear', undefined, { runtime })).resolves.toEqual({
+      cleared: true,
+    });
+    expect(await log.read()).toEqual([]);
   });
 
   it('waits for async handlers', async () => {

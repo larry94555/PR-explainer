@@ -1,4 +1,6 @@
 import { createChatHandler, isChatMessages } from '../src/chat/chatHandler';
+import { createLlmClient } from '../src/llm/createClient';
+import type { RoundTrip } from '../src/trace/types';
 import {
   LlmError,
   type ChatMessage,
@@ -130,5 +132,30 @@ describe('chat handler', () => {
     });
     await handler({ messages: MESSAGES });
     expect(chatStream.mock.calls[0]![1].contextTokens).toBe(2048);
+  });
+
+  it('records its round trips for the debug log, as a chat group (PR 9.3)', async () => {
+    const ended: { trip: RoundTrip; cause: string; group: string }[] = [];
+    const reply = JSON.stringify({ message: { content: 'Use fake timers.' } }) + '\n';
+    const done = JSON.stringify({ done: true, model: SETTINGS.model, done_reason: 'stop' }) + '\n';
+    const fetch = vi.fn(async () => new Response(reply + done));
+    const handler = createChatHandler({
+      getSettings: async () => SETTINGS,
+      createClient: (settings, options) => createLlmClient(settings, { fetch, ...options }),
+      platform: 'other',
+      onRoundTrip: (trip, log) => ended.push({ trip, cause: log.cause, group: log.group }),
+    });
+    const result = await handler({ messages: MESSAGES });
+    expect(result).toMatchObject({ status: 'done', answer: 'Use fake timers.' });
+    expect(ended).toHaveLength(1);
+    expect(ended[0]).toMatchObject({
+      cause: 'chat',
+      trip: {
+        purpose: 'chat answer',
+        cause: 'chat',
+        messages: MESSAGES,
+        reply: 'Use fake timers.',
+      },
+    });
   });
 });

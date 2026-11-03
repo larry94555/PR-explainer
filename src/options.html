@@ -103,17 +103,33 @@
           <p class="error" data-error-for="explainOnHover" role="alert"></p>
         </div>
 
-        <div class="field">
-          <label class="check">
-            <input id="showPrompt" name="showPrompt" type="checkbox" />
-            Show prompt (debug)
-          </label>
-          <p class="hint">
-            Opens the popup's Details on the explanation's round trip, with the prompt sent to the
-            model and its reply.
-          </p>
-          <p class="error" data-error-for="showPrompt" role="alert"></p>
-        </div>
+        <fieldset id="debug" class="debug">
+          <legend>Debug</legend>
+          <div class="field">
+            <label class="check">
+              <input id="showPrompt" name="showPrompt" type="checkbox" />
+              Show prompt
+            </label>
+            <p class="hint">
+              Opens the popup's Details on the explanation's round trip, with the prompt sent to the
+              model and its reply.
+            </p>
+            <p class="error" data-error-for="showPrompt" role="alert"></p>
+          </div>
+
+          <div class="field">
+            <label class="check">
+              <input id="debugWindow" name="debugWindow" type="checkbox" />
+              Debug window
+            </label>
+            <p class="hint">
+              Keeps every request to GitHub and to the model (prompt, reply and time) in a log for
+              the debug window. The log is kept in memory on this computer, holds the last 200
+              requests, and is cleared when Chrome closes or when you turn this off.
+            </p>
+            <p class="error" data-error-for="debugWindow" role="alert"></p>
+          </div>
+        </fieldset>
 
         <div class="row">
           <button id="save" type="submit">Save</button>

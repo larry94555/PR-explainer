@@ -13,7 +13,7 @@
 // ask for (PR 8.5, src/llm/numCtx.ts), since a different num_ctx would make
 // Ollama load it again on that click.
 
-import { createRoundTripLog, type RoundTripLog } from '../net/roundTrips';
+import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
 import type { Settings } from '../settings';
 import type { ContextSizer } from './contextSize';
 import { startingNumCtx } from './numCtx';
@@ -52,6 +52,8 @@ export interface WarmupDeps {
   contextTokens?: ContextSizer;
   /** Where to say what happened. Defaults to console.info. */
   log?: (message: string) => void;
+  /** Gets each round trip as it ends, for the debug log (PR 9.3). */
+  onRoundTrip?: RoundTripSink;
 }
 
 export interface Warmup {
@@ -127,7 +129,7 @@ export function createWarmup(deps: WarmupDeps): Warmup {
     const key = `${settings.llmUrl} ${settings.model}`;
     let loading = running.get(key);
     if (!loading) {
-      const roundTrips = createRoundTripLog('warmup');
+      const roundTrips = createRoundTripLog('warmup', Date.now, { onEnd: deps.onRoundTrip });
       logs.add(roundTrips);
       loading = load(settings, roundTrips).finally(() => {
         running.delete(key);

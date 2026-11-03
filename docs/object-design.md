@@ -154,6 +154,7 @@ Every caller depends on the `LlmClient` interface and gets an instance from `cre
 | `keepAliveMinutes` | `30` | How long Ollama keeps the model loaded |
 | `explainOnHover` | `false` | Prefetch on hover |
 | `showPrompt` | `false` | Show the prompt under each explanation |
+| `debugWindow` | `false` | Keep every round trip in the debug log (PR 9.3) |
 
 Each field is stored under its own key (`settings.<field>`) and validated on its own, so concurrent saves of different fields are safe.
 
@@ -167,6 +168,9 @@ Defined in `src/messaging/protocol.ts`, as types only.
 | `warmup` request | content → worker | `WarmupPayload` → `WarmupResult` (`repeat`, `off`, `no-model`, `already-loaded`, `loaded`, `failed`) |
 | `pr-explainer:explain` port | content ↔ worker | `start` + `ExplainPayload` → any number of `chunk`, then one `result` or `error` |
 | `pr-explainer:chat` port | content ↔ worker | `start` + `ChatPayload` (the full message list) → `chunk`s, then `result` or `error` |
+| `debugLogAdd` request | content → worker | `DebugLogPayload` (a click's GitHub round trips and trace) → `{ added }`; kept only with **Debug window** on |
+| `debugLogClear` request | extension page → worker | empties the debug log → `{ cleared: true }` |
+| `pr-explainer:debugLog` port | worker → extension page | each new `DebugEntry` as `{ type: 'entry' }`, and `{ type: 'cleared' }`; GitHub pages cannot connect |
 
 Every one-shot message carries `source: 'pr-explainer'` so the worker ignores anything else. Disconnecting a port aborts its request.
 

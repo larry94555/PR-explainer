@@ -7,7 +7,9 @@
 //
 // One log is made per request from the content script (an explanation, or a
 // warm-up), so its round trips are tied to the click or cause that made
-// them. Logs live only as long as that request: nothing is stored.
+// them. Logs live only as long as that request: nothing is stored here. With
+// the Debug window setting on, each round trip is also handed, as it ends, to
+// the debug log (src/debug/debugLog.ts, PR 9.3) through `onEnd`.
 //
 // Not imported by the content script, which records its GitHub round trips
 // in src/net/githubFetch.ts with the same shape (src/trace/types.ts): the two
@@ -25,7 +27,8 @@ export function purposeOf(path: string, cause: RoundTripCause): string {
     case '/api/ps':
       return cause === 'warmup' ? 'is the model loaded' : 'loaded window';
     case '/api/chat':
-      return cause === 'warmup' ? 'load the model' : 'explanation';
+      if (cause === 'warmup') return 'load the model';
+      return cause === 'chat' ? 'chat answer' : 'explanation';
     case '/api/tags':
       return 'list models';
     default:
@@ -42,8 +45,19 @@ interface Entry {
   body?: string;
 }
 
+/** Called with each round trip as it ends (PR 9.3), timed from the log's origin. */
+export type RoundTripSink = (trip: RoundTrip, log: RoundTripLog) => void;
+
+export interface RoundTripLogOptions {
+  /** Ties the round trips to one click or cause; a new id when left out. */
+  group?: string;
+  onEnd?: RoundTripSink;
+}
+
 export interface RoundTripLog {
   readonly cause: RoundTripCause;
+  /** Ties this log's round trips together in the debug log (PR 9.3). */
+  readonly group: string;
   /** When the log was made, from its clock. */
   readonly origin: number;
   /** Sends `url` with `send` and records it. */
@@ -138,9 +152,15 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** A new id for a group of round trips. */
+export function newGroupId(): string {
+  return crypto.randomUUID();
+}
+
 export function createRoundTripLog(
   cause: RoundTripCause,
   now: () => number = Date.now,
+  { group = newGroupId(), onEnd }: RoundTripLogOptions = {},
 ): RoundTripLog {
   const origin = now();
   const entries: Entry[] = [];
@@ -179,6 +199,14 @@ export function createRoundTripLog(
       const { reply, thinking } = chatReplyOf(entry.body);
       if (reply) entry.trip.reply = reply;
       if (thinking) entry.trip.thinking = thinking;
+    }
+    if (onEnd) {
+      try {
+        // `log` is made below; a round trip can only end after that.
+        onEnd({ ...entry.trip, startMs: entry.startedAt - origin }, log);
+      } catch {
+        // The debug log must never break a request.
+      }
     }
   };
 
@@ -233,8 +261,9 @@ export function createRoundTripLog(
     });
   };
 
-  return {
+  const log: RoundTripLog = {
     cause,
+    group,
     origin,
     async record(url, init, send) {
       const entry = begin(url, init);
@@ -259,4 +288,5 @@ export function createRoundTripLog(
       }));
     },
   };
+  return log;
 }

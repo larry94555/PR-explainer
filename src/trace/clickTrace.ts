@@ -16,6 +16,10 @@
 import type { RoundTrip, TraceTask, WorkerTrace } from './types';
 
 export interface ClickTrace {
+  /** Names this click in the debug log (PR 9.3), shared with its request to the service worker. */
+  readonly id: string;
+  /** When the click came (Date.now()). */
+  readonly startedAt: number;
   /** Milliseconds since the trace started (the click). */
   now(): number;
   /** Starts a task on the page; call the returned function when it ends. */
@@ -43,8 +47,12 @@ export interface ClickTrace {
   roundTrips(): RoundTrip[];
 }
 
-export function createClickTrace(clock: () => number = () => performance.now()): ClickTrace {
+export function createClickTrace(
+  clock: () => number = () => performance.now(),
+  wallClock: () => number = Date.now,
+): ClickTrace {
   const origin = clock();
+  const startedAt = wallClock();
   const now = () => clock() - origin;
   const list: TraceTask[] = [];
   const trips: RoundTrip[] = [];
@@ -66,6 +74,8 @@ export function createClickTrace(clock: () => number = () => performance.now()):
   };
 
   return {
+    id: crypto.randomUUID(),
+    startedAt,
     now,
     start,
     time(key, label, work) {

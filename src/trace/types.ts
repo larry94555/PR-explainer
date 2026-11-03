@@ -42,8 +42,9 @@ export type RoundTripTarget = 'github' | 'ollama';
  * - page: read when the page opened, still running when the click came.
  * - hover: Explain on hover (PR 8.7) asked first, and the click joined it.
  * - warmup: the model was still loading for the PR (PR 8.3).
+ * - chat: a question in the chat panel (recorded for the debug log, PR 9.3).
  */
-export type RoundTripCause = 'click' | 'page' | 'hover' | 'warmup';
+export type RoundTripCause = 'click' | 'page' | 'hover' | 'warmup' | 'chat';
 
 export type RoundTripStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'refused';
 

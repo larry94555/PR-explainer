@@ -47,6 +47,12 @@ export interface Settings {
   explainOnHover: boolean;
   /** Debug option: show the prompt sent to the model under each explanation. */
   showPrompt: boolean;
+  /**
+   * Debug option (PR 9.3): keep every round trip to GitHub and the LLM, with
+   * its prompt, reply and time, in a log the debug window reads
+   * (src/debug/debugLog.ts). Off by default; turning it off clears the log.
+   */
+  debugWindow: boolean;
 }
 
 export type SettingsField = keyof Settings;
@@ -60,6 +66,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   keepAliveMinutes: 30,
   explainOnHover: false,
   showPrompt: false,
+  debugWindow: false,
 });
 
 /** The chrome.storage key that holds one field, for example "settings.model". */
@@ -142,6 +149,8 @@ function checkField(field: SettingsField, value: unknown): string | null {
       return typeof value === 'boolean' ? null : 'Explain on hover must be on or off.';
     case 'showPrompt':
       return typeof value === 'boolean' ? null : 'Show prompt must be on or off.';
+    case 'debugWindow':
+      return typeof value === 'boolean' ? null : 'Debug window must be on or off.';
   }
 }
 

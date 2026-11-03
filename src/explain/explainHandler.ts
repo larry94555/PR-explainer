@@ -46,7 +46,7 @@
 
 import { FALLBACK_CONTEXT_TOKENS, promptBudget, type ContextSizer } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
-import { createRoundTripLog, type RoundTripLog } from '../net/roundTrips';
+import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
 import { chooseNumCtx } from '../llm/numCtx';
 import type { ChatMessage, LlmClient, LlmTimings } from '../llm/types';
 import type { Settings } from '../settings';
@@ -73,6 +73,8 @@ export interface ExplainPayload {
   fileContext?: FileContext;
   /** Why it was asked: a click (the default), or Explain on hover (PR 8.7). */
   cause?: 'click' | 'hover';
+  /** Groups this request's round trips with the click's in the debug log (PR 9.3). */
+  debugId?: string;
 }
 
 /** The most file lines accepted, so a bad message cannot make a huge prompt. */
@@ -176,6 +178,8 @@ export interface ExplainDeps {
   contextTokens?: ContextSizer;
   /** The round trips of warm-ups still loading the model (src/llm/warmup.ts). */
   warmupRoundTrips?: () => RoundTripLog[];
+  /** Gets each round trip as it ends, for the debug log (PR 9.3). */
+  onRoundTrip?: RoundTripSink;
 }
 
 /** The context window when no ContextSizer is given. */
@@ -256,7 +260,10 @@ export function createExplainHandler(deps: ExplainDeps) {
     }
     const now = deps.now ?? Date.now;
     const tasks = createTaskRecorder(now);
-    const roundTrips = createRoundTripLog(payload.cause === 'hover' ? 'hover' : 'click', now);
+    const roundTrips = createRoundTripLog(payload.cause === 'hover' ? 'hover' : 'click', now, {
+      ...(typeof payload.debugId === 'string' && { group: payload.debugId.slice(0, 100) }),
+      onEnd: deps.onRoundTrip,
+    });
     // A warm-up still running is what this request may wait behind.
     const warmups = deps.warmupRoundTrips?.() ?? [];
     const trace = (): WorkerTrace => ({

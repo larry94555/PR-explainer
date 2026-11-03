@@ -20,6 +20,7 @@ const SAVED: Settings = {
   keepAliveMinutes: 30,
   explainOnHover: false,
   showPrompt: false,
+  debugWindow: false,
 };
 
 const MODELS: ModelInfo[] = [{ name: 'llama3.2:3b' }, { name: 'qwen2.5-coder:7b' }];
@@ -124,6 +125,28 @@ describe('options page', () => {
       expect(await deps.getSettings()).toMatchObject({ keepAliveMinutes: 30 });
     },
   );
+
+  it('loads and saves Debug window, in the Debug section with Show prompt (PR 9.3)', async () => {
+    const deps = fakeDeps(fakeClient());
+    let page = await initOptionsPage(document, deps);
+    const box = $<HTMLInputElement>('debugWindow');
+    expect(box.checked).toBe(false);
+    const section = box.closest('fieldset');
+    expect(section?.querySelector('legend')?.textContent).toBe('Debug');
+    expect(section?.contains($('showPrompt'))).toBe(true);
+
+    box.checked = true;
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ debugWindow: true });
+
+    // Opening the page again shows it ticked.
+    document.documentElement.innerHTML = html;
+    page = await initOptionsPage(document, deps);
+    expect($<HTMLInputElement>('debugWindow').checked).toBe(true);
+    $<HTMLInputElement>('debugWindow').checked = false;
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ debugWindow: false });
+  });
 
   it('loads and saves a set context size and Show prompt (PR 6.2)', async () => {
     const deps = fakeDeps(fakeClient());
@@ -282,6 +305,7 @@ describe('options page', () => {
       keepAliveMinutes: 30,
       explainOnHover: false,
       showPrompt: false,
+      debugWindow: false,
     });
     expect(text('save-status')).toBe('Saved.');
     expect(await deps.getSettings()).toMatchObject({ model: 'llama3.2:3b' });

@@ -6,6 +6,7 @@
 // cannot load chunks; see src/content.ts).
 
 import type { ChatPayload, ChatResult } from '../chat/chatHandler';
+import type { DebugLogPayload } from '../debug/types';
 import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
 import type { WarmupPayload, WarmupResult } from '../llm/warmup';
 
@@ -15,6 +16,10 @@ export interface RequestMap {
   ping: { payload: undefined; result: { receivedAt: number } };
   // Loads the model ahead of the first click on a PR's diffs (PR 8.3).
   warmup: { payload: WarmupPayload; result: WarmupResult };
+  // A click's GitHub round trips and trace, for the debug log (PR 9.3).
+  debugLogAdd: { payload: DebugLogPayload; result: { added: number } };
+  // Empties the debug log (the debug window's Clear button, PR 9.4).
+  debugLogClear: { payload: undefined; result: { cleared: true } };
 }
 
 export type RequestType = keyof RequestMap;
@@ -44,6 +49,8 @@ export interface MessageSenderLike {
   id?: string;
   /** The tab a content script message came from. */
   tab?: { id?: number };
+  /** The page that sent it, such as an extension page's chrome-extension:// address. */
+  url?: string;
 }
 
 export type MessageListener = (

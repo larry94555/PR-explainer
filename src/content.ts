@@ -186,7 +186,10 @@ const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
     if (trace && clickAt !== undefined) trace.addRoundTrips(githubTrips.since(clickAt));
     trace?.markSent();
     const sent = trace?.start('send', 'Send the request');
-    const stream = openExplainStream({ context, pr, fresh, prInfo, fileContext, cause }, onChunk);
+    const stream = openExplainStream(
+      { context, pr, fresh, prInfo, fileContext, cause, ...(trace && { debugId: trace.id }) },
+      onChunk,
+    );
     sent?.();
     return stream;
   });
@@ -249,7 +252,18 @@ const explainDeps: ClickHandlerDeps = {
       : undefined,
   // Every build logs how long each explanation took, to track the local
   // model's latency.
-  onTiming: ({ elapsedMs, status, model, firstChunkMs, cached, timings, tasks, reply }) => {
+  onTiming: ({ elapsedMs, status, model, firstChunkMs, cached, timings, tasks, reply, debug }) => {
+    // The click's GitHub round trips and trace join the debug log (PR 9.3).
+    // The service worker keeps them only when the Debug window setting is on.
+    if (debug && tasks?.length) {
+      sendRequest('debugLogAdd', {
+        ...debug,
+        roundTrips: debug.roundTrips.filter((trip) => trip.target === 'github'),
+        tasks,
+      }).catch(() => {
+        // Only the debug log misses it.
+      });
+    }
     const verb = { done: 'explained', failed: 'failed', stopped: 'stopped' }[status];
     // Every task, as the popup's Details shows it (PR 9.1).
     const waterfall = tasks?.length ? buildWaterfall(tasks, timings, reply) : undefined;

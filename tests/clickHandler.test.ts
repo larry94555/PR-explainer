@@ -119,6 +119,8 @@ function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => b
   const timings: ExplainTiming[] = [];
   // The click's tasks and reply (PR 9.1), kept apart so the timing checks stay short.
   const traced: Pick<ExplainTiming, 'tasks' | 'reply'>[] = [];
+  // What each answer hands to the debug log (PR 9.3).
+  const debugs: ExplainTiming['debug'][] = [];
   const popups: ReturnType<typeof fakePopup>[] = [];
   const stops: Array<ReturnType<typeof vi.fn>> = [];
   const deps: ClickHandlerDeps = {
@@ -137,9 +139,10 @@ function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => b
       popups.push(popup);
       return popup;
     },
-    onTiming: ({ tasks, reply, ...timing }) => {
+    onTiming: ({ tasks, reply, debug, ...timing }) => {
       timings.push(timing);
       traced.push({ tasks, reply });
+      debugs.push(debug);
     },
   };
   const handler = createClickHandler(deps);
@@ -151,6 +154,7 @@ function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => b
     stops,
     timings,
     traced,
+    debugs,
     cleanup: () => document.removeEventListener('click', handler),
   };
 }
@@ -300,6 +304,36 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(shown!.tasks.find((t) => t.key === 'model')).toMatchObject({ firstChunkMs: 100 });
     // The console gets the same tasks and the reply.
     expect(env.traced[0]).toEqual({ tasks: shown!.tasks, reply: shown!.reply });
+  });
+
+  it("hands the debug log the click's id, time, place and round trips (PR 9.3)", async () => {
+    env = setup();
+    const trip = {
+      target: 'github' as const,
+      method: 'GET',
+      endpoint: 'github.com/o/r/raw/main/a.ts',
+      purpose: 'file at head',
+      cause: 'click' as const,
+      startMs: 2,
+      durationMs: 30,
+      status: 'done' as const,
+      bytesSent: 0,
+      bytesReceived: 100,
+    };
+    let sentId: string | undefined;
+    vi.mocked(env.deps.explain).mockImplementationOnce((_context, _onChunk, { trace }) => {
+      sentId = trace!.id;
+      trace!.addRoundTrips([trip]);
+      return { result: Promise.resolve(DONE), stop: vi.fn() };
+    });
+    const before = Date.now();
+    click(code('R44'));
+    await flush();
+    const [debug] = env.debugs;
+    expect(debug).toMatchObject({ group: sentId, roundTrips: [trip] });
+    expect(debug!.where).toMatch(/:44$/);
+    expect(debug!.at).toBeGreaterThanOrEqual(before);
+    expect(debug!.at).toBeLessThanOrEqual(Date.now());
   });
 
   it('shows the short trace of a cached answer, with no model task', async () => {
