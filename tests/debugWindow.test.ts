@@ -451,7 +451,9 @@ describe('debug window (PR 9.4)', () => {
     const data = JSON.parse(vi.mocked(w.deps.copy).mock.calls[0]![0]);
     expect(data.groups).toHaveLength(WINDOW_LIMIT + 1);
     expect(data.groups.some((g: { group: string }) => g.group === 'c0')).toBe(false);
-  });
+    // Renders the window for each of 250 entries in jsdom: about 4 s alone and
+    // more on a busy CI runner, so the default 5 s limit is too tight.
+  }, 20_000);
 
   it('works with the keyboard and a screen reader', () => {
     const w = setup();
