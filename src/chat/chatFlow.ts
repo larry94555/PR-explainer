@@ -150,25 +150,30 @@ export function startChat(
       turn.view.update(turn.reply);
     });
     turn.stream = stream;
+    // The answer's final text or error is set while the panel is still busy,
+    // and only then does finish() end the busy state. With Show answers as
+    // they are written off (PR 9.6) the panel is holding the reply back, so
+    // the checked final answer is shown once, and an error never shows the
+    // partial reply first.
     stream.result.then(
       (result) => {
         if (!current()) return;
-        finish();
         if (result.status === 'failed') {
-          recordQueued();
-          return turn.view.showError(result.message, result.fix);
+          turn.view.showError(result.message, result.fix);
+        } else if (session.addTurn(question, result.answer)) {
+          turn.view.update(result.answer);
+        } else {
+          turn.view.showError(EMPTY_ANSWER.message, EMPTY_ANSWER.fix);
         }
-        const recorded = session.addTurn(question, result.answer);
+        finish();
         recordQueued();
-        if (!recorded) return turn.view.showError(EMPTY_ANSWER.message, EMPTY_ANSWER.fix);
-        turn.view.update(result.answer);
       },
       (error: unknown) => {
         if (!current()) return;
-        finish();
-        recordQueued();
         const { message, fix } = describeRequestError(error);
         turn.view.showError(message, fix);
+        finish();
+        recordQueued();
       },
     );
   };

@@ -36,7 +36,7 @@ Everything runs on your machine. The extension talks to [Ollama](https://ollama.
 
 1. **You click a line** (or drag across several lines) in a PR's diff. The extension works out which file, which line, and which side of the diff you clicked, in both unified and split view.
 2. **It gathers context** from the page: the diff around the line, the enclosing function from the full file at the PR's head commit, and the PR's title and description. The prompt is trimmed to fit the model's context window, and the code you clicked is never cut.
-3. **The local model answers.** The extension's service worker sends the prompt to Ollama on `localhost` and streams the reply back into the popup as it is written. You can stop it at any time.
+3. **The local model answers.** The extension's service worker sends the prompt to Ollama on `localhost` and streams the reply back. The popup shows the three section headings with placeholders and a ticking time while the model writes, then the whole answer at once (or word by word, if you tick **Show answers as they are written** in the settings). You can stop it at any time.
 4. **The popup shows three sections:** *What it does*, *Why it's needed*, and *Concerns*. Answers are cached, so clicking the same line again is instant, and **Regenerate** asks for a fresh one.
 5. **Ask a question** opens a chat that already knows the code and the explanation. While the chat is open, clicking other lines adds them to the same conversation.
 
@@ -105,7 +105,7 @@ If the settings page says Ollama refused the request, follow the fix it shows (i
 ### 4. Use it on GitHub
 
 1. Make sure Ollama is running, then open any pull request on github.com. A small **PR Explainer active** badge appears in the bottom right corner.
-2. Go to the **Files changed** tab and **click a line of code**. The popup opens next to it and the explanation streams in.
+2. Go to the **Files changed** tab and **click a line of code**. The popup opens next to it, and the explanation appears once the model has written it.
 3. To explain several lines at once, **drag across them** (or click one line and Shift-click another), then press **Explain selection**.
 4. Click **Ask a question** to open the chat and ask anything about the code, such as "Is this thread safe?" or "How would you test this?".
 5. Press **Alt+E** to explain the line that has keyboard focus, and **Esc** to close the popup or chat.

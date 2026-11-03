@@ -556,9 +556,15 @@ describe('explain on hover on a real diff', () => {
     expect(explain).toHaveBeenCalledTimes(1);
     await flush();
     expect(currentPopup()!.state).toBe('streaming');
+    // What the prefetch had written is kept back (PR 9.6): the placeholders stay.
+    const root = currentPopup()!.host.shadowRoot!;
+    expect(root.querySelector('.partial')).toBeNull();
+    expect(root.querySelector('.placeholder')).not.toBeNull();
+    expect(root.textContent).not.toContain('Marks');
     streams[0]!.finish();
     await settle();
     expect(currentPopup()!.state).toBe('done');
-    expect(currentPopup()!.host.shadowRoot?.textContent ?? '').toContain('Adds one.');
+    expect(root.querySelector('.placeholder')).toBeNull();
+    expect(root.textContent).toContain('Adds one.');
   });
 });

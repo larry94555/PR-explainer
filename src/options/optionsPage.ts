@@ -88,6 +88,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const keepAliveInput = el<HTMLInputElement>(doc, 'keepAliveMinutes');
   const hoverInput = el<HTMLInputElement>(doc, 'explainOnHover');
   const thinkInput = el<HTMLInputElement>(doc, 'letModelThink');
+  const streamInput = el<HTMLInputElement>(doc, 'streamAnswers');
   const thinkingLine = el(doc, 'thinking-status');
   const showPromptInput = el<HTMLInputElement>(doc, 'showPrompt');
   const debugWindowInput = el<HTMLInputElement>(doc, 'debugWindow');
@@ -116,6 +117,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     keepAliveInput.value = String(settings.keepAliveMinutes);
     hoverInput.checked = settings.explainOnHover;
     thinkInput.checked = settings.letModelThink;
+    streamInput.checked = settings.streamAnswers;
     showPromptInput.checked = settings.showPrompt;
     debugWindowInput.checked = settings.debugWindow;
   }
@@ -135,6 +137,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       keepAliveMinutes: keepAlive === '' ? NaN : Number(keepAlive),
       explainOnHover: hoverInput.checked,
       letModelThink: thinkInput.checked,
+      streamAnswers: streamInput.checked,
       showPrompt: showPromptInput.checked,
       debugWindow: debugWindowInput.checked,
     };

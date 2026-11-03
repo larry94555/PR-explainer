@@ -132,6 +132,70 @@ describe('chat panel', () => {
     expect(answer.element.textContent).toBe('Use vi.fn() and fake timers.');
   });
 
+  describe('the whole answer at once (PR 9.6, the default)', () => {
+    const ask = (options: Partial<ChatPanelOptions> = {}) => {
+      const chat = open(options);
+      chat.addMessage('user', 'Why?');
+      const answer = chat.addMessage('assistant', '');
+      chat.setBusy(true);
+      return { chat, answer };
+    };
+
+    it('keeps the answer empty ("Thinking…") while it is written', () => {
+      const { answer } = ask();
+      answer.update('Use `vi.fn()`');
+      answer.update('Use `vi.fn()` and **fake timers**.');
+      expect(answer.element.childNodes).toHaveLength(0);
+      expect(answer.element.matches(':empty')).toBe(true);
+    });
+
+    it('shows the whole answer in one update when the panel stops being busy', () => {
+      const { chat, answer } = ask();
+      answer.update('Use `vi.fn()`');
+      answer.update('Use `vi.fn()` and **fake timers**.');
+      const observer = new MutationObserver(() => {});
+      observer.observe(answer.element, { childList: true });
+      chat.setBusy(false);
+      const changes = observer.takeRecords();
+      observer.disconnect();
+      expect(changes).toHaveLength(1);
+      expect(answer.element.querySelector('code')?.textContent).toBe('vi.fn()');
+      expect(answer.element.textContent).toBe('Use vi.fn() and fake timers.');
+      // Once it has ended, updates show at once.
+      answer.update('Edited.');
+      expect(answer.element.textContent).toBe('Edited.');
+    });
+
+    it('shows what was written when the answer is stopped', () => {
+      const { answer } = ask();
+      answer.update('It **matches**');
+      answer.showStopped();
+      expect(answer.element.querySelector('strong')!.textContent).toBe('matches');
+      expect(answer.element.querySelector('.stopped-note')!.textContent).toBe(STOPPED_NOTE);
+    });
+
+    it('drops the kept-back text when the answer fails', () => {
+      const { chat, answer } = ask();
+      answer.update('Half an answer');
+      answer.showError('It broke.', 'Fix it.');
+      chat.setBusy(false);
+      expect(answer.element.textContent).toBe('It broke.Fix it.');
+    });
+
+    it('shows earlier messages and questions at once', () => {
+      const { chat } = ask();
+      const question = chat.addMessage('user', 'Another?');
+      question.update('Another one?');
+      expect(question.element.textContent).toBe('Another one?');
+    });
+
+    it('shows each update while it is written with Show answers as they are written on', () => {
+      const { answer } = ask({ streamAnswers: true });
+      answer.update('Use `vi.fn()`');
+      expect(answer.element.querySelector('code')?.textContent).toBe('vi.fn()');
+    });
+  });
+
   it('disables Send while the text box is empty or only spaces', () => {
     open();
     expect(sendButton().disabled).toBe(true);

@@ -32,13 +32,20 @@
     <h1>Chat panel demo</h1>
     <p class="hint">
       Open the panel with one of the buttons. Type a question and press Enter to send it, or
-      Shift+Enter for a new line. A fake answer streams in word by word (no LLM is used). While it
-      is being written, Send is disabled.
+      Shift+Enter for a new line. A fake answer is written word by word (no LLM is used) and appears
+      whole when it is done, or as it is written with the box below ticked. While it is being
+      written, Send is disabled.
     </p>
     <div class="controls">
       <button type="button" id="open-conversation">Open with a conversation</button>
       <button type="button" id="open-line">Open about one line</button>
       <button type="button" id="open-unsafe">Open with unsafe model output</button>
+    </div>
+    <div class="controls">
+      <label
+        ><input type="checkbox" id="stream-answers" /> Show answers as they are written (off by
+        default: the whole answer appears at once)</label
+      >
     </div>
     <p id="status" class="hint">Last event: none</p>
     <script type="module" src="./chatDemo.ts"></script>

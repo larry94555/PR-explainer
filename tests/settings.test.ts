@@ -10,6 +10,8 @@ import {
   type Settings,
   type StorageAreaLike,
 } from '../src/settings';
+import { STREAM_SETTING_KEY, trackStreamSetting } from '../src/streamSetting';
+import type { StorageChangedEvent } from '../src/enabledState';
 
 // An in-memory stand-in for chrome.storage.sync. Like Chrome, it copies values
 // in and out (structured clone), so tests can't share objects with it.
@@ -66,6 +68,8 @@ describe('settings', () => {
         explainOnHover: false,
         // Thinking was most of the wait on a reasoning model (PR 9.5).
         letModelThink: false,
+        // The answer appears whole, so the sections do not jump around (PR 9.6).
+        streamAnswers: false,
         showPrompt: false,
         // The debug log keeps prompts, so it is opt-in (PR 9.3).
         debugWindow: false,
@@ -101,6 +105,7 @@ describe('settings', () => {
         keepAliveMinutes: 90,
         explainOnHover: true,
         letModelThink: true,
+        streamAnswers: true,
         showPrompt: true,
         debugWindow: true,
       };
@@ -264,6 +269,44 @@ describe('settings', () => {
       const promise = saveSettings({ letModelThink: 'yes' as unknown as boolean }, fakeStorage());
       await expectRejectedFields(promise, ['letModelThink']);
       await expect(promise).rejects.toThrow('Let the model think must be on or off.');
+    });
+
+    it('accepts Show answers as they are written on or off and nothing else (PR 9.6)', async () => {
+      await expect(saveSettings({ streamAnswers: true }, fakeStorage())).resolves.toMatchObject({
+        streamAnswers: true,
+      });
+      const promise = saveSettings({ streamAnswers: 'on' as unknown as boolean }, fakeStorage());
+      await expectRejectedFields(promise, ['streamAnswers']);
+      await expect(promise).rejects.toThrow('Show answers as they are written must be on or off.');
+    });
+
+    it('the content script reads Show answers as they are written under its key (PR 9.6)', () => {
+      expect(STREAM_SETTING_KEY).toBe(storageKey('streamAnswers'));
+    });
+
+    it('the content script follows Show answers as they are written as it is saved (PR 9.6)', async () => {
+      let listener: Parameters<StorageChangedEvent['addListener']>[0] = () => {};
+      const events: StorageChangedEvent = { addListener: (l) => void (listener = l) };
+      const setting = trackStreamSetting(
+        { get: async () => ({ [STREAM_SETTING_KEY]: true }) },
+        events,
+      );
+      // Off until the read answers.
+      expect(setting.current()).toBe(false);
+      await vi.waitFor(() => expect(setting.current()).toBe(true));
+      listener({ [STREAM_SETTING_KEY]: { newValue: false } }, 'sync');
+      expect(setting.current()).toBe(false);
+      // Another storage area, or another key, changes nothing.
+      listener({ [STREAM_SETTING_KEY]: { newValue: true } }, 'local');
+      listener({ 'settings.showPrompt': { newValue: true } }, 'sync');
+      expect(setting.current()).toBe(false);
+      // A stored value that is not a boolean means off.
+      const odd = trackStreamSetting(
+        { get: async () => ({ [STREAM_SETTING_KEY]: 'yes' }) },
+        events,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(odd.current()).toBe(false);
     });
 
     it('accepts Show prompt on or off and nothing else', async () => {

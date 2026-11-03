@@ -20,6 +20,7 @@ const SAVED: Settings = {
   keepAliveMinutes: 30,
   explainOnHover: false,
   letModelThink: false,
+  streamAnswers: false,
   showPrompt: false,
   debugWindow: false,
 };
@@ -110,6 +111,20 @@ describe('options page', () => {
     $<HTMLInputElement>('letModelThink').checked = false;
     await page.save();
     expect(await deps.getSettings()).toMatchObject({ letModelThink: false });
+  });
+
+  it('loads and saves Show answers as they are written, off by default (PR 9.6)', async () => {
+    const deps = fakeDeps(fakeClient());
+    const page = await initOptionsPage(document, deps);
+    const box = $<HTMLInputElement>('streamAnswers');
+    expect(box.checked).toBe(false);
+    expect(box.closest('label')!.textContent!.trim()).toBe('Show answers as they are written');
+
+    box.checked = true;
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ streamAnswers: true });
+    await initOptionsPage(document, deps);
+    expect($<HTMLInputElement>('streamAnswers').checked).toBe(true);
   });
 
   describe('reasoning model line (PR 9.5)', () => {
@@ -390,6 +405,7 @@ describe('options page', () => {
       keepAliveMinutes: 30,
       explainOnHover: false,
       letModelThink: false,
+      streamAnswers: false,
       showPrompt: false,
       debugWindow: false,
     });

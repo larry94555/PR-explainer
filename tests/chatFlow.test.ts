@@ -44,7 +44,7 @@ interface FakeRequest {
 }
 
 /** Opens the real chat panel with a mocked client. */
-function setup(session = new ChatSession(SEED)) {
+function setup(session = new ChatSession(SEED), streamAnswers = false) {
   const requests: FakeRequest[] = [];
   const ask = vi.fn((messages: ChatMessage[], onChunk: (text: string) => void) => {
     let resolve!: (result: ChatResult) => void;
@@ -59,7 +59,7 @@ function setup(session = new ChatSession(SEED)) {
     return { result, stop };
   });
   const panel = startChat(
-    { ask, openPanel: (options) => openChatPanel(options) },
+    { ask, openPanel: (options) => openChatPanel({ ...options, streamAnswers }) },
     session,
     SUBJECT,
   );
@@ -100,7 +100,7 @@ describe('chat flow', () => {
     ]);
   });
 
-  it('sends the code and the explanation with the first question, and streams the answer', async () => {
+  it('sends the code and the explanation with the first question, and shows the answer whole', async () => {
     const { session, last } = setup();
     send('How would I unit test this?');
 
@@ -114,16 +114,123 @@ describe('chat flow', () => {
     expect(sendDisabled()).toBe(true);
     expect(root().querySelector('.chat')!.getAttribute('data-busy')).toBe('true');
 
+    // Kept back while it is written (PR 9.6): the answer stays empty ("Thinking…").
     last().chunk('Use **fake');
     last().chunk(' timers**.');
-    expect(lastAnswer().querySelector('strong')!.textContent).toBe('fake timers');
+    expect(lastAnswer().textContent).toBe('');
+    expect(lastAnswer().childNodes).toHaveLength(0);
 
     last().resolve({ status: 'done', answer: 'Use **fake timers**.', model: MODEL });
     await flush();
+    expect(lastAnswer().querySelector('strong')!.textContent).toBe('fake timers');
     expect(root().querySelector('.chat')!.getAttribute('data-busy')).toBe('false');
     expect(session.turns).toEqual([
       { question: 'How would I unit test this?', answer: 'Use **fake timers**.' },
     ]);
+  });
+
+  describe('the whole answer once (PR 9.6)', () => {
+    // Records every change to the answer's children from here on.
+    const watch = (element: HTMLElement) => {
+      const records: MutationRecord[] = [];
+      const observer = new MutationObserver((batch) => records.push(...batch));
+      observer.observe(element, { childList: true });
+      return () => {
+        records.push(...observer.takeRecords());
+        observer.disconnect();
+        return records;
+      };
+    };
+
+    it('shows a streamed answer in exactly one update, the final answer', async () => {
+      const { last } = setup();
+      send('How would I unit test this?');
+      const answer = lastAnswer();
+      const changes = watch(answer);
+      last().chunk('Use **fake');
+      last().chunk(' timers**.');
+      last().resolve({ status: 'done', answer: 'Use **fake timers**.', model: MODEL });
+      await flush();
+      expect(changes()).toHaveLength(1);
+      expect(answer.textContent).toBe('Use fake timers.');
+    });
+
+    it('shows the final answer, not the streamed text, when they differ', async () => {
+      const { last } = setup();
+      send('Why?');
+      last().chunk('<think>hmm</think>Because');
+      last().resolve({ status: 'done', answer: 'Because.', model: MODEL });
+      await flush();
+      expect(lastAnswer().textContent).toBe('Because.');
+    });
+
+    it('never shows partial text before a failed answer: only the error, once', async () => {
+      const { last } = setup();
+      send('Why?');
+      const answer = lastAnswer();
+      const changes = watch(answer);
+      last().chunk('Half an ');
+      last().chunk('answer');
+      last().resolve({ status: 'failed', message: 'It broke.', fix: 'Fix it.' });
+      await flush();
+      const records = changes();
+      expect(records).toHaveLength(1);
+      expect([...records[0]!.addedNodes].map((n) => n.textContent)).toEqual([
+        'It broke.',
+        'Fix it.',
+      ]);
+      expect(answer.textContent).not.toContain('Half');
+      expect(root().querySelector('.chat')!.getAttribute('data-busy')).toBe('false');
+    });
+
+    it('never shows partial text before a request that throws', async () => {
+      const { last } = setup();
+      send('Why?');
+      const answer = lastAnswer();
+      const changes = watch(answer);
+      last().chunk('Half an answer');
+      last().reject(new Error('port closed'));
+      await flush();
+      expect(changes()).toHaveLength(1);
+      expect(answer.dataset.status).toBe('failed');
+      expect(answer.textContent).not.toContain('Half');
+    });
+
+    it('never shows partial text before an empty final answer', async () => {
+      const { last } = setup();
+      send('Why?');
+      last().chunk('<think>only thinking</think>');
+      last().resolve({ status: 'done', answer: '', model: MODEL });
+      await flush();
+      expect(lastAnswer().textContent).toBe(EMPTY_ANSWER.message + EMPTY_ANSWER.fix);
+    });
+
+    it('still shows the text so far when stopped', () => {
+      const { last } = setup();
+      send('Explain the regex');
+      last().chunk('It matches');
+      stopButton().click();
+      expect(lastAnswer().textContent).toBe(`It matches${STOPPED_NOTE}`);
+    });
+
+    it('says how long a failed answer took', async () => {
+      const { last } = setup();
+      send('Why?');
+      last().resolve({ status: 'failed', message: 'It broke.', fix: 'Fix it.' });
+      await flush();
+      expect(lastAnswer().nextElementSibling!.textContent).toMatch(/^Failed after /);
+    });
+  });
+
+  it('streams the answer word by word with Show answers as they are written on (PR 9.6)', async () => {
+    const { last } = setup(new ChatSession(SEED), true);
+    send('How would I unit test this?');
+    last().chunk('Use **fake');
+    last().chunk(' timers**.');
+    expect(lastAnswer().querySelector('strong')!.textContent).toBe('fake timers');
+    last().resolve({ status: 'done', answer: 'Use **fake timers**.', model: MODEL });
+    await flush();
+    expect(lastAnswer().textContent).toBe('Use fake timers.');
   });
 
   it('includes earlier turns in a follow-up question', async () => {

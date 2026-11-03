@@ -161,6 +161,20 @@ export const POPUP_STYLE = `
     animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* The loading state's placeholders (PR 9.6): where each section's answer will go. */
+  .placeholder-line {
+    display: block;
+    height: 10px;
+    margin: 6px 0;
+    border-radius: 5px;
+    background: var(--pe-border-muted);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .placeholder section:last-child .placeholder-line:last-child { margin-bottom: 8px; }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+  @media (prefers-reduced-motion: reduce) {
+    .placeholder-line, .spinner { animation: none; }
+  }
   section + section { border-top: 1px solid var(--pe-border-muted); }
   h3 { margin: 12px 0 4px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; color: var(--pe-muted); }
   section[data-section='concerns'] h3 { color: var(--pe-attention); }

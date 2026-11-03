@@ -13,7 +13,11 @@
 // being written (setBusy). The list keeps the newest message in view, unless
 // the user has scrolled up to read an older one.
 //
-// While an answer is being written a Stop button replaces Send (onStop). An
+// While an answer is being written a Stop button replaces Send (onStop). By
+// default (PR 9.6) the answer is not shown while it is written: it says
+// "Thinking…" until the panel stops being busy, then the whole answer appears
+// at once. With the Show answers as they are written setting on
+// (streamAnswers), each update shows at once, as before. An
 // answer that failed shows the message and fix in red (showError), and a
 // stopped one keeps its text with a "Stopped" note (showStopped).
 //
@@ -100,6 +104,12 @@ export interface ChatPanelOptions {
   onNewChat?: () => void;
   /** Called once when the panel closes, however it was closed. */
   onClose?: () => void;
+  /**
+   * Show an answer's text while it is being written (PR 9.6). Off by default:
+   * updates to the answer being written are kept until the panel stops being
+   * busy (or the answer is stopped), then shown in one go.
+   */
+  streamAnswers?: boolean;
   /** Clock in milliseconds, for an answer's elapsed time. Tests pass a fake one. */
   now?: () => number;
 }
@@ -282,6 +292,17 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
     else el.textContent = text;
   };
 
+  // Text kept back for the answer being written (streamAnswers off), shown
+  // when it ends.
+  const heldBack = new WeakMap<HTMLElement, string>();
+  const isWriting = (element: HTMLElement) => busy && ticking === timers.get(element);
+  const showHeldBack = (element: HTMLElement) => {
+    const text = heldBack.get(element);
+    if (text === undefined) return;
+    heldBack.delete(element);
+    render('assistant', element, text);
+  };
+
   const addMessage = (role: ChatRole, text: string, follow = nearBottom()): ChatMessageView => {
     const element = doc.createElement('div');
     element.className = `message ${role}`;
@@ -298,9 +319,15 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
       element,
       role,
       update(next) {
+        if (role === 'assistant' && !options.streamAnswers && isWriting(element)) {
+          if (open) heldBack.set(element, next);
+          return;
+        }
+        heldBack.delete(element);
         change(() => render(role, element, next));
       },
       showError(message, fix) {
+        heldBack.delete(element);
         finishTimer(element, 'Failed after ');
         change(() => {
           element.dataset.status = 'failed';
@@ -317,6 +344,8 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
       showStopped() {
         finishTimer(element, 'Stopped after ');
         change(() => {
+          // What the model wrote before Stop is shown, not lost.
+          showHeldBack(element);
           element.dataset.status = 'stopped';
           const note = doc.createElement('p');
           note.className = 'stopped-note';
@@ -413,7 +442,13 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
         if (answer) startTimer(answer.element);
       } else if (!next && ticking) {
         const answer = views.find((v) => timers.get(v.element) === ticking);
-        if (answer) finishTimer(answer.element, 'Answered in ');
+        if (answer) {
+          finishTimer(answer.element, 'Answered in ');
+          // The whole answer, in one go.
+          const keep = nearBottom();
+          showHeldBack(answer.element);
+          if (keep) scrollToEnd();
+        }
       }
       busy = next;
       syncSend();
