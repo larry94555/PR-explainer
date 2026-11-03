@@ -1,6 +1,13 @@
 // Service worker. Answers requests from the content script (see
 // src/messaging/). All calls to the local LLM run here (see src/llm/).
 import { createChatHandler } from './chat/chatHandler';
+import {
+  clearWhenTurnedOff,
+  createDebugLog,
+  listenForDebugLogPorts,
+  pageEntries,
+  workerEntry,
+} from './debug/debugLog';
 import { CACHE_STORAGE_KEY, createExplainCache } from './explain/explainCache';
 import { createExplainHandler } from './explain/explainHandler';
 import { buildExplainPrompt } from './explain/explainPrompt';
@@ -11,17 +18,32 @@ import { detectPlatform } from './llm/describeLlmError';
 import { createWarmup } from './llm/warmup';
 import { MessageRouter } from './messaging/router';
 import { listenForChatPorts, listenForExplainPorts } from './messaging/streamPort';
+import type { RoundTripSink } from './net/roundTrips';
 import { DEFAULT_SETTINGS, getSettings, saveSettings } from './settings';
 import { setupToolbarToggle } from './toolbarToggle';
 
 console.info('[PR Explainer] service worker started');
+
+// With the Debug window setting on, every round trip is kept for the browser
+// session, for the debug window (src/debug/debugLog.ts, PR 9.3).
+const debugLog = createDebugLog({
+  storage: chrome.storage.session,
+  isOn: async () => (await getSettings()).debugWindow,
+});
+const onRoundTrip: RoundTripSink = (trip, log) => void debugLog.add([workerEntry(trip, log)]);
+clearWhenTurnedOff(chrome.storage.onChanged, debugLog);
 
 // The model's context window, looked up once per model (src/llm/contextSize.ts).
 const contextTokens = createContextSizer(createLlmClient);
 
 // Loads the model when a PR's diffs open, before the first click (PR 8.3).
 // It loads it with the window the first click will ask for (PR 8.5).
-const warmup = createWarmup({ getSettings, createClient: createLlmClient, contextTokens });
+const warmup = createWarmup({
+  getSettings,
+  createClient: createLlmClient,
+  contextTokens,
+  onRoundTrip,
+});
 
 const explain = createExplainHandler({
   getSettings,
@@ -33,6 +55,7 @@ const explain = createExplainHandler({
   contextTokens,
   // A click while the model is still loading lists the warm-up's round trips (PR 9.2).
   warmupRoundTrips: () => warmup.inFlight(),
+  onRoundTrip,
 });
 chrome.tabs.onRemoved.addListener((tabId) => warmup.forgetTab(tabId));
 
@@ -44,7 +67,17 @@ new MessageRouter()
     return { receivedAt: Date.now() };
   })
   .on('warmup', (payload, sender) => warmup.warmUp(sender.tab?.id, payload))
+  // A click's GitHub round trips and trace join the debug log (PR 9.3).
+  .on('debugLogAdd', async (payload) => ({
+    added: (await debugLog.add(pageEntries(payload))).length,
+  }))
+  .on('debugLogClear', async () => {
+    await debugLog.clear();
+    return { cleared: true as const };
+  })
   .listen();
+// The debug window follows the log live over its own port.
+listenForDebugLogPorts(chrome.runtime, debugLog);
 // Explanations stream over a port, so the popup can show the reply as it
 // arrives and stop it midway (see src/messaging/streamPort.ts).
 listenForExplainPorts(chrome.runtime, explain);
@@ -56,6 +89,7 @@ listenForChatPorts(
     createClient: createLlmClient,
     platform: detectPlatform(navigator.userAgent),
     contextTokens,
+    onRoundTrip,
   }),
 );
 
@@ -103,6 +137,8 @@ if (import.meta.env.MODE === 'development') {
       cache: async () =>
         (await chrome.storage.session.get([CACHE_STORAGE_KEY]))[CACHE_STORAGE_KEY] ?? [],
       explainSample: () => explain({ context: SAMPLE_CONTEXT }),
+      // Lists the debug log (PR 9.3), oldest first.
+      log: () => debugLog.read(),
     },
   });
   console.info(

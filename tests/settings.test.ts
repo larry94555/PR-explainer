@@ -65,6 +65,8 @@ describe('settings', () => {
         // Explain on hover uses the model for lines never clicked (PR 8.7).
         explainOnHover: false,
         showPrompt: false,
+        // The debug log keeps prompts, so it is opt-in (PR 9.3).
+        debugWindow: false,
       });
       expect(validateSettings(DEFAULT_SETTINGS)).toEqual([]);
     });
@@ -97,6 +99,7 @@ describe('settings', () => {
         keepAliveMinutes: 90,
         explainOnHover: true,
         showPrompt: true,
+        debugWindow: true,
       };
       await expect(saveSettings(update, storage)).resolves.toEqual(update);
       await expect(getSettings(storage)).resolves.toEqual(update);
@@ -259,6 +262,15 @@ describe('settings', () => {
         saveSettings({ showPrompt: 'yes' as unknown as boolean }, fakeStorage()),
         ['showPrompt'],
       );
+    });
+
+    it('accepts Debug window on or off and nothing else (PR 9.3)', async () => {
+      await expect(saveSettings({ debugWindow: true }, fakeStorage())).resolves.toMatchObject({
+        debugWindow: true,
+      });
+      const promise = saveSettings({ debugWindow: 1 as unknown as boolean }, fakeStorage());
+      await expectRejectedFields(promise, ['debugWindow']);
+      await expect(promise).rejects.toThrow('Debug window must be on or off.');
     });
 
     it('reports every bad field at once with a readable message', async () => {

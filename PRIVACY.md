@@ -23,6 +23,8 @@ Nothing else is contacted: no analytics, no tracking, no error reporting, no upd
 
 In Chrome's extension storage: your settings (synced with your Chrome profile if you have Chrome sync on, like other extension settings), whether click-to-explain is on, and recent explanations, so clicking the same line again is instant. Explanations are kept in memory only and are gone when Chrome closes. Chats are kept only while the page is open. Removing the extension deletes all of it.
 
+**Debug window (off by default).** If you tick **Debug window** on the settings page, the extension also keeps a log of its last 200 requests, for the debug window: for each request to the LLM, the prompt it sent (which includes code from the PR, its title and description, and your chat questions) and the model's reply; for each request to GitHub, its address, time and size (not the page or file it read); and the steps and times of each click. The log is kept in Chrome's session storage, which is in memory: it is gone when Chrome closes, and unticking **Debug window** empties it at once. Like everything else here, it never leaves your computer.
+
 ## Check it yourself
 
 On `chrome://extensions`, click **service worker** on the PR Explainer card to open its DevTools, and choose the **Network** tab. Click a few lines in a PR: every request listed goes to your LLM URL. The PR page's own DevTools shows GitHub's requests too; the extension's are the ones to `github.com` and `raw.githubusercontent.com` started by `content.js` (see the **Initiator** column).

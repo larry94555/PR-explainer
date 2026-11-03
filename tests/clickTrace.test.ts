@@ -72,6 +72,52 @@ describe('createClickTrace', () => {
     ]);
   });
 
+  it('ends early: marks running tasks stopped and adds the page round trips not yet added (PR 9.3)', async () => {
+    const clock = fakeClock();
+    const trace = createClickTrace(clock.now);
+    const trip = {
+      target: 'github' as const,
+      method: 'GET',
+      endpoint: 'github.com/o/r/blob/main/a.ts',
+      purpose: 'file at head',
+      cause: 'click' as const,
+      startMs: 1,
+      durationMs: 5,
+      status: 'running' as const,
+      bytesSent: 0,
+      bytesReceived: 0,
+    };
+    trace.pageRoundTrips(() => [trip]);
+    trace.time('find-code', 'Find the code', Promise.resolve());
+    await flush();
+    let finishFetch!: () => void;
+    const fetch = trace.time(
+      'file-at-head',
+      'Fetch the file at head',
+      new Promise<void>((r) => (finishFetch = r)),
+    );
+    clock.advance(40);
+    trace.end();
+    // A late finish changes nothing; nor does ending again.
+    finishFetch();
+    await fetch;
+    trace.end();
+    expect(trace.tasks().map((t) => [t.key, t.status, t.durationMs])).toEqual([
+      ['find-code', undefined, 0],
+      ['file-at-head', 'stopped', 40],
+    ]);
+    expect(trace.roundTrips()).toEqual([trip]);
+  });
+
+  it('ends early without adding page round trips twice', () => {
+    const trace = createClickTrace(fakeClock().now);
+    const source = vi.fn(() => []);
+    trace.pageRoundTrips(source);
+    trace.addRoundTrips([]);
+    trace.end('failed');
+    expect(source).not.toHaveBeenCalled();
+  });
+
   it("lines the service worker's tasks up with the moment the request was sent", () => {
     const clock = fakeClock();
     const trace = createClickTrace(clock.now);

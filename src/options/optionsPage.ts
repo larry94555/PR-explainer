@@ -1,7 +1,7 @@
 // The settings page: the Ollama URL, a model dropdown filled from the server,
 // temperature, max response length, context size, how long to keep the model
-// loaded (PR 8.3), Explain on hover (PR 8.7), the Show prompt debug option (PR 6.2), Save, and Test
-// connection. The Speed section (PR 8.6) says whether the picked model runs on
+// loaded (PR 8.3), Explain on hover (PR 8.7), the Debug section (Show prompt,
+// PR 6.2, and Debug window, PR 9.3), Save, and Test connection. The Speed section (PR 8.6) says whether the picked model runs on
 // the GPU, and its Speed test times each coding model and lets the user pick
 // the fastest (src/llm/speedTest.ts).
 //
@@ -83,6 +83,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const keepAliveInput = el<HTMLInputElement>(doc, 'keepAliveMinutes');
   const hoverInput = el<HTMLInputElement>(doc, 'explainOnHover');
   const showPromptInput = el<HTMLInputElement>(doc, 'showPrompt');
+  const debugWindowInput = el<HTMLInputElement>(doc, 'debugWindow');
   const refreshButton = el<HTMLButtonElement>(doc, 'refresh-models');
   const testButton = el<HTMLButtonElement>(doc, 'test-connection');
   const saveButton = el<HTMLButtonElement>(doc, 'save');
@@ -108,6 +109,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     keepAliveInput.value = String(settings.keepAliveMinutes);
     hoverInput.checked = settings.explainOnHover;
     showPromptInput.checked = settings.showPrompt;
+    debugWindowInput.checked = settings.debugWindow;
   }
 
   function readForm(): Settings {
@@ -125,6 +127,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       keepAliveMinutes: keepAlive === '' ? NaN : Number(keepAlive),
       explainOnHover: hoverInput.checked,
       showPrompt: showPromptInput.checked,
+      debugWindow: debugWindowInput.checked,
     };
   }
 

@@ -12,6 +12,7 @@ const CAUSE: Record<Exclude<RoundTripCause, 'click'>, string> = {
   page: 'when the page opened',
   hover: 'by Explain on hover',
   warmup: 'by the warm-up',
+  chat: 'by the chat',
 };
 
 /** "512 B", then "1.2 kB" and "3.4 MB". */

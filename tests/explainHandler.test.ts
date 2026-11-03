@@ -476,6 +476,20 @@ describe('explain handler', () => {
       });
     });
 
+    it("hands each round trip to the debug log as it ends, in the click's group (PR 9.3)", async () => {
+      const ended: [string, string, string][] = [];
+      const result = await handlerWith(ollama(streamedReply), {
+        onRoundTrip: (trip: { purpose: string }, log: { group: string; cause: string }) =>
+          ended.push([log.group, log.cause, trip.purpose]),
+      })({ context: SAMPLE_CONTEXT, debugId: 'click-7' });
+      expect(result.status).toBe('done');
+      expect(ended).toEqual([
+        ['click-7', 'click', 'context size'],
+        ['click-7', 'click', 'loaded window'],
+        ['click-7', 'click', 'explanation'],
+      ]);
+    });
+
     it('marks the round trips of Explain on hover, and lists a warm-up still loading the model', async () => {
       const warmup = createRoundTripLog('warmup');
       await warmup.record(

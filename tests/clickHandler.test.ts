@@ -114,11 +114,27 @@ function fakePopup(anchor: PopupAnchor, hooks: PopupHooks) {
 /** What a test's `explain` gets: the chunk callback, to stream text into the popup. */
 type Answer = (onChunk: (text: string) => void, fresh: boolean) => Promise<ExplainResult>;
 
+/** A GitHub round trip a click waited on (PR 9.3). */
+const GITHUB_TRIP = {
+  target: 'github' as const,
+  method: 'GET',
+  endpoint: 'github.com/o/r/blob/main/a.ts',
+  purpose: 'file at head',
+  cause: 'click' as const,
+  startMs: 2,
+  durationMs: 30,
+  status: 'done' as const,
+  bytesSent: 0,
+  bytesReceived: 100,
+};
+
 function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => boolean) {
   const contexts: string[] = [];
   const timings: ExplainTiming[] = [];
   // The click's tasks and reply (PR 9.1), kept apart so the timing checks stay short.
   const traced: Pick<ExplainTiming, 'tasks' | 'reply'>[] = [];
+  // What each answer hands to the debug log (PR 9.3).
+  const debugs: ExplainTiming['debug'][] = [];
   const popups: ReturnType<typeof fakePopup>[] = [];
   const stops: Array<ReturnType<typeof vi.fn>> = [];
   const deps: ClickHandlerDeps = {
@@ -137,9 +153,10 @@ function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => b
       popups.push(popup);
       return popup;
     },
-    onTiming: ({ tasks, reply, ...timing }) => {
+    onTiming: ({ tasks, reply, debug, ...timing }) => {
       timings.push(timing);
       traced.push({ tasks, reply });
+      debugs.push(debug);
     },
   };
   const handler = createClickHandler(deps);
@@ -151,6 +168,7 @@ function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => b
     stops,
     timings,
     traced,
+    debugs,
     cleanup: () => document.removeEventListener('click', handler),
   };
 }
@@ -302,6 +320,36 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(env.traced[0]).toEqual({ tasks: shown!.tasks, reply: shown!.reply });
   });
 
+  it("hands the debug log the click's id, time, place and round trips (PR 9.3)", async () => {
+    env = setup();
+    const trip = {
+      target: 'github' as const,
+      method: 'GET',
+      endpoint: 'github.com/o/r/raw/main/a.ts',
+      purpose: 'file at head',
+      cause: 'click' as const,
+      startMs: 2,
+      durationMs: 30,
+      status: 'done' as const,
+      bytesSent: 0,
+      bytesReceived: 100,
+    };
+    let sentId: string | undefined;
+    vi.mocked(env.deps.explain).mockImplementationOnce((_context, _onChunk, { trace }) => {
+      sentId = trace!.id;
+      trace!.addRoundTrips([trip]);
+      return { result: Promise.resolve(DONE), stop: vi.fn() };
+    });
+    const before = Date.now();
+    click(code('R44'));
+    await flush();
+    const [debug] = env.debugs;
+    expect(debug).toMatchObject({ group: sentId, roundTrips: [trip] });
+    expect(debug!.where).toMatch(/:44$/);
+    expect(debug!.at).toBeGreaterThanOrEqual(before);
+    expect(debug!.at).toBeLessThanOrEqual(Date.now());
+  });
+
   it('shows the short trace of a cached answer, with no model task', async () => {
     const worker = {
       totalMs: 5,
@@ -374,6 +422,27 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     await flush();
     expect(env.popups[0]!.calls[0]).toMatch(/^failed:The model took too long/);
     expect(env.timings).toEqual([{ elapsedMs: 1234, status: 'failed' }]);
+  });
+
+  it("still hands the debug log the click's trace and GitHub round trips when the request fails (PR 9.3)", async () => {
+    env = setup();
+    let sentId: string | undefined;
+    vi.mocked(env.deps.explain).mockImplementationOnce((_context, _onChunk, { trace }) => {
+      sentId = trace!.id;
+      trace!.pageRoundTrips(() => [GITHUB_TRIP]);
+      void trace!.time('send', 'Send the request', new Promise(() => {}));
+      return { result: Promise.reject(new Error('port closed')), stop: vi.fn() };
+    });
+    click(code('R44'));
+    await flush();
+    expect(env.timings).toEqual([{ elapsedMs: 1234, status: 'failed' }]);
+    expect(env.debugs[0]).toMatchObject({ group: sentId, roundTrips: [GITHUB_TRIP] });
+    expect(env.debugs[0]!.where).toMatch(/:44$/);
+    const tasks = env.traced[0]!.tasks!;
+    expect(tasks.map((t) => [t.key, t.status])).toEqual([
+      ['find-code', undefined],
+      ['send', 'failed'],
+    ]);
   });
 
   it('ignores hunk headers and clicks outside a diff', () => {
@@ -465,6 +534,28 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     ]);
   });
 
+  it("Stop hands the debug log the click's GitHub round trips, with running tasks marked stopped (PR 9.3)", async () => {
+    env = setup();
+    let sentId: string | undefined;
+    vi.mocked(env.deps.explain).mockImplementationOnce((_context, _onChunk, { trace }) => {
+      sentId = trace!.id;
+      // Stopped while the file is still being fetched, before the request was sent.
+      trace!.pageRoundTrips(() => [{ ...GITHUB_TRIP, status: 'running' }]);
+      void trace!.time('file-at-head', 'Fetch the file at head', new Promise(() => {}));
+      return { result: new Promise<ExplainResult>(() => {}), stop: vi.fn() };
+    });
+    click(code('R44'));
+    env.popups[0]!.pressStop();
+    expect(env.timings).toEqual([{ elapsedMs: 1234, status: 'stopped' }]);
+    expect(env.debugs[0]).toMatchObject({
+      group: sentId,
+      roundTrips: [{ ...GITHUB_TRIP, status: 'running' }],
+    });
+    expect(env.traced[0]!.tasks!.find((t) => t.key === 'file-at-head')).toMatchObject({
+      status: 'stopped',
+    });
+  });
+
   it('Stop stops the request, keeps the text so far, and ignores what arrives later', async () => {
     const answer = deferred<ExplainResult>();
     let send!: (text: string) => void;
@@ -477,6 +568,10 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     env.popups[0]!.pressStop();
     expect(env.stops[0]).toHaveBeenCalledOnce();
     expect(env.timings).toEqual([{ elapsedMs: 1234, status: 'stopped', firstChunkMs: 1234 }]);
+
+    // The debug log still gets the click so far, its running tasks marked stopped (PR 9.3).
+    expect(env.debugs[0]).toMatchObject({ group: expect.any(String), roundTrips: [] });
+    expect(env.traced[0]!.tasks!.map((t) => t.key)).toContain('find-code');
 
     send(' as done.');
     answer.resolve(DONE);

@@ -30,6 +30,7 @@ import type { ExplainStream } from './messaging/client';
 import type { Popup, PopupAnchor, PopupOptions } from './popup/popup';
 import { createClickTrace, type ClickTrace } from './trace/clickTrace';
 import type { TraceTask } from './trace/types';
+import type { DebugLogPayload } from './debug/types';
 
 export interface ClickHandlerDeps {
   /**
@@ -110,6 +111,8 @@ export interface ExplainTiming {
   tasks?: TraceTask[];
   /** The whole reply as it streamed in, to estimate the thinking share. */
   reply?: string;
+  /** What the debug log needs from the click (PR 9.3). */
+  debug?: Omit<DebugLogPayload, 'tasks'>;
 }
 
 // Elements GitHub (or the browser) already gives a meaning to a click on.
@@ -278,7 +281,7 @@ export function explainInPopup(
   const popup = deps.openPopup(anchor, {
     onStop: () => {
       stream.stop();
-      report({ status: 'stopped' });
+      report({ status: 'stopped', ...endedEarly(trace, 'stopped') });
     },
     onClose: () => {
       stream.stop();
@@ -299,6 +302,19 @@ export function explainInPopup(
     }),
   });
   const waiting = () => popup.state === 'loading' || popup.state === 'streaming';
+  // What the debug log gets for a click (PR 9.3), however it ends.
+  const debugOf = (t: ClickTrace): ExplainTiming['debug'] => ({
+    group: t.id,
+    at: t.startedAt,
+    where: whereOf(subject),
+    roundTrips: t.roundTrips(),
+  });
+  // A click stopped, or whose request failed, before an answer came: its
+  // unfinished tasks are marked so and the trace so far is still reported.
+  const endedEarly = (t: ClickTrace, status: 'stopped' | 'failed') => {
+    t.end(status === 'stopped' ? 'stopped' : 'failed');
+    return { tasks: t.tasks(), debug: debugOf(t) };
+  };
 
   // Each request checks it is still the newest, so a request replaced by
   // Regenerate cannot write into the popup.
@@ -346,16 +362,22 @@ export function explainInPopup(
           ...(result.status === 'done' && result.timings ? { timings: result.timings } : {}),
           tasks,
           ...(reply && { reply }),
+          debug: debugOf(requestTrace),
         });
       },
       (error: unknown) => {
         if (!current()) return;
         const { message, fix } = describeRequestError(error);
         popup.showError(message, fix);
-        report({ status: 'failed' });
+        report({ status: 'failed', ...endedEarly(requestTrace, 'failed') });
       },
     );
     return request;
   };
   let stream = ask(false);
+}
+
+/** "src/app.ts:12", or "src/app.ts:12-18" for a block, for the debug log. */
+export function whereOf({ filePath, startLine, endLine }: ChatSubject): string {
+  return `${filePath}:${startLine}${endLine !== undefined && endLine !== startLine ? `-${endLine}` : ''}`;
 }

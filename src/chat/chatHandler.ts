@@ -12,6 +12,7 @@
 import type { ContextSizer } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
 import type { ChatMessage, LlmClient } from '../llm/types';
+import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
 import { chatResponseTokens, type Settings } from '../settings';
 
 export interface ChatPayload {
@@ -32,13 +33,16 @@ export interface ChatStreamOptions {
 
 export interface ChatDeps {
   getSettings(): Promise<Settings>;
-  createClient(settings: Settings): LlmClient;
+  /** `roundTrips` records each request the client makes (PR 9.3). */
+  createClient(settings: Settings, options?: { roundTrips?: RoundTripLog }): LlmClient;
   platform: Platform;
   /**
    * The context window to run the model with (PR 6.2), the same one
    * explanations use, so switching between them does not reload the model.
    */
   contextTokens?: ContextSizer;
+  /** Gets each round trip as it ends, for the debug log (PR 9.3). */
+  onRoundTrip?: RoundTripSink;
 }
 
 const ROLES = new Set(['system', 'user', 'assistant']);
@@ -68,9 +72,11 @@ export function createChatHandler(deps: ChatDeps) {
       throw new Error('chat needs a list of messages that ends with a question');
     }
     const settings = await deps.getSettings();
-    const contextTokens = await deps.contextTokens?.(settings, signal);
+    // Each question's round trips are one group in the debug log (PR 9.3).
+    const roundTrips = createRoundTripLog('chat', Date.now, { onEnd: deps.onRoundTrip });
+    const contextTokens = await deps.contextTokens?.(settings, signal, undefined, roundTrips);
     try {
-      const stream = deps.createClient(settings).chatStream(payload.messages, {
+      const stream = deps.createClient(settings, { roundTrips }).chatStream(payload.messages, {
         model: settings.model,
         temperature: settings.temperature,
         maxResponseTokens: chatResponseTokens(settings),
