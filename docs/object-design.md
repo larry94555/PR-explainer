@@ -16,66 +16,41 @@ This page describes the main modules, classes and interfaces in `src/`, grouped 
 ## Module map
 
 ```mermaid
-flowchart TB
-  subgraph content["Content script (content.js)"]
+flowchart LR
+  subgraph content["Content script"]
     direction TB
-    content_ts["content.ts<br/>entry"]
-    nav["navigation.ts<br/>DiffPageFeatures"]
-    clickH["clickHandler.ts"]
-    sel["selection.ts"]
-    a11y["a11y.ts"]
-    pre["prefetch.ts"]
-    dom["diffDom.ts"]
-    line["lineContext.ts"]
-    file["fileContext.ts"]
-    meta["prMetadata.ts"]
-    popup["popup/popup.ts"]
-    chatflow["chat/chatFlow.ts<br/>CurrentChat"]
-    session["chat/chatSession.ts<br/>ChatSession(s)"]
-    panel["chat/chatPanel.ts"]
-    client["messaging/client.ts"]
-    gfetch["net/githubFetch.ts"]
-    theme["theme.ts"]
+    entry1["content.ts + navigation.ts"]
+    input["clickHandler · selection<br/>prefetch · a11y"]
+    read["diffDom · lineContext<br/>fileContext · prMetadata"]
+    ui["popup · chatPanel<br/>theme · badge"]
+    chat["chatFlow · chatSession"]
+    mc["messaging/client"]
+    gf["net/githubFetch"]
+    entry1 --> input
+    input --> read & ui & chat & mc
+    chat --> mc
+    read --> gf
   end
 
-  subgraph worker["Service worker (background.js)"]
+  subgraph worker["Service worker"]
     direction TB
-    bg["background.ts<br/>entry"]
-    router["messaging/router.ts<br/>MessageRouter"]
-    ports["messaging/streamPort.ts"]
-    explainH["explain/explainHandler.ts"]
-    chatH["chat/chatHandler.ts"]
-    prompt["explain/explainPrompt.ts<br/>fitPrompt.ts · tokenBudget.ts"]
-    parse["explain/parseExplanation.ts"]
-    cache["explain/explainCache.ts"]
-    warm["llm/warmup.ts"]
-    ctx["llm/contextSize.ts · numCtx.ts"]
-    toggle["toolbarToggle.ts"]
+    entry2["background.ts"]
+    srv["router · streamPort"]
+    handlers["explainHandler · chatHandler<br/>warmup · toolbarToggle"]
+    explain["explainPrompt · fitPrompt<br/>parseExplanation · explainCache"]
+    entry2 --> srv --> handlers --> explain
   end
 
-  subgraph shared["Used by the worker and the settings page"]
-    settings["settings.ts"]
-    llm["llm/types.ts · LlmClient"]
-    ollama["llm/ollamaClient.ts<br/>OllamaClient"]
-    lfetch["net/llmFetch.ts"]
-    err["llm/describeLlmError.ts"]
+  subgraph shared["Worker and settings page"]
+    direction TB
+    st["settings"]
+    llm["LlmClient · OllamaClient<br/>contextSize · describeLlmError"]
+    lf["net/llmFetch"]
+    llm --> lf
   end
 
-  content_ts --> nav --> clickH & sel & pre
-  clickH --> dom & line & file & meta & popup & chatflow & client
-  sel --> dom & line & a11y
-  chatflow --> session & panel & client
-  popup & panel --> theme
-  file & meta --> gfetch
-
-  client -. "ports and messages<br/>(types only)" .-> ports & router
-  bg --> router & ports & toggle & warm
-  ports --> explainH & chatH
-  explainH --> prompt & parse & cache & ctx
-  explainH & chatH & warm --> llm
-  llm --> ollama --> lfetch
-  explainH & chatH --> err
-  explainH & chatH & warm --> settings
+  mc -. "ports and messages<br/>(shared types only)" .-> srv
+  handlers --> st & llm
 ```
 
 The dotted line is the only connection between the two halves: the content script and the service worker share TypeScript types from `messaging/protocol.ts` and nothing else at runtime (see [why](design-and-data-flow.md#why-the-content-script-and-service-worker-share-no-code)).
