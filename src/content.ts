@@ -273,8 +273,8 @@ const explainDeps: ClickHandlerDeps = {
   // model's latency.
   onTiming: ({ elapsedMs, status, model, firstChunkMs, cached, timings, tasks, reply, debug }) => {
     // The click's GitHub round trips and trace join the debug log (PR 9.3).
-    // The service worker keeps them only when the Debug window setting is on.
-    if (debug && tasks?.length) {
+    // Sent only when the Debug window setting is on (PR 9.4).
+    if (debug && tasks?.length && debugSetting.current()) {
       sendRequest('debugLogAdd', {
         ...debug,
         roundTrips: debug.roundTrips.filter((trip) => trip.target === 'github'),

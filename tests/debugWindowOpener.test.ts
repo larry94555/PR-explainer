@@ -5,6 +5,7 @@ import {
   DEBUG_MENU_ID,
   DEBUG_MENU_TITLE,
   DEBUG_WINDOW_ID_KEY,
+  followDebugSetting,
   setupDebugMenu,
   type ContextMenusLike,
   type WindowsLike,
@@ -142,5 +143,22 @@ describe('Open debug window on the toolbar button menu (PR 9.4)', () => {
     expect(t.open).not.toHaveBeenCalled();
     t.click(DEBUG_MENU_ID);
     expect(t.open).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Debug window setting in the service worker (PR 9.4)', () => {
+  it('is unknown until read, then follows each save without reading storage again', async () => {
+    const key = storageKey('debugWindow');
+    const get = vi.fn(async () => ({}));
+    let changed: (changes: Record<string, { newValue?: unknown }>, area: string) => void = () => {};
+    const setting = followDebugSetting({ get }, { addListener: (l) => void (changed = l) });
+    expect(setting.current()).toBeUndefined();
+    // Off by default: nothing stored.
+    await vi.waitFor(() => expect(setting.current()).toBe(false));
+    changed({ [key]: { newValue: true } }, 'sync');
+    expect(setting.current()).toBe(true);
+    changed({ [key]: { newValue: false } }, 'sync');
+    expect(setting.current()).toBe(false);
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });

@@ -130,3 +130,34 @@ export function setupDebugMenu(deps: {
   });
   return made;
 }
+
+/** The part of chrome.storage.sync read here. */
+export interface SyncStorageLike {
+  get(keys: string[]): Promise<Record<string, unknown>>;
+}
+
+/**
+ * Follows the Debug window setting in the service worker without reading
+ * storage for each request: undefined until the first read answers, then
+ * true or false, updated on every save (PR 9.4).
+ */
+export function followDebugSetting(
+  storage: SyncStorageLike,
+  onChanged: StorageChangedLike,
+): { current(): boolean | undefined } {
+  const key = storageKey('debugWindow');
+  let current: boolean | undefined;
+  let changed = false;
+  onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'sync' || !Object.hasOwn(changes, key)) return;
+    changed = true;
+    current = changes[key]?.newValue === true;
+  });
+  storage.get([key]).then(
+    (stored) => {
+      if (!changed) current = stored[key] === true;
+    },
+    () => undefined,
+  );
+  return { current: () => current };
+}
