@@ -23,7 +23,7 @@ export interface ClickTrace {
   /** Milliseconds since the trace started (the click). */
   now(): number;
   /** Starts a task on the page; call the returned function when it ends. */
-  start(key: string, label: string): (status?: 'failed' | 'skipped') => void;
+  start(key: string, label: string): (status?: TraceTask['status']) => void;
   /** Records `work` as a task: failed when it rejects, otherwise done. Returns `work`. */
   time<T>(key: string, label: string, work: Promise<T>): Promise<T>;
   /** Records a task that did not need to run, such as a fetch for removed lines. */
@@ -45,6 +45,17 @@ export interface ClickTrace {
   addRoundTrips(trips: readonly RoundTrip[]): void;
   /** The round trips so far, in the order they started. */
   roundTrips(): RoundTrip[];
+  /**
+   * Where to read the page's round trips if the click ends before they were
+   * added (Stop, or a failed request), for the debug log (PR 9.3).
+   */
+  pageRoundTrips(source: () => RoundTrip[]): void;
+  /**
+   * Ends the click early: every task still running is marked `status`
+   * ("stopped" by default), and the page's round trips so far are added if
+   * they were not yet.
+   */
+  end(status?: TraceTask['status']): void;
 }
 
 export function createClickTrace(
@@ -56,6 +67,10 @@ export function createClickTrace(
   const now = () => clock() - origin;
   const list: TraceTask[] = [];
   const trips: RoundTrip[] = [];
+  // Tasks started and not yet ended, so `end` can close them.
+  const open = new Set<(status?: TraceTask['status']) => void>();
+  let pageTrips: (() => RoundTrip[]) | undefined;
+  let pageTripsAdded = false;
   let sentAt: number | undefined;
   // Where the service worker's last task ended, for Show answer.
   let workerEnd: number | undefined;
@@ -66,11 +81,14 @@ export function createClickTrace(
   const start: ClickTrace['start'] = (key, label) => {
     const startMs = now();
     let ended = false;
-    return (status) => {
+    const end = (status?: TraceTask['status']) => {
       if (ended) return;
       ended = true;
+      open.delete(end);
       add({ key, label, startMs, durationMs: now() - startMs, ...(status && { status }) });
     };
+    open.add(end);
+    return end;
   };
 
   return {
@@ -128,9 +146,20 @@ export function createClickTrace(
     },
     tasks: () => [...list].sort((a, b) => a.startMs - b.startMs),
     addRoundTrips(page) {
+      pageTripsAdded = true;
       trips.push(...page);
     },
     roundTrips: () => [...trips].sort((a, b) => a.startMs - b.startMs),
+    pageRoundTrips(source) {
+      pageTrips = source;
+    },
+    end(status = 'stopped') {
+      for (const endTask of [...open]) endTask(status);
+      if (!pageTripsAdded && pageTrips) {
+        pageTripsAdded = true;
+        trips.push(...pageTrips());
+      }
+    },
   };
 }
 
@@ -144,7 +173,7 @@ export function formatMs(ms: number): string {
 export interface TraceLineTask {
   label: string;
   durationMs: number;
-  status?: 'failed' | 'skipped';
+  status?: TraceTask['status'];
   /** True when the time is an estimate (Think and Write answer, PR 9.1). */
   estimated?: boolean;
 }
@@ -155,7 +184,9 @@ export function traceLine(tasks: readonly TraceLineTask[]): string {
     .map((t) => {
       const time = `${t.estimated ? '~' : ''}${formatMs(t.durationMs)}`;
       if (t.status === 'skipped') return `${t.label} skipped`;
-      return `${t.label} ${t.status === 'failed' ? `failed after ${time}` : time}`;
+      if (t.status === 'failed' || t.status === 'stopped')
+        return `${t.label} ${t.status} after ${time}`;
+      return `${t.label} ${time}`;
     })
     .join(', ');
 }

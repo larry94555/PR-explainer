@@ -214,7 +214,9 @@ function traceTask(value: unknown): TraceTask | undefined {
     source,
     startMs: v.startMs,
     durationMs: v.durationMs,
-    ...((v.status === 'failed' || v.status === 'skipped') && { status: v.status }),
+    ...((v.status === 'failed' || v.status === 'skipped' || v.status === 'stopped') && {
+      status: v.status,
+    }),
     ...(isNumber(v.firstChunkMs) && { firstChunkMs: v.firstChunkMs }),
   };
 }

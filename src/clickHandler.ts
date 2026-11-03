@@ -281,7 +281,7 @@ export function explainInPopup(
   const popup = deps.openPopup(anchor, {
     onStop: () => {
       stream.stop();
-      report({ status: 'stopped' });
+      report({ status: 'stopped', ...endedEarly(trace, 'stopped') });
     },
     onClose: () => {
       stream.stop();
@@ -302,6 +302,19 @@ export function explainInPopup(
     }),
   });
   const waiting = () => popup.state === 'loading' || popup.state === 'streaming';
+  // What the debug log gets for a click (PR 9.3), however it ends.
+  const debugOf = (t: ClickTrace): ExplainTiming['debug'] => ({
+    group: t.id,
+    at: t.startedAt,
+    where: whereOf(subject),
+    roundTrips: t.roundTrips(),
+  });
+  // A click stopped, or whose request failed, before an answer came: its
+  // unfinished tasks are marked so and the trace so far is still reported.
+  const endedEarly = (t: ClickTrace, status: 'stopped' | 'failed') => {
+    t.end(status === 'stopped' ? 'stopped' : 'failed');
+    return { tasks: t.tasks(), debug: debugOf(t) };
+  };
 
   // Each request checks it is still the newest, so a request replaced by
   // Regenerate cannot write into the popup.
@@ -349,19 +362,14 @@ export function explainInPopup(
           ...(result.status === 'done' && result.timings ? { timings: result.timings } : {}),
           tasks,
           ...(reply && { reply }),
-          debug: {
-            group: requestTrace.id,
-            at: requestTrace.startedAt,
-            where: whereOf(subject),
-            roundTrips: requestTrace.roundTrips(),
-          },
+          debug: debugOf(requestTrace),
         });
       },
       (error: unknown) => {
         if (!current()) return;
         const { message, fix } = describeRequestError(error);
         popup.showError(message, fix);
-        report({ status: 'failed' });
+        report({ status: 'failed', ...endedEarly(requestTrace, 'failed') });
       },
     );
     return request;

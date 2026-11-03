@@ -71,7 +71,7 @@ export interface WaterfallRow {
   durationMs: number;
   /** durationMs as a share of the total, 0 to 1. */
   share: number;
-  status?: 'failed' | 'skipped';
+  status?: TraceTask['status'];
   /** True when the time is an estimate (Think and Write answer). */
   estimated?: boolean;
   /** Tokens and speed, for the model's rows. */
@@ -234,7 +234,7 @@ export function buildWaterfall(
 export function rowValue(row: WaterfallRow): string {
   if (row.status === 'skipped') return 'skipped';
   const time = `${row.estimated ? '~' : ''}${formatMs(row.durationMs)}`;
-  if (row.status === 'failed') return `failed after ${time}`;
+  if (row.status === 'failed' || row.status === 'stopped') return `${row.status} after ${time}`;
   return `${time} · ${Math.round(row.share * 100)}%`;
 }
 
@@ -244,7 +244,7 @@ export function rowDescription(row: WaterfallRow): string {
     `${row.label}${row.estimated ? ' (estimated)' : ''}`,
     row.status === 'skipped'
       ? 'skipped'
-      : `${row.status === 'failed' ? 'failed after ' : ''}${formatMs(row.durationMs)}`,
+      : `${row.status ? `${row.status} after ` : ''}${formatMs(row.durationMs)}`,
   ];
   if (!row.status) parts.push(`${Math.round(row.share * 100)}% of the total`);
   parts.push(`started at ${formatMs(row.startMs)}`);

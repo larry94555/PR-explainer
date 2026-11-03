@@ -18,8 +18,11 @@ export interface TraceTask {
   /** When it started, in milliseconds from the trace's start. */
   startMs: number;
   durationMs: number;
-  /** Left out when the task finished normally. */
-  status?: 'failed' | 'skipped';
+  /**
+   * Left out when the task finished normally. "stopped": still running when
+   * the click was stopped or its request failed (PR 9.3).
+   */
+  status?: 'failed' | 'skipped' | 'stopped';
   /** For the model's task: when the first piece of the reply arrived, from the task's start. */
   firstChunkMs?: number;
 }

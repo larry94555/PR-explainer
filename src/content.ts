@@ -155,6 +155,9 @@ const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
   const pr = prName(location.href);
   // The click, on the round trips' clock (both are performance.now()).
   const clickAt = trace ? githubTrips.now() - trace.now() : undefined;
+  // If the click is stopped before the request is sent, the debug log still
+  // gets the GitHub round trips it was waiting on (PR 9.3).
+  if (trace && clickAt !== undefined) trace.pageRoundTrips(() => githubTrips.since(clickAt));
   const description = loadPrMetadata();
   const file = loadFileContext(code);
   if (trace) {
