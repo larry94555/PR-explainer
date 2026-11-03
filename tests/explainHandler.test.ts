@@ -8,6 +8,9 @@ import {
   type ChatStreamEnd,
   type LlmClient,
 } from '../src/llm/types';
+import { createContextSizer } from '../src/llm/contextSize';
+import { createLlmClient } from '../src/llm/createClient';
+import { createRoundTripLog } from '../src/net/roundTrips';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
 const SETTINGS: Settings = { ...DEFAULT_SETTINGS, model: 'qwen2.5-coder:7b' };
@@ -59,7 +62,8 @@ describe('explain handler', () => {
       model: 'qwen2.5-coder:7b',
       trace: expect.any(Object),
     });
-    expect(createClient).toHaveBeenCalledWith(SETTINGS);
+    // With a log for its round trips (PR 9.2).
+    expect(createClient).toHaveBeenCalledWith(SETTINGS, { roundTrips: expect.any(Object) });
     expect(chunks).toEqual(pieces);
     const [messages, options] = vi.mocked(client.chatStream).mock.calls[0] as [
       ChatMessage[],
@@ -327,6 +331,7 @@ describe('explain handler', () => {
         { ...SETTINGS, showPrompt: true },
         undefined,
         expect.any(Function),
+        expect.any(Object),
       );
       expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(2048);
       expect(result.status === 'done' && result.prompt).toMatchObject({
@@ -411,6 +416,79 @@ describe('explain handler', () => {
 
       const off = setup(streamOf(DONE));
       expect(await off.handler({ context: SAMPLE_CONTEXT })).not.toHaveProperty('prompt');
+    });
+  });
+
+  describe('round trips (PR 9.2)', () => {
+    const REPLY = "## What it does\nA.\n## Why it's needed\nB.\n## Concerns\nC.";
+    /** A fake Ollama: /api/show, /api/ps, and a streamed /api/chat. */
+    const ollama = (chat: () => Response) =>
+      vi.fn(async (url: string) => {
+        if (url.endsWith('/api/show')) {
+          return new Response(JSON.stringify({ model_info: { 'qwen2.context_length': 32768 } }));
+        }
+        if (url.endsWith('/api/ps')) return new Response(JSON.stringify({ models: [] }));
+        return chat();
+      });
+    const streamedReply = () =>
+      new Response(
+        JSON.stringify({ message: { content: REPLY } }) +
+          '\n' +
+          JSON.stringify({ done: true, done_reason: 'stop' }) +
+          '\n',
+      );
+    const handlerWith = (fetch: ReturnType<typeof ollama>, extra = {}) =>
+      createExplainHandler({
+        getSettings: async () => SETTINGS,
+        createClient: (settings, options) => createLlmClient(settings, { fetch, ...options }),
+        platform: 'other',
+        contextTokens: createContextSizer((settings, options) =>
+          createLlmClient(settings, { fetch, ...options }),
+        ),
+        ...extra,
+      });
+
+    it("returns every round trip to Ollama with the result, with the explanation's prompt and reply", async () => {
+      const result = await handlerWith(ollama(streamedReply))({ context: SAMPLE_CONTEXT });
+      expect(result.status).toBe('done');
+      const trips = result.trace!.roundTrips!;
+      expect(trips.map((t) => [t.endpoint, t.purpose, t.cause, t.status])).toEqual([
+        ['localhost:11434/api/show', 'context size', 'click', 'done'],
+        ['localhost:11434/api/ps', 'loaded window', 'click', 'done'],
+        ['localhost:11434/api/chat', 'explanation', 'click', 'done'],
+      ]);
+      const chat = trips[2]!;
+      expect(chat.messages![0]).toEqual({ role: 'system', content: EXPLAIN_SYSTEM_PROMPT });
+      expect(chat.messages![1]!.content).toContain(SAMPLE_CONTEXT);
+      expect(chat.reply).toBe(REPLY);
+    });
+
+    it('returns the failed round trip with a failed answer', async () => {
+      const fetch = ollama(() => {
+        throw new TypeError('Failed to fetch');
+      });
+      const result = await handlerWith(fetch)({ context: SAMPLE_CONTEXT });
+      expect(result.status).toBe('failed');
+      expect(result.trace!.roundTrips!.at(-1)).toMatchObject({
+        purpose: 'explanation',
+        status: 'failed',
+        error: 'Failed to fetch',
+      });
+    });
+
+    it('marks the round trips of Explain on hover, and lists a warm-up still loading the model', async () => {
+      const warmup = createRoundTripLog('warmup');
+      await warmup.record(
+        'http://localhost:11434/api/ps',
+        { method: 'GET' },
+        async () => new Response('{}'),
+      );
+      const result = await handlerWith(ollama(streamedReply), {
+        warmupRoundTrips: () => [warmup],
+      })({ context: SAMPLE_CONTEXT, cause: 'hover' });
+      const trips = result.trace!.roundTrips!;
+      expect(trips[0]).toMatchObject({ cause: 'warmup', purpose: 'is the model loaded' });
+      expect(trips.slice(1).every((t) => t.cause === 'hover')).toBe(true);
     });
   });
 });

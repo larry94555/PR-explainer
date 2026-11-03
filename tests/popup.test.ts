@@ -1,5 +1,5 @@
 import type { Explanation } from '../src/explain/parseExplanation';
-import type { TraceTask } from '../src/trace/types';
+import type { RoundTrip, TraceTask } from '../src/trace/types';
 import {
   computePosition,
   currentPopup,
@@ -86,7 +86,7 @@ describe('popup', () => {
     expect(shadow().querySelector('.cut-off-note')).not.toBeNull();
   });
 
-  describe('Show prompt (PR 6.2)', () => {
+  describe('round trips and Show prompt (PR 9.2)', () => {
     const REPORT = {
       text: '[system]\nYou are a senior engineer.\n\n[user]\nExplain the clicked line.',
       tokens: 1234,
@@ -94,28 +94,160 @@ describe('popup', () => {
       contextTokens: 4096,
       trimmed: ['lines around the code', 'PR description'],
     };
+    const TASK: TraceTask = {
+      key: 'find-code',
+      label: 'Find the code',
+      source: 'page',
+      startMs: 0,
+      durationMs: 2,
+    };
+    const trip = (extra: Partial<RoundTrip>): RoundTrip => ({
+      target: 'ollama',
+      method: 'POST',
+      endpoint: 'localhost:11434/api/ps',
+      purpose: 'loaded window',
+      cause: 'click',
+      startMs: 10,
+      durationMs: 5,
+      status: 'done',
+      httpStatus: 200,
+      bytesSent: 0,
+      bytesReceived: 120,
+      ...extra,
+    });
+    const CHAT = trip({
+      endpoint: 'localhost:11434/api/chat',
+      purpose: 'explanation',
+      startMs: 20,
+      durationMs: 12_300,
+      bytesSent: 3_200,
+      bytesReceived: 8_100,
+      messages: [
+        { role: 'system', content: 'You are a senior engineer.' },
+        { role: 'user', content: 'Explain the clicked line.' },
+      ],
+      reply: '## What it does\nA.',
+      thinking: 'Let me look.',
+    });
+    const TRIPS: RoundTrip[] = [
+      trip({
+        target: 'github',
+        method: 'GET',
+        endpoint: 'github.com/o/r/raw/abc/a.ts',
+        purpose: 'file at head',
+        startMs: 3,
+      }),
+      trip({}),
+      CHAT,
+      trip({ endpoint: 'localhost:11434/api/chat', purpose: 'load the model', cause: 'warmup' }),
+    ];
+    const rows = () => [...shadow().querySelectorAll<HTMLLIElement>('.round-trip')];
 
-    it('adds a collapsed Prompt sent section under the explanation', () => {
+    it("counts the click's round trips and lists each one, with the others marked", () => {
       const popup = openPopup(ANCHOR);
       popup.showExplanation(SAMPLE, 'llama3');
+      popup.showTrace({ tasks: [TASK], roundTrips: TRIPS });
+      expect(shadow().querySelector('.trip-count')!.textContent).toBe(
+        '3 round trips: GitHub 1, Ollama 2 · 1 more by the warm-up, not counted',
+      );
+      expect(rows().map((r) => r.querySelector('summary')!.textContent)).toEqual([
+        'GitHub github.com/o/r/raw/abc/a.ts · file at head · 5 ms',
+        'Ollama /api/ps · loaded window · 5 ms',
+        'Ollama /api/chat · explanation · 12.3 s',
+        'Ollama /api/chat · load the model · 5 ms · by the warm-up',
+      ]);
+      expect(rows()[2]!.querySelector('.trip-facts')!.textContent).toBe(
+        'POST localhost:11434/api/chat · started at 20 ms · sent 3.2 kB · received 8.1 kB · HTTP 200',
+      );
+      expect(rows().every((r) => !r.querySelector('details')!.open)).toBe(true);
+    });
+
+    it("shows the explanation's messages by role, and its reply with the thinking apart", () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'llama3');
+      popup.showTrace({ tasks: [TASK], roundTrips: [CHAT] });
+      const parts = [...rows()[0]!.querySelectorAll('.trip-part')].map((p) => [
+        p.querySelector('h4')!.textContent,
+        p.querySelector('pre')!.textContent,
+      ]);
+      expect(parts).toEqual([
+        ['Sent: system', 'You are a senior engineer.'],
+        ['Sent: user', 'Explain the clicked line.'],
+        ['Reply: thinking', 'Let me look.'],
+        ['Reply', '## What it does\nA.'],
+      ]);
+    });
+
+    it('marks a failed round trip with its error', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showError('Ollama is not running.', 'Start it.');
+      const failed = trip({
+        endpoint: 'localhost:11434/api/chat',
+        purpose: 'explanation',
+        status: 'failed',
+        httpStatus: undefined,
+        bytesReceived: 0,
+        error: 'Failed to fetch',
+      });
+      popup.showTrace({ tasks: [TASK], roundTrips: [failed] });
+      expect(rows()[0]!.dataset.status).toBe('failed');
+      expect(rows()[0]!.querySelector('summary')!.textContent).toBe(
+        'Ollama /api/chat · explanation · 5 ms · failed',
+      );
+      expect(rows()[0]!.querySelector('.trip-facts')!.textContent).toMatch(
+        /received 0 B · error: Failed to fetch$/,
+      );
+    });
+
+    it('says when a click made none (a cached answer)', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'llama3', { elapsedMs: 9_000 });
+      popup.showTrace({ tasks: [TASK], roundTrips: [] });
+      expect(shadow().querySelector('.trip-count')!.textContent).toBe(
+        'No round trips for this click',
+      );
+      expect(rows()).toEqual([]);
+    });
+
+    it("Show prompt opens Details on the explanation's round trip, with the prompt size", () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'llama3');
+      popup.showTrace({ tasks: [TASK], roundTrips: TRIPS });
       popup.showPrompt(REPORT);
-      const details = shadow().querySelector('details.prompt') as HTMLDetailsElement;
-      expect(details.open).toBe(false);
-      expect(details.querySelector('summary')!.textContent).toBe(
+      expect(shadow().querySelector<HTMLElement>('.latency')!.hidden).toBe(false);
+      const open = rows().filter((r) => r.querySelector('details')!.open);
+      expect(open).toHaveLength(1);
+      expect(open[0]!.querySelector('summary')!.textContent).toMatch(/· explanation ·/);
+      expect(open[0]!.querySelector('.prompt-size')!.textContent).toBe(
         'Prompt sent · about 1,234 of 3,040 tokens (4,096-token context) · ' +
           'trimmed: lines around the code, PR description',
       );
-      expect(details.querySelector('pre')!.textContent).toBe(REPORT.text);
+      // It replaces the old box under the explanation.
+      expect(shadow().querySelector('.body details')).toBeNull();
+    });
+
+    it('Show prompt on a cached answer adds a row for the prompt that was not sent', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'llama3', { elapsedMs: 9_000 });
+      popup.showTrace({ tasks: [TASK], roundTrips: [] });
+      popup.showPrompt(REPORT);
+      expect(rows()).toHaveLength(1);
+      const row = rows()[0]!.querySelector('details')!;
+      expect(row.open).toBe(true);
+      expect(row.querySelector('summary')!.textContent).toBe(
+        'Prompt · not sent: the answer came from the cache',
+      );
+      expect(row.querySelector('pre')!.textContent).toBe(REPORT.text);
     });
 
     it('says when nothing was trimmed', () => {
       expect(promptSummary({ ...REPORT, trimmed: [] })).toMatch(/· nothing trimmed$/);
     });
 
-    it('shows nothing unless an explanation is shown', () => {
+    it('shows no prompt unless an explanation is shown', () => {
       const popup = openPopup(ANCHOR);
       popup.showPrompt(REPORT);
-      expect(shadow().querySelector('details.prompt')).toBeNull();
+      expect(rows()).toEqual([]);
     });
   });
 

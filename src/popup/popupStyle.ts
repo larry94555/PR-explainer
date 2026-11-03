@@ -96,6 +96,19 @@ export const POPUP_STYLE = `
   .task[data-status] .task-time { color: var(--pe-muted); }
   .first-token { position: absolute; top: -2px; bottom: -2px; width: 0; border-left: 1px dashed var(--pe-fg); }
   .trace-total { margin: 6px 0 0; color: var(--pe-muted); }
+  /* The click's round trips (PR 9.2); one opens to show its prompt and reply. */
+  .trip-count { margin: 8px 0 4px; font-weight: 600; }
+  .round-trips { list-style: none; margin: 0; padding: 0; }
+  .round-trip { border-top: 1px solid var(--pe-border-muted); padding: 3px 0; }
+  .round-trip summary { cursor: pointer; overflow-wrap: anywhere; }
+  .round-trip:not([data-cause='click']) summary { color: var(--pe-muted); }
+  .round-trip[data-status='failed'] summary, .round-trip[data-status='refused'] summary { color: var(--pe-danger); }
+  .trip-facts, .prompt-size { margin: 4px 0; color: var(--pe-muted); overflow-wrap: anywhere; }
+  .trip-part h4 { margin: 6px 0 2px; font-size: 11px; color: var(--pe-muted); }
+  .trip-part pre {
+    margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow: auto;
+    font-size: 11px; padding: 4px 6px; border-radius: 4px; background: var(--pe-hover-bg);
+  }
   .sr-only {
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
@@ -127,10 +140,6 @@ export const POPUP_STYLE = `
   }
   .ask:hover, .ask:focus-visible { background: var(--pe-success-hover); }
   .partial { padding-top: 8px; }
-  /* The Show prompt debug section (PR 6.2). */
-  .prompt { margin-top: 12px; border-top: 1px solid var(--pe-border-muted); padding-top: 8px; font-size: 12px; }
-  .prompt summary { cursor: pointer; color: var(--pe-muted); }
-  .prompt pre { white-space: pre-wrap; word-break: break-word; max-height: 240px; font-size: 11px; }
   /* A blinking caret after the newest text while the model is still writing. */
   .popup[data-state='streaming'] .partial > :last-child::after {
     content: '▍';

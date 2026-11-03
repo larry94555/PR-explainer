@@ -119,7 +119,7 @@ describe('explain stream over a port', () => {
     );
     await flush();
     expect(model.explain).toHaveBeenCalledWith(
-      { context: 'the context', fresh: false },
+      { context: 'the context', fresh: false, cause: 'click' },
       expect.anything(),
     );
 
@@ -143,7 +143,7 @@ describe('explain stream over a port', () => {
     );
     await flush();
     expect(model.explain).toHaveBeenCalledWith(
-      { context: 'ctx', pr: 'owner/repo#17', fresh: true },
+      { context: 'ctx', pr: 'owner/repo#17', fresh: true, cause: 'click' },
       expect.anything(),
     );
     const cached: ExplainResult = { ...DONE, cached: { elapsedMs: 9800, savedAt: 1 } };
@@ -157,8 +157,30 @@ describe('explain stream over a port', () => {
     listenForExplainPorts(runtime, model.explain);
     runtime.connect({ name: EXPLAIN_PORT });
     await flush();
-    workerPorts[0]!.emitMessage({ type: 'start', context: 'ctx', pr: 17, fresh: 'yes' });
-    expect(model.explain).toHaveBeenCalledWith({ context: 'ctx', fresh: false }, expect.anything());
+    workerPorts[0]!.emitMessage({
+      type: 'start',
+      context: 'ctx',
+      pr: 17,
+      fresh: 'yes',
+      cause: 'warmup',
+    });
+    expect(model.explain).toHaveBeenCalledWith(
+      { context: 'ctx', fresh: false, cause: 'click' },
+      expect.anything(),
+    );
+  });
+
+  it('passes on that Explain on hover asked (PR 9.2)', async () => {
+    const { runtime, workerPorts } = fakeRuntime();
+    const model = controllableExplain();
+    listenForExplainPorts(runtime, model.explain);
+    runtime.connect({ name: EXPLAIN_PORT });
+    await flush();
+    workerPorts[0]!.emitMessage({ type: 'start', context: 'ctx', cause: 'hover' });
+    expect(model.explain).toHaveBeenCalledWith(
+      { context: 'ctx', fresh: false, cause: 'hover' },
+      expect.anything(),
+    );
   });
 
   it('Stop disconnects the port, which aborts the request in the service worker', async () => {
@@ -257,7 +279,10 @@ describe('serveExplainPort', () => {
     port.emitMessage({ type: 'start', context: 'one' });
     port.emitMessage({ type: 'start', context: 'two' });
     expect(model.explain).toHaveBeenCalledOnce();
-    expect(model.explain).toHaveBeenCalledWith({ context: 'one', fresh: false }, expect.anything());
+    expect(model.explain).toHaveBeenCalledWith(
+      { context: 'one', fresh: false, cause: 'click' },
+      expect.anything(),
+    );
   });
 });
 

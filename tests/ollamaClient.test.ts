@@ -533,7 +533,7 @@ describe('OllamaClient.loadModel (PR 8.3)', () => {
 describe('createLlmClient', () => {
   it('builds an Ollama client for the saved URL', async () => {
     const fetch = fakeFetch(() => jsonResponse(TAGS));
-    const client = createLlmClient({ llmUrl: 'http://127.0.0.1:8080' }, fetch);
+    const client = createLlmClient({ llmUrl: 'http://127.0.0.1:8080' }, { fetch });
     expect(client).toBeInstanceOf(OllamaClient);
     await client.listModels();
     expect(fetch.mock.calls[0]?.[0]).toBe('http://127.0.0.1:8080/api/tags');

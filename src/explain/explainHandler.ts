@@ -37,9 +37,16 @@
 // (only when those ran), building the prompt, the cache, waiting for the
 // model, and parsing the answer. The content script lines them up with its
 // own tasks for the popup's Details.
+//
+// The trace also carries every round trip to Ollama the request made (PR
+// 9.2): the context size, the loaded window and the explanation itself, with
+// the messages sent and the reply. A request made for Explain on hover is
+// marked so, and a warm-up still loading the model when the request came is
+// listed too, marked as the warm-up's. They are returned, never stored.
 
 import { FALLBACK_CONTEXT_TOKENS, promptBudget, type ContextSizer } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
+import { createRoundTripLog, type RoundTripLog } from '../net/roundTrips';
 import { chooseNumCtx } from '../llm/numCtx';
 import type { ChatMessage, LlmClient, LlmTimings } from '../llm/types';
 import type { Settings } from '../settings';
@@ -64,6 +71,8 @@ export interface ExplainPayload {
   prInfo?: PrInfo;
   /** The block around the code in the full file (PR 6.3), added to the prompt. */
   fileContext?: FileContext;
+  /** Why it was asked: a click (the default), or Explain on hover (PR 8.7). */
+  cause?: 'click' | 'hover';
 }
 
 /** The most file lines accepted, so a bad message cannot make a huge prompt. */
@@ -153,7 +162,8 @@ export interface ExplainStreamOptions {
 
 export interface ExplainDeps {
   getSettings(): Promise<Settings>;
-  createClient(settings: Settings): LlmClient;
+  /** `roundTrips` records each request the client makes (PR 9.2). */
+  createClient(settings: Settings, options?: { roundTrips?: RoundTripLog }): LlmClient;
   platform: Platform;
   /** Leaving it out turns caching off. */
   cache?: ExplainCache;
@@ -164,6 +174,8 @@ export interface ExplainDeps {
    * the setting is used, or FALLBACK_CONTEXT_TOKENS when it is automatic.
    */
   contextTokens?: ContextSizer;
+  /** The round trips of warm-ups still loading the model (src/llm/warmup.ts). */
+  warmupRoundTrips?: () => RoundTripLog[];
 }
 
 /** The context window when no ContextSizer is given. */
@@ -205,6 +217,8 @@ export function createTaskRecorder(now: () => number) {
   };
   return {
     now,
+    /** When the recorder was made, from `now`. */
+    origin,
     /** Records a task that started at `start` (from `now`) and ends now. */
     add,
     /**
@@ -242,6 +256,16 @@ export function createExplainHandler(deps: ExplainDeps) {
     }
     const now = deps.now ?? Date.now;
     const tasks = createTaskRecorder(now);
+    const roundTrips = createRoundTripLog(payload.cause === 'hover' ? 'hover' : 'click', now);
+    // A warm-up still running is what this request may wait behind.
+    const warmups = deps.warmupRoundTrips?.() ?? [];
+    const trace = (): WorkerTrace => ({
+      ...tasks.trace(),
+      roundTrips: [
+        ...warmups.flatMap((log) => log.list(tasks.origin)),
+        ...roundTrips.list(tasks.origin),
+      ].sort((a, b) => a.startMs - b.startMs),
+    });
     const settings = await tasks.time('settings', 'Read settings', () => deps.getSettings());
     const { cache } = deps;
     // Recorded only when the server was asked, not when the size was known.
@@ -250,9 +274,14 @@ export function createExplainHandler(deps: ExplainDeps) {
       'context-size',
       'Look up context size',
       () =>
-        (deps.contextTokens ?? settingsContextTokens)(settings, signal, () => {
-          lookedUp = true;
-        }),
+        (deps.contextTokens ?? settingsContextTokens)(
+          settings,
+          signal,
+          () => {
+            lookedUp = true;
+          },
+          roundTrips,
+        ),
       () => lookedUp,
     );
     const budget = promptBudget(contextTokens, settings.maxResponseTokens);
@@ -271,11 +300,11 @@ export function createExplainHandler(deps: ExplainDeps) {
       return {
         status: 'failed',
         ...tooLargeError(error, contextTokens, settings.maxResponseTokens),
-        trace: tasks.trace(),
+        trace: trace(),
       };
     }
     const { messages } = fitted;
-    const client = deps.createClient(settings);
+    const client = deps.createClient(settings, { roundTrips });
     // The window to run with: a set Context size as it is; on automatic,
     // just what this prompt needs, or the loaded model's window if it fits.
     const windowFor = (loaded?: number) =>
@@ -322,7 +351,7 @@ export function createExplainHandler(deps: ExplainDeps) {
           model: hit.model,
           cached: { elapsedMs: hit.elapsedMs, savedAt: hit.savedAt },
           ...(prompt && { prompt }),
-          trace: tasks.trace(),
+          trace: trace(),
         };
       }
     }
@@ -385,7 +414,7 @@ export function createExplainHandler(deps: ExplainDeps) {
         model,
         ...(prompt && { prompt }),
         ...(timings && { timings }),
-        trace: tasks.trace(),
+        trace: trace(),
       };
     } catch (error) {
       modelTask('failed');
@@ -394,7 +423,7 @@ export function createExplainHandler(deps: ExplainDeps) {
         model: settings.model,
         platform: deps.platform,
       });
-      return { status: 'failed', message, fix, trace: tasks.trace() };
+      return { status: 'failed', message, fix, trace: trace() };
     }
   };
 }
