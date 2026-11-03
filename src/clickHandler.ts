@@ -330,14 +330,13 @@ export function explainInPopup(
         } else popup.showError(result.message, result.fix);
         requestTrace.finish();
         const tasks = requestTrace.tasks();
-        if (result.status === 'done') {
-          popup.showTrace({
-            tasks,
-            reply,
-            ...(result.timings && { timings: result.timings }),
-          });
-          if (result.prompt) popup.showPrompt(result.prompt);
-        }
+        // A failed answer shows its trace too, so a slow failure can be read.
+        popup.showTrace({
+          tasks,
+          reply,
+          ...(result.status === 'done' && result.timings && { timings: result.timings }),
+        });
+        if (result.status === 'done' && result.prompt) popup.showPrompt(result.prompt);
         report({
           status: result.status,
           model: result.status === 'done' ? result.model : undefined,

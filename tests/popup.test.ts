@@ -340,6 +340,7 @@ describe('popup', () => {
         ['Read prompt', '1.3 s · 9%'],
         ['Think', '~4.0 s · 28%'],
         ['Write answer', '~4.0 s · 28%'],
+        ['Other model wait', '100 ms · 1%'],
         ['Show answer', '300 ms · 2%'],
       ]);
       expect(panel().querySelector('.trace-total')!.textContent).toBe(
@@ -396,6 +397,37 @@ describe('popup', () => {
       expect(rows().map((r) => r.dataset.task)).toEqual(['find-code', 'cache', 'show']);
       expect(panel().querySelector('.first-token')).toBeNull();
       expect(panel().querySelector('.trace-total')!.textContent).toBe('Total 8 ms');
+    });
+
+    it('shows the trace of a failed answer, under the error', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showError('The model took too long to answer.', 'Try again.');
+      popup.showTrace({
+        tasks: [
+          task('find-code', 0, 2),
+          task('model', 10, 30_000, { source: 'worker', status: 'failed' }),
+          task('show', 30_010, 5),
+        ],
+      });
+      expect(shadow().querySelector('.error .message')!.textContent).toBe(
+        'The model took too long to answer.',
+      );
+      expect(detailsButton().hidden).toBe(false);
+      const model = panel().querySelector<HTMLElement>('li[data-task="model"]')!;
+      expect(model.dataset.status).toBe('failed');
+      expect(model.querySelector('.task-time')!.textContent).toBe('failed after 30.0 s');
+    });
+
+    it("says when Ollama's times were scaled to fit the measured wait", () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+      popup.showTrace({
+        tasks: [task('model', 0, 1_000, { source: 'worker' })],
+        timings: { loadMs: 1_000, answerMs: 1_000 },
+      });
+      expect(panel().querySelector('.trace-total')!.textContent).toContain(
+        "Ollama's own times added up to more than the measured wait, so they are scaled to fit",
+      );
     });
 
     it('goes away when Regenerate asks again', () => {

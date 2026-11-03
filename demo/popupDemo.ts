@@ -316,7 +316,7 @@ function explainRow(row: Element): void {
   // answer took 14.2 s, to match its Details (PR 8.1).
   let fakeTime = 0;
   const popup = openPopup(row, {
-    ...(chosen() === 'done' && { now: () => fakeTime }),
+    ...((chosen() === 'done' || chosen() === 'failed') && { now: () => fakeTime }),
     onClose: () => (status.textContent = 'Last event: closed'),
     onAsk: () => {
       const session = new ChatSession({
@@ -381,11 +381,25 @@ function explainRow(row: Element): void {
       }, 2000);
       break;
     case 'failed': {
+      fakeTime = 30_370;
       const { message, fix } = describeLlmError(new LlmError('connection', 'fetch failed'), {
         url: 'http://localhost:11434',
         platform: 'windows',
       });
       popup.showError(message, fix);
+      // Ollama stopped answering after 30 s: the failed wait shows in Details.
+      popup.showTrace({
+        tasks: [
+          page('find-code', 'Find the code', 0, 3),
+          page('pr-description', 'Read the PR description', 3, 120),
+          page('file-at-head', 'Fetch the file at head', 3, 300),
+          page('send', 'Send the request', 303, 1),
+          worker('settings', 'Read settings', 306, 4),
+          worker('fit-prompt', 'Build the prompt', 310, 12),
+          { ...worker('model', 'Wait for the model', 330, 30_000), status: 'failed' },
+          page('show', 'Show answer', 30_330, 40),
+        ],
+      });
       break;
     }
     case 'unsafe':

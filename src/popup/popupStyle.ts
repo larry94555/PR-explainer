@@ -78,7 +78,7 @@ export const POPUP_STYLE = `
   .tasks { list-style: none; margin: 0; padding: 0; }
   .task {
     display: grid;
-    grid-template-columns: 12em 1fr 6.5em;
+    grid-template-columns: 11.5em 1fr 9.5em;
     align-items: center;
     gap: 8px;
     line-height: 18px;

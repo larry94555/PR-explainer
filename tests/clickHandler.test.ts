@@ -325,6 +325,39 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(env.popups[0]!.traces[0]!.timings).toBeUndefined();
   });
 
+  it('shows the trace of a failed request too: a failed model call and a prompt too large', async () => {
+    const failedTask = (key: string, durationMs: number) => ({
+      key,
+      label: key,
+      source: 'worker' as const,
+      startMs: 0,
+      durationMs,
+      status: 'failed' as const,
+    });
+    for (const [key, durationMs] of [
+      ['model', 30_000],
+      ['fit-prompt', 3],
+    ] as const) {
+      env?.cleanup();
+      document.body.innerHTML = fixture(file);
+      env = setup(() =>
+        Promise.resolve({
+          status: 'failed',
+          message: 'Failed.',
+          fix: 'Fix it.',
+          trace: { totalMs: durationMs, tasks: [failedTask(key, durationMs)] },
+        }),
+      );
+      click(code('R44'));
+      await flush();
+      expect(env.popups[0]!.calls).toEqual(['failed:Failed.|Fix it.']);
+      const shown = env.popups[0]!.traces[0]!;
+      expect(shown.timings).toBeUndefined();
+      expect(shown.tasks.find((t) => t.key === key)).toMatchObject({ status: 'failed' });
+      expect(env.traced[0]!.tasks).toEqual(shown.tasks);
+    }
+  });
+
   it('shows the error message and fix when the model fails', async () => {
     env = setup(() =>
       Promise.resolve({ status: 'failed', message: 'Ollama is not running.', fix: 'Start it.' }),

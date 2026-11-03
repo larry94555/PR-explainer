@@ -4,7 +4,11 @@
 // prompt, Think and Write answer. Ollama reports one time for everything the
 // model wrote, so Think and Write answer are split by the share of the
 // reply's characters inside <think> (marked estimated) until PR 9.5 makes
-// Ollama report thinking on its own.
+// Ollama report thinking on its own. The part of the measured wait that
+// Ollama's times do not cover (the connection, streaming, fields it left
+// out) is its own Other model wait row, so no time goes missing. When
+// Ollama's times add up to more than the measured wait, they are scaled to
+// fit it, marked estimated, and the waterfall says so.
 //
 // Used by the content script and `npm run bench`. The service worker passes
 // the server's raw timings (src/llm/types.ts, LlmTimings), so the two never
@@ -80,6 +84,11 @@ export interface Waterfall {
   totalMs: number;
   /** When the first piece of the reply arrived, from the click. */
   firstTokenMs?: number;
+  /**
+   * True when Ollama's own times added up to more than the measured wait
+   * for the model, so the model rows were scaled down to fit it.
+   */
+  scaled?: boolean;
 }
 
 function tokens(count: number): string {
@@ -88,19 +97,23 @@ function tokens(count: number): string {
 
 type RowDraft = Omit<WaterfallRow, 'share'>;
 
-/** The model's task as Load, Read prompt, Think and Write answer, one after another. */
-function modelRows(task: TraceTask, timings: LlmTimings, reply: string): RowDraft[] {
-  const rows: RowDraft[] = [];
-  let at = task.startMs;
-  const push = (row: Omit<RowDraft, 'startMs' | 'source'>) => {
-    rows.push({ ...row, source: 'model', startMs: at });
-    at += row.durationMs;
-  };
+/**
+ * The model's task as Load, Read prompt, Think and Write answer, one after
+ * another, then Other model wait for whatever of the measured task they do
+ * not cover. When they add up to more than the measured task, they are
+ * scaled down to fit it and `scaled` is true.
+ */
+function modelRows(
+  task: TraceTask,
+  timings: LlmTimings,
+  reply: string,
+): { rows: RowDraft[]; scaled: boolean } {
+  const parts: Omit<RowDraft, 'startMs' | 'source'>[] = [];
   if (timings.loadMs !== undefined) {
-    push({ key: 'load', label: 'Load', durationMs: timings.loadMs });
+    parts.push({ key: 'load', label: 'Load', durationMs: timings.loadMs });
   }
   if (timings.promptMs !== undefined || timings.promptTokens !== undefined) {
-    push({
+    parts.push({
       key: 'prompt',
       label: 'Read prompt',
       durationMs: timings.promptMs ?? 0,
@@ -114,7 +127,7 @@ function modelRows(task: TraceTask, timings: LlmTimings, reply: string): RowDraf
       share,
     );
     if (share > 0) {
-      push({
+      parts.push({
         key: 'think',
         label: 'Think',
         durationMs: think.ms ?? 0,
@@ -130,7 +143,7 @@ function modelRows(task: TraceTask, timings: LlmTimings, reply: string): RowDraf
       write.tokens !== undefined && `${share > 0 ? '~' : ''}${tokens(write.tokens)}`,
       perSecond !== undefined && `${perSecond.toFixed(1)} tokens/s`,
     ].filter((d) => d !== false);
-    push({
+    parts.push({
       key: 'write',
       label: 'Write answer',
       durationMs: write.ms ?? 0,
@@ -138,7 +151,37 @@ function modelRows(task: TraceTask, timings: LlmTimings, reply: string): RowDraf
       ...(detail.length && { detail: detail.join(' · ') }),
     });
   }
-  return rows;
+  if (parts.length === 0) return { rows: [], scaled: false };
+  const reported = parts.reduce((sum, p) => sum + p.durationMs, 0);
+  const measured = Math.max(0, task.durationMs);
+  const scaled = reported > measured;
+  const factor = scaled && reported > 0 ? measured / reported : 1;
+  const rows: RowDraft[] = [];
+  let at = task.startMs;
+  for (const part of parts) {
+    const durationMs = part.durationMs * factor;
+    rows.push({
+      ...part,
+      durationMs,
+      source: 'model',
+      startMs: at,
+      ...(scaled && { estimated: true }),
+    });
+    at += durationMs;
+  }
+  // What Ollama's times leave out: the connection, streaming the reply, and
+  // any part it did not report.
+  const rest = measured - (scaled ? measured : reported);
+  if (rest > 0) {
+    rows.push({
+      key: 'model-wait',
+      label: 'Other model wait',
+      source: 'model',
+      startMs: at,
+      durationMs: rest,
+    });
+  }
+  return { rows, scaled };
 }
 
 /**
@@ -153,13 +196,17 @@ export function buildWaterfall(
 ): Waterfall {
   const drafts: RowDraft[] = [];
   let firstTokenMs: number | undefined;
+  let scaled = false;
   for (const task of tasks) {
     if (task.key === 'model' && task.firstChunkMs !== undefined) {
       firstTokenMs = task.startMs + task.firstChunkMs;
     }
-    const split = task.key === 'model' && timings ? modelRows(task, timings, reply) : [];
-    if (split.length) {
-      drafts.push(...split);
+    // A failed model task has no timings to split it by, so it stays one row.
+    const split =
+      task.key === 'model' && timings && !task.status ? modelRows(task, timings, reply) : null;
+    if (split?.rows.length) {
+      drafts.push(...split.rows);
+      scaled ||= split.scaled;
       continue;
     }
     drafts.push({
@@ -175,7 +222,12 @@ export function buildWaterfall(
   const rows = drafts
     .map((r) => ({ ...r, share: totalMs > 0 ? r.durationMs / totalMs : 0 }))
     .sort((a, b) => a.startMs - b.startMs);
-  return { rows, totalMs, ...(firstTokenMs !== undefined && { firstTokenMs }) };
+  return {
+    rows,
+    totalMs,
+    ...(firstTokenMs !== undefined && { firstTokenMs }),
+    ...(scaled && { scaled }),
+  };
 }
 
 /** "~20.1 s · 45%", "skipped", or "failed after 30 ms". */

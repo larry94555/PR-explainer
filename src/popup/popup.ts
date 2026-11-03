@@ -135,8 +135,8 @@ export interface Popup {
   /** Adds the prompt that was sent under the explanation (the Show prompt setting). */
   showPrompt(report: PromptReport): void;
   /**
-   * Adds the Details button and its waterfall for the answer shown (PR 9.1).
-   * Does nothing unless an answer is shown, or when there are no tasks.
+   * Adds the Details button and its waterfall for the answer or error shown
+   * (PR 9.1). Does nothing unless one is shown, or when there are no tasks.
    */
   showTrace(trace: TraceDetails): void;
   close(): void;
@@ -487,7 +487,8 @@ export function openPopup(
       setBody('failed', error);
     },
     showTrace({ tasks, timings, reply }) {
-      if (state !== 'done' || tasks.length === 0) return;
+      // A failed answer shows its trace too: that is when it matters most.
+      if ((state !== 'done' && state !== 'failed') || tasks.length === 0) return;
       const waterfall = buildWaterfall(tasks, timings, reply);
       const total = waterfall.totalMs || 1;
       const percent = (ms: number) => `${Math.min(100, (Math.max(0, ms) / total) * 100)}%`;
@@ -540,8 +541,13 @@ export function openPopup(
           `first word at ${formatDuration(waterfall.firstTokenMs)} (the line on the bars)`,
         );
       }
-      if (waterfall.rows.some((r) => r.estimated)) {
+      if (waterfall.rows.some((r) => r.key === 'think')) {
         parts.push('~ estimated from the share of the reply inside <think>');
+      }
+      if (waterfall.scaled) {
+        parts.push(
+          "Ollama's own times added up to more than the measured wait, so they are scaled to fit",
+        );
       }
       summary.textContent = parts.join(' · ');
       latency.replaceChildren(list, summary);

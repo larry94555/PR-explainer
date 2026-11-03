@@ -106,6 +106,8 @@ describe('buildWaterfall', () => {
       ['prompt', 4_500, 1_300],
       ['think', 5_800, 4_000],
       ['write', 9_800, 4_000],
+      // The 100 ms of the measured 13.5 s that Ollama's times do not cover.
+      ['model-wait', 13_800, 100],
       ['show', 13_900, 300],
     ]);
     const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
@@ -142,13 +144,56 @@ describe('buildWaterfall', () => {
     expect(write.durationMs).toBe(0);
   });
 
-  it('keeps the shares of the model rows adding up to the model time Ollama reported', () => {
-    const { rows, totalMs } = buildWaterfall(TASKS, COLD, reply);
+  it('accounts for all of the measured model wait, with the rest as Other model wait', () => {
+    const { rows, totalMs, scaled } = buildWaterfall(TASKS, COLD, reply);
+    expect(scaled).toBeUndefined();
     const model = rows.filter((r) => r.source === 'model');
-    const share = model.reduce((sum, r) => sum + r.share, 0);
-    expect(share).toBeCloseTo((4_100 + 1_300 + 8_000) / totalMs);
+    expect(model.reduce((sum, r) => sum + r.durationMs, 0)).toBeCloseTo(13_500);
+    expect(model.reduce((sum, r) => sum + r.share, 0)).toBeCloseTo(13_500 / totalMs);
+    expect(rows.find((r) => r.key === 'model-wait')).toMatchObject({
+      label: 'Other model wait',
+      durationMs: 100,
+    });
     const thinkAndWrite = model.filter((r) => r.key === 'think' || r.key === 'write');
     expect(thinkAndWrite.reduce((sum, r) => sum + r.durationMs, 0)).toBeCloseTo(8_000);
+  });
+
+  it('gives the time of fields Ollama left out to Other model wait', () => {
+    // A 10 s wait with 1 s load, 1 s prompt and 5 s answer: 3 s unexplained.
+    const tasks = [task('model', 0, 10_000, { source: 'worker' })];
+    const { rows } = buildWaterfall(tasks, { loadMs: 1_000, promptMs: 1_000, answerMs: 5_000 });
+    expect(rows.map((r) => [r.key, r.startMs, r.durationMs])).toEqual([
+      ['load', 0, 1_000],
+      ['prompt', 1_000, 1_000],
+      ['write', 2_000, 5_000],
+      ['model-wait', 7_000, 3_000],
+    ]);
+    const answerOnly = buildWaterfall(tasks, { answerTokens: 50, answerMs: 4_000 }).rows;
+    expect(answerOnly.map((r) => [r.key, r.durationMs])).toEqual([
+      ['write', 4_000],
+      ['model-wait', 6_000],
+    ]);
+  });
+
+  it("scales Ollama's times to fit the measured wait when they add up to more, and says so", () => {
+    const tasks = [task('model', 100, 5_000, { source: 'worker' }), task('show', 5_100, 50)];
+    const waterfall = buildWaterfall(tasks, { loadMs: 2_000, promptMs: 2_000, answerMs: 6_000 });
+    expect(waterfall.scaled).toBe(true);
+    const model = waterfall.rows.filter((r) => r.source === 'model');
+    expect(model.map((r) => [r.key, r.startMs, r.durationMs])).toEqual([
+      ['load', 100, 1_000],
+      ['prompt', 1_100, 1_000],
+      ['write', 2_100, 3_000],
+    ]);
+    expect(model.every((r) => r.estimated)).toBe(true);
+    // Nothing runs past the measured task.
+    expect(waterfall.totalMs).toBe(5_150);
+  });
+
+  it('keeps a failed model task as one row, even with timings', () => {
+    const tasks = [task('model', 0, 30_000, { source: 'worker', status: 'failed' })];
+    const { rows } = buildWaterfall(tasks, COLD);
+    expect(rows).toEqual([expect.objectContaining({ key: 'model', status: 'failed' })]);
   });
 
   it('keeps the model task as one row when the server gave no timings', () => {
