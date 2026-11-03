@@ -44,6 +44,9 @@
 // (src/popup/latencyBreakdown.ts). A cached answer shows only its own short
 // trace.
 //
+// With the Debug window setting on (PR 9.4), the header also has a Debug
+// button that opens the debug window: every round trip, live.
+//
 // The content script opens it from its click handler (src/clickHandler.ts),
 // and the demo page (`npm run demo:popup`) shows it with fake data.
 
@@ -102,6 +105,11 @@ export interface PopupOptions {
    * when this is passed.
    */
   onAsk?: () => void;
+  /**
+   * Called when the Debug button is pressed (PR 9.4). The button is shown
+   * only when this is passed: with the Debug window setting on.
+   */
+  onDebug?: () => void;
   /** Clock in milliseconds, for the elapsed time. Tests pass a fake one. */
   now?: () => number;
 }
@@ -323,15 +331,17 @@ export function openPopup(
   detailsButton.hidden = true;
   detailsButton.setAttribute('aria-expanded', 'false');
   detailsButton.setAttribute('aria-controls', 'pe-latency');
-  header.append(
-    title,
-    modelLabel,
-    elapsedLabel,
-    detailsButton,
-    stopButton,
-    regenerateButton,
-    closeButton,
-  );
+  header.append(title, modelLabel, elapsedLabel, detailsButton);
+  if (options.onDebug) {
+    const debugButton = doc.createElement('button');
+    debugButton.className = 'debug';
+    debugButton.type = 'button';
+    debugButton.textContent = 'Debug';
+    debugButton.title = 'Open the debug window: every round trip, with its prompt, reply and time';
+    debugButton.addEventListener('click', () => options.onDebug?.());
+    header.append(debugButton);
+  }
+  header.append(stopButton, regenerateButton, closeButton);
 
   const latency = doc.createElement('div');
   latency.className = 'latency';

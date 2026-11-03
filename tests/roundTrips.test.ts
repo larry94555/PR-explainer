@@ -43,6 +43,7 @@ describe('round trip log (PR 9.2)', () => {
     expect(await response.text()).toBe('{"model_info":{}}');
     expect(log.list()).toEqual([
       {
+        id: `${log.group}:1`,
         target: 'ollama',
         method: 'POST',
         endpoint: 'localhost:11434/api/show',
@@ -247,5 +248,74 @@ describe('round trip log: a stream that stays open (PR 9.2)', () => {
     const reader = response.body!.getReader();
     await reader.read();
     expect(log.list()[0]).toMatchObject({ status: 'done', reply: 'a' });
+  });
+});
+
+describe('round trips as they run, for the debug window (PR 9.4)', () => {
+  it('tells onUpdate when a round trip starts, as its reply grows, and when it ends', async () => {
+    const time = clock();
+    const updates: { id?: string; status: string; reply?: string; durationMs: number }[] = [];
+    const log = createRoundTripLog('click', time.now, {
+      group: 'click-1',
+      onUpdate: ({ id, status, reply, durationMs }) =>
+        updates.push({ id, status, reply, durationMs }),
+    });
+    const pieces = [
+      '{"message":{"content":"One"}}\n',
+      '{"message":{"content":" two"}}\n',
+      '{"message":{"content":" three"}}\n',
+      '{"done":true,"total_duration":900000000,"load_duration":5000000,"prompt_eval_count":40,' +
+        '"prompt_eval_duration":100000000,"eval_count":3,"eval_duration":700000000}\n',
+    ];
+    // 150 ms apart, so not every piece is passed on.
+    const response = await log.record(
+      URL_CHAT,
+      { method: 'POST', body: '{"messages":[{"role":"user","content":"hi"}]}' },
+      async () => streamed(pieces, time, 150),
+    );
+    await response.text();
+    expect(updates.every((u) => u.id === 'click-1:1')).toBe(true);
+    expect(updates[0]).toMatchObject({ status: 'running', reply: undefined, durationMs: 0 });
+    expect(updates.at(-1)).toMatchObject({ status: 'done', reply: 'One two three' });
+    // In between: the reply so far, growing, at most every PROGRESS_MS.
+    const between = updates.slice(1, -1);
+    expect(between.length).toBeGreaterThan(0);
+    expect(between.length).toBeLessThan(pieces.length);
+    for (const [k, u] of between.entries()) {
+      expect(u.status).toBe('running');
+      expect('One two three'.startsWith(u.reply!)).toBe(true);
+      if (k > 0) expect(u.durationMs - between[k - 1]!.durationMs).toBeGreaterThanOrEqual(250);
+    }
+    expect(log.list()[0]!.timings).toEqual({
+      totalMs: 900,
+      loadMs: 5,
+      promptTokens: 40,
+      promptMs: 100,
+      answerTokens: 3,
+      answerMs: 700,
+    });
+  });
+
+  it('gives each round trip of a log its own id', async () => {
+    const ids: string[] = [];
+    const log = createRoundTripLog('warmup', Date.now, {
+      group: 'w',
+      onUpdate: (trip) => ids.push(trip.id!),
+    });
+    await (
+      await log.record('http://localhost:11434/api/ps', {}, async () => new Response('{}'))
+    ).text();
+    log.refuse('http://example.com/', {}, new Error('blocked'));
+    expect(ids).toEqual(['w:1', 'w:1', 'w:2', 'w:2']);
+  });
+
+  it('keeps a request going when onUpdate throws', async () => {
+    const log = createRoundTripLog('click', Date.now, {
+      onUpdate: () => {
+        throw new Error('debug log broke');
+      },
+    });
+    const response = await log.record(URL_CHAT, {}, async () => new Response('{"done":true}\n'));
+    expect(await response.text()).toBe('{"done":true}\n');
   });
 });

@@ -10,7 +10,9 @@
 // leaves the computer (see PRIVACY.md).
 //
 // The service worker adds its own round trips to Ollama as each one ends
-// (src/net/roundTrips.ts). The content script sends its GitHub round trips
+// (src/net/roundTrips.ts). While one runs, its reply so far is sent to the
+// debug window (PR 9.4) with `progress`, but never stored: the window shows
+// it growing, and the finished entry takes its place. The content script sends its GitHub round trips
 // and the click's trace with a `debugLogAdd` request once the answer is
 // shown; pageEntries checks that message before it is kept.
 
@@ -24,6 +26,7 @@ import type {
   DebugEntryInput,
   DebugLogPortMessage,
   DebugLogPortName,
+  DebugRunningEntry,
 } from './types';
 
 export const DEBUG_LOG_KEY = 'debugLog';
@@ -49,6 +52,14 @@ export interface DebugLog {
   read(): Promise<DebugEntry[]>;
   /** Empties the log and tells the listeners. */
   clear(): Promise<void>;
+  /**
+   * Tells the listeners about a round trip still running (PR 9.4), and keeps
+   * it in memory until its finished entry is added. Does nothing when the
+   * setting is off.
+   */
+  progress(item: DebugRunningEntry): Promise<void>;
+  /** The entries kept and the round trips still running, for a window that just connected. */
+  snapshot(): Promise<{ entries: DebugEntry[]; running: DebugRunningEntry[] }>;
   /** Calls `listener` with each new entry and each clear, until the returned function is called. */
   listen(listener: (message: DebugLogPortMessage) => void): () => void;
 }
@@ -61,6 +72,11 @@ export interface DebugLogDeps {
 
 export function createDebugLog({ storage, isOn }: DebugLogDeps): DebugLog {
   const listeners = new Set<(message: DebugLogPortMessage) => void>();
+  // Round trips still running, by trip id. A service worker that restarts
+  // forgets them, as it forgets the requests themselves.
+  const running = new Map<string, DebugRunningEntry>();
+  // Trip ids that have ended, so an update that comes late is dropped.
+  const finished = new Set<string>();
   // One change at a time, so two round trips ending together are both kept.
   let queue: Promise<unknown> = Promise.resolve();
   const serial = <T>(work: () => Promise<T>): Promise<T> => {
@@ -117,6 +133,12 @@ export function createDebugLog({ storage, isOn }: DebugLogDeps): DebugLog {
         if (items.length === 0 || !(await on())) return [];
         const stored = await load();
         const added = items.map((item) => ({ ...item, id: stored.nextId++ }) as DebugEntry);
+        for (const item of items) {
+          if (item.kind !== 'round-trip' || !item.trip.id) continue;
+          running.delete(item.trip.id);
+          if (finished.size >= DEBUG_LOG_LIMIT * 5) finished.clear();
+          finished.add(item.trip.id);
+        }
         stored.entries = [...stored.entries, ...added].slice(-DEBUG_LOG_LIMIT);
         await save(stored);
         for (const entry of added) emit({ type: 'entry', entry });
@@ -127,8 +149,19 @@ export function createDebugLog({ storage, isOn }: DebugLogDeps): DebugLog {
       serial(async () => {
         const stored = await load();
         await save({ nextId: stored.nextId, entries: [] });
+        running.clear();
         emit({ type: 'cleared' });
       }),
+    // In the same queue as add, so a late update never comes after its end.
+    progress: (item) =>
+      serial(async () => {
+        const id = item.trip.id;
+        if (!id || item.trip.status !== 'running' || finished.has(id) || !(await on())) return;
+        running.set(id, item);
+        emit({ type: 'running', entry: item });
+      }),
+    snapshot: () =>
+      serial(async () => ({ entries: (await load()).entries, running: [...running.values()] })),
     listen(listener) {
       listeners.add(listener);
       return () => void listeners.delete(listener);
@@ -141,11 +174,11 @@ function debugCause(cause: RoundTripCause): DebugCause {
   return cause === 'page' ? 'click' : cause;
 }
 
-/** The entry for a round trip the service worker made, as it ends. */
+/** The entry for a round trip the service worker made, as it runs or ends. */
 export function workerEntry(
   trip: RoundTrip,
   log: Pick<RoundTripLog, 'group' | 'cause' | 'origin'>,
-): DebugEntryInput {
+): DebugRunningEntry {
   return {
     kind: 'round-trip',
     group: log.group,
@@ -259,9 +292,10 @@ export function pageEntries(payload: unknown): DebugEntryInput[] {
 // --- Wiring ---
 
 /**
- * Sends each new entry, and each clear, to every extension page connected on
- * the debug log port. A GitHub page's content script cannot connect: only
- * pages of this extension (such as the debug window) can.
+ * Sends the log as it is, then each new entry, running round trip and clear,
+ * to every extension page connected on the debug log port. A GitHub page's
+ * content script cannot connect: only pages of this extension (such as the
+ * debug window) can.
  */
 export function listenForDebugLogPorts(runtime: PortRuntime, log: DebugLog): void {
   runtime.onConnect.addListener((port: PortLike) => {
@@ -271,14 +305,27 @@ export function listenForDebugLogPorts(runtime: PortRuntime, log: DebugLog): voi
       port.disconnect();
       return;
     }
-    const stop = log.listen((message) => {
+    let open = true;
+    const send = (message: DebugLogPortMessage) => {
+      if (!open) return;
       try {
         port.postMessage(message);
       } catch {
-        stop();
+        close();
       }
-    });
-    port.onDisconnect.addListener(stop);
+    };
+    // Listening first, so nothing added while the snapshot is read is
+    // missed. An entry sent both ways has the same id, and the window keeps one.
+    const stop = log.listen(send);
+    const close = () => {
+      open = false;
+      stop();
+    };
+    port.onDisconnect.addListener(close);
+    log.snapshot().then(
+      (snapshot) => send({ type: 'snapshot', ...snapshot }),
+      () => send({ type: 'snapshot', entries: [], running: [] }),
+    );
   });
 }
 

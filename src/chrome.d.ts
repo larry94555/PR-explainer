@@ -4,7 +4,10 @@ declare const chrome: {
   runtime: import('./messaging/protocol').ExtensionRuntime &
     import('./messaging/protocol').PortRuntime & {
       onStartup: { addListener(listener: () => void): void };
+      getURL(path: string): string;
     };
+  windows: import('./debug/debugWindowOpener').WindowsLike;
+  contextMenus: import('./debug/debugWindowOpener').ContextMenusLike;
   action: import('./toolbarToggle').ActionLike;
   tabs: {
     onRemoved: { addListener(listener: (tabId: number) => void): void };

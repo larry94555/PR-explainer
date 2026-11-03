@@ -8,14 +8,21 @@
 // One log is made per request from the content script (an explanation, or a
 // warm-up), so its round trips are tied to the click or cause that made
 // them. Logs live only as long as that request: nothing is stored here. With
-// the Debug window setting on, each round trip is also handed, as it ends, to
-// the debug log (src/debug/debugLog.ts, PR 9.3) through `onEnd`.
+// the Debug window setting on, each round trip is also handed to the debug
+// log (src/debug/debugLog.ts, PR 9.3) through `onUpdate`: as it starts, as
+// its reply grows (at most every PROGRESS_MS, for the debug window, PR 9.4),
+// and as it ends.
 //
 // Not imported by the content script, which records its GitHub round trips
 // in src/net/githubFetch.ts with the same shape (src/trace/types.ts): the two
 // sides cannot share code (see src/content.ts).
 
+import { readTimings } from '../llm/ollamaClient';
+import type { LlmTimings } from '../llm/types';
 import type { RoundTrip, RoundTripCause, RoundTripStatus } from '../trace/types';
+
+/** How often a running round trip's reply so far is handed to `onUpdate`. */
+export const PROGRESS_MS = 250;
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -43,15 +50,21 @@ interface Entry {
   startedAt: number;
   /** The reply's text, kept for /api/chat only. */
   body?: string;
+  /** When onUpdate last heard about it, from the log's clock. */
+  toldAt?: number;
 }
 
-/** Called with each round trip as it ends (PR 9.3), timed from the log's origin. */
+/**
+ * Called with each round trip as it starts and while it runs (status
+ * "running", PR 9.4), and once as it ends (PR 9.3), timed from the log's
+ * origin. Every call for one round trip has the same `trip.id`.
+ */
 export type RoundTripSink = (trip: RoundTrip, log: RoundTripLog) => void;
 
 export interface RoundTripLogOptions {
   /** Ties the round trips to one click or cause; a new id when left out. */
   group?: string;
-  onEnd?: RoundTripSink;
+  onUpdate?: RoundTripSink;
 }
 
 export interface RoundTripLog {
@@ -106,22 +119,31 @@ function messagesOf(body: RequestInit['body']): RoundTrip['messages'] {
  * of them, one per line, each with a piece of `message.content` (and
  * `message.thinking` when Ollama returns thinking in its own field).
  */
-export function chatReplyOf(body: string): { reply: string; thinking: string } {
+export function chatReplyOf(body: string): {
+  reply: string;
+  thinking: string;
+  timings?: LlmTimings;
+} {
   let reply = '';
   let thinking = '';
+  let timings: LlmTimings | undefined;
   for (const line of body.split('\n')) {
     if (!line.trim()) continue;
     try {
-      const { message } = JSON.parse(line) as {
+      const parsed = JSON.parse(line) as {
         message?: { content?: unknown; thinking?: unknown };
+        done?: unknown;
       };
+      const { message } = parsed;
       if (typeof message?.content === 'string') reply += message.content;
       if (typeof message?.thinking === 'string') thinking += message.thinking;
+      // The last line says where Ollama's time went (PR 9.4).
+      if (parsed.done === true) timings = readTimings(parsed);
     } catch {
       // A line cut off mid-reply: the rest is still worth showing.
     }
   }
-  return { reply, thinking };
+  return { reply, thinking, ...(timings && { timings }) };
 }
 
 /** Whether a streamed /api/chat body has its last line, the one with "done": true. */
@@ -160,10 +182,34 @@ export function newGroupId(): string {
 export function createRoundTripLog(
   cause: RoundTripCause,
   now: () => number = Date.now,
-  { group = newGroupId(), onEnd }: RoundTripLogOptions = {},
+  { group = newGroupId(), onUpdate }: RoundTripLogOptions = {},
 ): RoundTripLog {
   const origin = now();
   const entries: Entry[] = [];
+  let count = 0;
+
+  /** Hands the round trip, as it is now, to onUpdate. */
+  const tell = (entry: Entry) => {
+    if (!onUpdate) return;
+    const running = entry.trip.status === 'running';
+    const trip: RoundTrip = {
+      ...entry.trip,
+      startMs: entry.startedAt - origin,
+      ...(running && { durationMs: Math.max(0, now() - entry.startedAt) }),
+    };
+    if (running && entry.body) {
+      const { reply, thinking } = chatReplyOf(entry.body);
+      if (reply) trip.reply = reply;
+      if (thinking) trip.thinking = thinking;
+    }
+    entry.toldAt = now();
+    try {
+      // `log` is made below; a round trip can only start after that.
+      onUpdate(trip, log);
+    } catch {
+      // The debug log must never break a request.
+    }
+  };
 
   const begin = (url: string, init: RequestInit | undefined): Entry => {
     const { endpoint, path } = endpointOf(url);
@@ -172,6 +218,7 @@ export function createRoundTripLog(
     const entry: Entry = {
       startedAt: now(),
       trip: {
+        id: `${group}:${++count}`,
         target: 'ollama',
         method: init?.method ?? 'GET',
         endpoint,
@@ -187,6 +234,7 @@ export function createRoundTripLog(
       ...(isChat && { body: '' }),
     };
     entries.push(entry);
+    tell(entry);
     return entry;
   };
 
@@ -196,18 +244,12 @@ export function createRoundTripLog(
     entry.trip.durationMs = Math.max(0, now() - entry.startedAt);
     if (error !== undefined) entry.trip.error = messageOf(error);
     if (entry.body !== undefined) {
-      const { reply, thinking } = chatReplyOf(entry.body);
+      const { reply, thinking, timings } = chatReplyOf(entry.body);
       if (reply) entry.trip.reply = reply;
       if (thinking) entry.trip.thinking = thinking;
+      if (timings) entry.trip.timings = timings;
     }
-    if (onEnd) {
-      try {
-        // `log` is made below; a round trip can only end after that.
-        onEnd({ ...entry.trip, startMs: entry.startedAt - origin }, log);
-      } catch {
-        // The debug log must never break a request.
-      }
-    }
+    tell(entry);
   };
 
   /**
@@ -246,6 +288,7 @@ export function createRoundTripLog(
           // The client stops reading at the stream's last line, so that is
           // where the round trip ends, even if the connection closes later.
           if (endsStream(entry.body)) end(entry, status);
+          else if (now() - (entry.toldAt ?? 0) >= PROGRESS_MS) tell(entry);
         }
         controller.enqueue(chunk.value);
       },

@@ -41,7 +41,7 @@ export interface ChatDeps {
    * explanations use, so switching between them does not reload the model.
    */
   contextTokens?: ContextSizer;
-  /** Gets each round trip as it ends, for the debug log (PR 9.3). */
+  /** Gets each round trip as it starts, runs and ends, for the debug log (PR 9.3, 9.4). */
   onRoundTrip?: RoundTripSink;
 }
 
@@ -73,7 +73,7 @@ export function createChatHandler(deps: ChatDeps) {
     }
     const settings = await deps.getSettings();
     // Each question's round trips are one group in the debug log (PR 9.3).
-    const roundTrips = createRoundTripLog('chat', Date.now, { onEnd: deps.onRoundTrip });
+    const roundTrips = createRoundTripLog('chat', Date.now, { onUpdate: deps.onRoundTrip });
     const contextTokens = await deps.contextTokens?.(settings, signal, undefined, roundTrips);
     try {
       const stream = deps.createClient(settings, { roundTrips }).chatStream(payload.messages, {

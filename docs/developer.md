@@ -26,6 +26,7 @@ Everything you need to work on PR Explainer: requirements, commands, the project
 | `npm run bench:history -- [model ...]` | Run the benchmark with the code after each latency PR (8.2 to now), measure the floor, and add the latency report to `docs/latency.md` |
 | `npm run demo:popup` | Open a demo page for the explanation popup, with fake data |
 | `npm run demo:chat` | Open a demo page for the chat panel, with fake messages |
+| `npm run demo:debug` | Open a demo page for the debug window, playing a recorded flow with a click that runs live |
 
 ## Day-to-day workflow
 
@@ -39,6 +40,7 @@ Everything you need to work on PR Explainer: requirements, commands, the project
 - **Page console:** in a dev build, the content script logs the prompt, the PR description and the file context it sent, and every build logs a timing line per explanation.
 - **Show prompt (debug):** tick it on the settings page to see the exact prompt, and what was trimmed, under each explanation.
 - **Debug log:** with **Debug window** ticked on the settings page, the service worker keeps every round trip to GitHub and Ollama (prompt, reply and time) and each click's tasks, the last 200, in `chrome.storage.session` under `debugLog`. In the service worker console, run `chrome.storage.session.get('debugLog').then(console.log)`, or `await debugLlm.log()` in a dev build. Unticking it empties the log.
+- **Debug window:** with the same setting on, click **Debug** in the popup (or right-click the toolbar button and choose **Open debug window**) to follow every round trip live, open one to see its prompt and reply, and **Copy as JSON** to share it. `npm run demo:debug` shows it with a recorded flow, without the extension or Ollama.
 - **Details:** the popup's **Details** button shows a bar for each task of the click (finding the code, the GitHub fetches, the service worker's steps, and the model's Load, Read prompt, Think and Write answer), and the console logs the same tasks.
 
 ## Project layout

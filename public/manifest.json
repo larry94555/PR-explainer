@@ -31,7 +31,7 @@
     "page": "options.html",
     "open_in_tab": true
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "contextMenus"],
   "host_permissions": [
     "https://github.com/*",
     "http://localhost/*",

@@ -6,7 +6,8 @@ const src = resolve(import.meta.dirname, 'src');
 // Builds the Manifest V3 extension into dist/:
 // - public/ (manifest.json, icons) is copied as-is to the root of dist/.
 // - Each entry below becomes a file at the root of dist/ with a stable name,
-//   so manifest.json can refer to background.js, content.js and options.html.
+//   so manifest.json can refer to background.js, content.js and options.html
+//   (and the service worker can open debug.html).
 export default defineConfig(({ mode }) => ({
   root: src,
   // Relative URLs so pages work from chrome-extension://<id>/.
@@ -23,6 +24,8 @@ export default defineConfig(({ mode }) => ({
         background: resolve(src, 'background.ts'),
         content: resolve(src, 'content.ts'),
         options: resolve(src, 'options.html'),
+        // The debug window (PR 9.4).
+        debug: resolve(src, 'debug.html'),
       },
       output: {
         entryFileNames: '[name].js',

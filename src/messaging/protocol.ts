@@ -20,6 +20,8 @@ export interface RequestMap {
   debugLogAdd: { payload: DebugLogPayload; result: { added: number } };
   // Empties the debug log (the debug window's Clear button, PR 9.4).
   debugLogClear: { payload: undefined; result: { cleared: true } };
+  // Opens the debug window, or brings it to the front (the popup's Debug button, PR 9.4).
+  openDebugWindow: { payload: undefined; result: { window: 'opened' | 'focused' } };
 }
 
 export type RequestType = keyof RequestMap;

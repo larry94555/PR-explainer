@@ -12,7 +12,7 @@ import {
   type SessionStorageLike,
   type StorageChangedLike,
 } from '../src/debug/debugLog';
-import type { DebugEntryInput, DebugLogPortMessage } from '../src/debug/types';
+import type { DebugEntryInput, DebugLogPortMessage, DebugRunningEntry } from '../src/debug/types';
 import type { PortLike, PortRuntime } from '../src/messaging/protocol';
 import { createRoundTripLog } from '../src/net/roundTrips';
 import type { RoundTrip } from '../src/trace/types';
@@ -192,7 +192,9 @@ describe('entries for the debug log (PR 9.3)', () => {
     let t = 5_000;
     const roundTrips = createRoundTripLog('click', () => t, {
       group: 'click-1',
-      onEnd: (ended, log) => void debug.add([workerEntry(ended, log)]),
+      onUpdate: (ended, log) => {
+        if (ended.status !== 'running') void debug.add([workerEntry(ended, log)]);
+      },
     });
     t += 20;
     const response = await roundTrips.record(
@@ -283,6 +285,62 @@ describe('entries for the debug log (PR 9.3)', () => {
   });
 });
 
+function running(id: string, reply = ''): DebugRunningEntry {
+  return {
+    kind: 'round-trip',
+    group: id.split(':')[0]!,
+    cause: 'click',
+    at: 1,
+    trip: trip({ id, status: 'running', reply }),
+  };
+}
+
+describe('round trips still running (PR 9.4)', () => {
+  it('sends a running round trip to listeners without storing it, until it ends', async () => {
+    const { log, storage } = setup();
+    const heard: DebugLogPortMessage[] = [];
+    log.listen((m) => heard.push(m));
+    await log.progress(running('g1:1', 'Hel'));
+    await log.progress(running('g1:1', 'Hello'));
+    expect(heard.map((m) => m.type)).toEqual(['running', 'running']);
+    expect((await log.snapshot()).running).toEqual([
+      expect.objectContaining({ trip: expect.objectContaining({ reply: 'Hello' }) }),
+    ]);
+    expect(storage.data[DEBUG_LOG_KEY]).toBeUndefined();
+    await log.add([{ ...running('g1:1'), trip: trip({ id: 'g1:1', reply: 'Hello!' }) }]);
+    expect((await log.snapshot()).running).toEqual([]);
+  });
+
+  it('drops an update that comes after its round trip ended', async () => {
+    const { log } = setup();
+    const heard: DebugLogPortMessage[] = [];
+    log.listen((m) => heard.push(m));
+    await log.add([{ ...running('g1:1'), trip: trip({ id: 'g1:1' }) }]);
+    await log.progress(running('g1:1', 'late'));
+    expect(heard.map((m) => m.type)).toEqual(['entry']);
+    expect((await log.snapshot()).running).toEqual([]);
+  });
+
+  it('keeps nothing and sends nothing while the setting is off, and Clear forgets them', async () => {
+    const { log, state } = setup(false);
+    const heard: DebugLogPortMessage[] = [];
+    log.listen((m) => heard.push(m));
+    await log.progress(running('g1:1'));
+    expect(heard).toEqual([]);
+    state.on = true;
+    await log.progress(running('g1:2'));
+    await log.clear();
+    expect((await log.snapshot()).running).toEqual([]);
+  });
+
+  it('ignores a round trip that is not running or has no id', async () => {
+    const { log } = setup();
+    await log.progress({ ...running('g1:1'), trip: trip({ id: 'g1:1' }) });
+    await log.progress({ ...running('g1:2'), trip: trip({ status: 'running' }) });
+    expect((await log.snapshot()).running).toEqual([]);
+  });
+});
+
 describe('debug log port (PR 9.3)', () => {
   function fakePort(url: string | undefined, name: string = DEBUG_LOG_PORT) {
     const sent: unknown[] = [];
@@ -312,7 +370,7 @@ describe('debug log port (PR 9.3)', () => {
     return { log, connect: (port: PortLike) => listener(port) };
   }
 
-  it('sends each new entry and each clear to the debug window until it closes', async () => {
+  it('sends the log, then each new entry and each clear, to the debug window until it closes', async () => {
     const { log, connect } = serve();
     const window = fakePort('chrome-extension://ext/debug.html');
     connect(window.port);
@@ -321,8 +379,25 @@ describe('debug log port (PR 9.3)', () => {
     window.close();
     await log.add([input(2)]);
     expect(window.sent).toEqual([
+      { type: 'snapshot', entries: [], running: [] },
       { type: 'entry', entry: expect.objectContaining({ id: 1, group: 'g1' }) },
       { type: 'cleared' },
+    ]);
+  });
+
+  it('starts a window that connects late with the whole log and the round trips running (PR 9.4)', async () => {
+    const { log, connect } = serve();
+    await log.add([input(1)]);
+    await log.progress(running('g2:1'));
+    const window = fakePort('chrome-extension://ext/debug.html');
+    connect(window.port);
+    await log.read();
+    expect(window.sent).toEqual([
+      {
+        type: 'snapshot',
+        entries: [expect.objectContaining({ id: 1 })],
+        running: [expect.objectContaining({ trip: expect.objectContaining({ id: 'g2:1' }) })],
+      },
     ]);
   });
 
