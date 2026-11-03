@@ -64,6 +64,8 @@ describe('settings', () => {
         keepAliveMinutes: 30,
         // Explain on hover uses the model for lines never clicked (PR 8.7).
         explainOnHover: false,
+        // Thinking was most of the wait on a reasoning model (PR 9.5).
+        letModelThink: false,
         showPrompt: false,
         // The debug log keeps prompts, so it is opt-in (PR 9.3).
         debugWindow: false,
@@ -98,6 +100,7 @@ describe('settings', () => {
         contextTokens: 8192,
         keepAliveMinutes: 90,
         explainOnHover: true,
+        letModelThink: true,
         showPrompt: true,
         debugWindow: true,
       };
@@ -252,6 +255,15 @@ describe('settings', () => {
       const promise = saveSettings({ explainOnHover: 1 as unknown as boolean }, fakeStorage());
       await expectRejectedFields(promise, ['explainOnHover']);
       await expect(promise).rejects.toThrow('Explain on hover must be on or off.');
+    });
+
+    it('accepts Let the model think on or off and nothing else (PR 9.5)', async () => {
+      await expect(saveSettings({ letModelThink: true }, fakeStorage())).resolves.toMatchObject({
+        letModelThink: true,
+      });
+      const promise = saveSettings({ letModelThink: 'yes' as unknown as boolean }, fakeStorage());
+      await expectRejectedFields(promise, ['letModelThink']);
+      await expect(promise).rejects.toThrow('Let the model think must be on or off.');
     });
 
     it('accepts Show prompt on or off and nothing else', async () => {

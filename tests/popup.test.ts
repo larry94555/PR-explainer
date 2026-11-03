@@ -477,12 +477,23 @@ describe('popup', () => {
       ]);
       expect(panel().querySelector('.trace-total')!.textContent).toBe(
         'Total 14.2 s · first word at 5.9 s (the line on the bars) · ' +
-          '~ estimated from the share of the reply inside <think>',
+          '~ estimated from the share of what the model wrote that was thinking',
       );
 
       detailsButton().click();
       expect(panel().hidden).toBe(true);
       expect(detailsButton().getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('splits Think by thinking returned in its own field, and never shows it as the answer (PR 9.5)', () => {
+      const popup = openPopup(ANCHOR, { now: () => 0 });
+      popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+      const thinking = 'secret plan '.repeat(4) + 'xx'; // 50 characters
+      popup.showTrace({ tasks: TASKS, timings: TIMINGS, reply: 'a'.repeat(50), thinking });
+      detailsButton().click();
+      const think = rows().find((r) => r.dataset.task === 'think')!;
+      expect(think.querySelector('.task-time')!.textContent).toBe('~4.0 s · 28%');
+      expect(shadow().querySelector('.body')!.textContent).not.toContain('secret plan');
     });
 
     it('draws each bar where the task started and as long as it took, overlapping for tasks at the same time', () => {

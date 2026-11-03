@@ -7,7 +7,7 @@
 // follow, so scripts/bench.ts loads this file through Vite (runnerImport).
 
 import { createExplainHandler } from '../src/explain/explainHandler';
-import { createContextSizer } from '../src/llm/contextSize';
+import { createModelLookup } from '../src/llm/contextSize';
 import { gpuStatus } from '../src/llm/gpuStatus';
 import { OllamaClient } from '../src/llm/ollamaClient';
 import { isSameModel } from '../src/llm/types';
@@ -21,7 +21,7 @@ export { DEFAULT_SETTINGS };
 export function createBench(llmUrl: string, platform: Platform, overrides: Partial<Settings> = {}) {
   const client = new OllamaClient({ baseUrl: llmUrl });
   const createClient = () => client;
-  const contextSizer = createContextSizer(createClient);
+  const { contextTokens: contextSizer, canThink } = createModelLookup(createClient);
   const settingsFor = (model: string): Settings => ({
     ...DEFAULT_SETTINGS,
     ...overrides,
@@ -52,6 +52,7 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
         createClient,
         platform,
         contextTokens: contextSizer,
+        canThink,
       });
       const startedAt = performance.now();
       let firstTokenMs: number | undefined;
@@ -75,10 +76,11 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
         const totalMs = performance.now() - startedAt;
         if (result.status === 'failed') return { ok: false, error: result.message };
         const { timings } = result;
-        // The thinking part of the answer, as the popup's Think row estimates it (PR 9.1).
+        // The thinking part of the answer, as the popup's Think row works it out
+        // (PR 9.1), with thinking in its own field counted too (PR 9.5).
         const { think } = splitAnswer(
           { tokens: timings?.answerTokens, ms: timings?.answerMs },
-          thinkShare(reply),
+          thinkShare(reply, result.thinking),
         );
         return {
           ok: true,

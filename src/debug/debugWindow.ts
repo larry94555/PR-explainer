@@ -527,6 +527,13 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
         ],
         ['Sent', formatBytes(trip.bytesSent)],
         ['Received', `${formatBytes(trip.bytesReceived)}${row.running ? ' so far' : ''}`],
+        // Whether a reasoning model was asked to think (PR 9.5).
+        ...(trip.think !== undefined
+          ? ([['Thinking', trip.think ? 'on ("think": true)' : 'off ("think": false)']] as [
+              string,
+              string,
+            ][])
+          : []),
         ...(trip.error ? ([['Error', trip.error]] as [string, string][]) : []),
       ]),
     );

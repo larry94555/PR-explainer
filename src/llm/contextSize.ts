@@ -9,10 +9,15 @@
 // remembered while the service worker runs. A failed lookup is not
 // remembered: the request goes ahead with the fallback, and the next one
 // asks again.
+//
+// The same /api/show reply says whether the model can think (PR 9.5), so the
+// context size and the thinking check share one lookup per server and model:
+// with Context size on automatic, checking whether the model thinks costs no
+// extra round trip.
 
 import type { RoundTripLog } from '../net/roundTrips';
 import type { Settings } from '../settings';
-import type { LlmClient } from './types';
+import { canThink, type LlmClient, type ModelContext } from './types';
 
 /**
  * The most an automatic size uses. Bigger windows cost memory and time on a
@@ -39,30 +44,93 @@ export type ContextSizer = (
   roundTrips?: RoundTripLog,
 ) => Promise<number>;
 
-export function createContextSizer(
+/**
+ * Whether the model in `settings` can think (PR 9.5): true or false when the
+ * server says, undefined when it does not (an older Ollama) or could not be
+ * asked. Takes the same arguments as ContextSizer.
+ */
+export type ThinkingCheck = (
+  settings: Settings,
+  signal?: AbortSignal,
+  onLookup?: () => void,
+  roundTrips?: RoundTripLog,
+) => Promise<boolean | undefined>;
+
+export interface ModelLookup {
+  contextTokens: ContextSizer;
+  canThink: ThinkingCheck;
+}
+
+/** The context sizer and thinking check, sharing one /api/show lookup per server and model. */
+export function createModelLookup(
   createClient: (settings: Settings, options?: { roundTrips?: RoundTripLog }) => LlmClient,
-): ContextSizer {
-  const known = new Map<string, number>();
-  return async (settings, signal, onLookup, roundTrips) => {
-    if (settings.contextTokens > 0) return settings.contextTokens;
+): ModelLookup {
+  const known = new Map<string, ModelContext>();
+  // The model's details, from memory or the server. Throws when the server cannot say.
+  const details = async (
+    settings: Settings,
+    signal?: AbortSignal,
+    onLookup?: () => void,
+    roundTrips?: RoundTripLog,
+  ): Promise<ModelContext> => {
     const key = `${settings.llmUrl} ${settings.model}`;
     const remembered = known.get(key);
     if (remembered !== undefined) return remembered;
     onLookup?.();
-    try {
-      const { maxTokens, configuredTokens } = await createClient(settings, {
-        roundTrips,
-      }).modelContext(settings.model, { signal });
-      const size = Math.min(
-        configuredTokens ?? AUTO_CONTEXT_TOKENS,
-        maxTokens ?? Number.POSITIVE_INFINITY,
-      );
-      known.set(key, size);
-      return size;
-    } catch {
-      return FALLBACK_CONTEXT_TOKENS;
-    }
+    const found = await createClient(settings, { roundTrips }).modelContext(settings.model, {
+      signal,
+    });
+    known.set(key, found);
+    return found;
   };
+  return {
+    contextTokens: async (settings, signal, onLookup, roundTrips) => {
+      if (settings.contextTokens > 0) return settings.contextTokens;
+      try {
+        const { maxTokens, configuredTokens } = await details(
+          settings,
+          signal,
+          onLookup,
+          roundTrips,
+        );
+        return Math.min(
+          configuredTokens ?? AUTO_CONTEXT_TOKENS,
+          maxTokens ?? Number.POSITIVE_INFINITY,
+        );
+      } catch {
+        return FALLBACK_CONTEXT_TOKENS;
+      }
+    },
+    canThink: async (settings, signal, onLookup, roundTrips) => {
+      if (!settings.model) return undefined;
+      try {
+        return canThink(await details(settings, signal, onLookup, roundTrips));
+      } catch {
+        // Not knowing only means `think` is not sent; the request goes ahead.
+        return undefined;
+      }
+    },
+  };
+}
+
+export function createContextSizer(
+  createClient: (settings: Settings, options?: { roundTrips?: RoundTripLog }) => LlmClient,
+): ContextSizer {
+  return createModelLookup(createClient).contextTokens;
+}
+
+/**
+ * The `think` option for a request (PR 9.5): for a model that can think,
+ * false (answer directly) unless the Let the model think setting is on, in
+ * which case true, so the thinking comes back in its own field. Left out for
+ * any other model, or when it is not known, so an older Ollama or a model
+ * without thinking gets the request it always did.
+ */
+export function thinkOption(
+  modelCanThink: boolean | undefined,
+  letModelThink: boolean,
+): boolean | undefined {
+  return modelCanThink === true ? letModelThink : undefined;
 }
 
 /** The tokens a prompt may use in a `contextTokens` window with room for the reply. */

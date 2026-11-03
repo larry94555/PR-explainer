@@ -17,6 +17,11 @@
 // Every chat request says how long to keep the model loaded afterwards
 // (keep_alive, PR 8.3); Ollama's own default unloads it after 5 idle minutes.
 // A chat request with no messages only loads the model (loadModel).
+//
+// For a reasoning model a chat request says whether it may think (`think`,
+// PR 9.5). When it does think, Ollama returns the thinking in its own field
+// (`message.thinking`), which is kept apart from the answer: chat() and
+// chatStream() return it at the end and never mix it into the content.
 
 import {
   isSameModel,
@@ -131,6 +136,11 @@ export class OllamaClient implements LlmClient {
     // parameters is the Modelfile's PARAMETER lines as text, such as "num_ctx 8192\nstop ...".
     const numCtx = typeof parameters === 'string' && /^\s*num_ctx\s+(\d+)\s*$/m.exec(parameters);
     if (numCtx && isPositiveInteger(Number(numCtx[1]))) result.configuredTokens = Number(numCtx[1]);
+    // capabilities lists what the model can do, such as ["completion", "thinking"] (PR 9.5).
+    const { capabilities } = body as { capabilities?: unknown };
+    if (Array.isArray(capabilities)) {
+      result.capabilities = capabilities.filter((c): c is string => typeof c === 'string');
+    }
     return result;
   }
 
@@ -142,16 +152,18 @@ export class OllamaClient implements LlmClient {
       model,
     );
     const { message, model: replyModel } = body as {
-      message?: { content?: unknown };
+      message?: { content?: unknown; thinking?: unknown };
       model?: unknown;
     };
     if (typeof message?.content !== 'string') {
       throw badResponse('/api/chat', 'missing "message.content"');
     }
     const timings = readTimings(body);
+    const thinking = typeof message.thinking === 'string' ? message.thinking : '';
     return {
       content: message.content,
       model: typeof replyModel === 'string' ? replyModel : model,
+      ...(thinking && { thinking }),
       ...(timings && { timings }),
     };
   }
@@ -175,6 +187,7 @@ export class OllamaClient implements LlmClient {
     signal?.addEventListener('abort', onAbort);
     const decoder = new TextDecoder();
     let buffer = '';
+    let thinking = '';
     let finished = false;
     try {
       while (!finished) {
@@ -198,12 +211,14 @@ export class OllamaClient implements LlmClient {
           buffer = buffer.slice(newline + 1);
           if (!line) continue;
           const part = parseStreamLine(line);
+          thinking += part.thinking;
           if (part.content) yield part.content;
           if (part.done) {
             finished = true;
             return {
               model: part.model ?? model,
               ...(part.doneReason && { doneReason: part.doneReason }),
+              ...(thinking && { thinking }),
               ...(part.timings && { timings: part.timings }),
             };
           }
@@ -288,6 +303,8 @@ function chatInit(body: object, signal: AbortSignal | undefined): RequestInit {
 
 interface StreamPart {
   content: string;
+  /** A piece of thinking in its own field (PR 9.5), or "". */
+  thinking: string;
   done: boolean;
   model?: string;
   doneReason?: string;
@@ -321,8 +338,10 @@ export function readTimings(body: unknown): LlmTimings | undefined {
 }
 
 // One line of Ollama's stream: {"model": ..., "message": {"content": "..."},
-// "done": false}, ending with "done": true (and "done_reason"). If the model
-// fails mid-reply, Ollama sends {"error": "..."} instead.
+// "done": false}, ending with "done": true (and "done_reason"). While a
+// reasoning model thinks, the message carries "thinking" instead of (or
+// beside) "content" (PR 9.5). If the model fails mid-reply, Ollama sends
+// {"error": "..."} instead.
 function parseStreamLine(line: string): StreamPart {
   let parsed: unknown;
   try {
@@ -335,7 +354,7 @@ function parseStreamLine(line: string): StreamPart {
   }
   const { error, message, done, model, done_reason } = parsed as {
     error?: unknown;
-    message?: { content?: unknown };
+    message?: { content?: unknown; thinking?: unknown };
     done?: unknown;
     model?: unknown;
     done_reason?: unknown;
@@ -347,12 +366,17 @@ function parseStreamLine(line: string): StreamPart {
   if (content !== undefined && typeof content !== 'string') {
     throw badResponse('/api/chat', '"message.content" is not text');
   }
-  if (content === undefined && done !== true) {
+  const thinking = message?.thinking;
+  if (thinking !== undefined && typeof thinking !== 'string') {
+    throw badResponse('/api/chat', '"message.thinking" is not text');
+  }
+  if (content === undefined && thinking === undefined && done !== true) {
     throw badResponse('/api/chat', 'a stream line has no "message.content"');
   }
   const timings = done === true ? readTimings(parsed) : undefined;
   return {
     content: content ?? '',
+    thinking: thinking ?? '',
     done: done === true,
     ...(typeof model === 'string' && { model }),
     ...(typeof done_reason === 'string' && { doneReason: done_reason }),
@@ -379,6 +403,7 @@ export function buildChatBody(messages: ChatMessage[], options: ChatOptions) {
     messages: messages.map(({ role, content }) => ({ role, content })),
     stream: false,
     ...keepAlive(options.keepAliveMinutes),
+    ...(options.think !== undefined && { think: options.think }),
     options: modelOptions,
   };
 }

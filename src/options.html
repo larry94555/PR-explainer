@@ -23,6 +23,7 @@
             <button id="refresh-models" type="button">Refresh</button>
           </div>
           <p id="models-status" class="hint" role="status"></p>
+          <p id="thinking-status" class="hint" role="status"></p>
           <p class="error" data-error-for="model" role="alert"></p>
         </div>
 
@@ -101,6 +102,19 @@
             click.
           </p>
           <p class="error" data-error-for="explainOnHover" role="alert"></p>
+        </div>
+
+        <div class="field">
+          <label class="check">
+            <input id="letModelThink" name="letModelThink" type="checkbox" />
+            Let the model think
+          </label>
+          <p class="hint">
+            Lets a reasoning model, such as deepseek-r1, think before it answers. Off by default:
+            without thinking it answers much sooner, and a few lines of code rarely need it. Other
+            models are not affected.
+          </p>
+          <p class="error" data-error-for="letModelThink" role="alert"></p>
         </div>
 
         <fieldset id="debug" class="debug">

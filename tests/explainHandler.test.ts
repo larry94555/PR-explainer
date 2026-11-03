@@ -8,7 +8,7 @@ import {
   type ChatStreamEnd,
   type LlmClient,
 } from '../src/llm/types';
-import { createContextSizer } from '../src/llm/contextSize';
+import { createContextSizer, createModelLookup } from '../src/llm/contextSize';
 import { createLlmClient } from '../src/llm/createClient';
 import { createRoundTripLog } from '../src/net/roundTrips';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
@@ -453,7 +453,7 @@ describe('explain handler', () => {
       expect(result.status).toBe('done');
       const trips = result.trace!.roundTrips!;
       expect(trips.map((t) => [t.endpoint, t.purpose, t.cause, t.status])).toEqual([
-        ['localhost:11434/api/show', 'context size', 'click', 'done'],
+        ['localhost:11434/api/show', 'model details', 'click', 'done'],
         ['localhost:11434/api/ps', 'loaded window', 'click', 'done'],
         ['localhost:11434/api/chat', 'explanation', 'click', 'done'],
       ]);
@@ -488,7 +488,7 @@ describe('explain handler', () => {
       })({ context: SAMPLE_CONTEXT, debugId: 'click-7' });
       expect(result.status).toBe('done');
       expect(ended).toEqual([
-        ['click-7', 'click', 'context size'],
+        ['click-7', 'click', 'model details'],
         ['click-7', 'click', 'loaded window'],
         ['click-7', 'click', 'explanation'],
       ]);
@@ -507,6 +507,100 @@ describe('explain handler', () => {
       const trips = result.trace!.roundTrips!;
       expect(trips[0]).toMatchObject({ cause: 'warmup', purpose: 'is the model loaded' });
       expect(trips.slice(1).every((t) => t.cause === 'hover')).toBe(true);
+    });
+  });
+
+  describe('thinking (PR 9.5)', () => {
+    const ANSWER = ['## What it does\nA.', "\n## Why it's needed\nB.", '\n## Concerns\nC.'];
+    const REASONING = { ...SETTINGS, model: 'deepseek-r1:7b' };
+
+    function thinkingSetup(
+      capabilities: string[] | undefined,
+      settings: Settings = REASONING,
+      end: Partial<ChatStreamEnd> = {},
+    ) {
+      const client: LlmClient = {
+        listModels: vi.fn(),
+        loadedModels: vi.fn(),
+        loadedContextTokens: vi.fn(async () => undefined),
+        runningModels: vi.fn(async () => []),
+        loadModel: vi.fn(),
+        modelContext: vi.fn(async () => ({
+          maxTokens: 131072,
+          ...(capabilities && { capabilities }),
+        })),
+        chat: vi.fn(),
+        chatStream: vi.fn(async function* () {
+          for (const piece of ANSWER) yield piece;
+          return { model: settings.model, doneReason: 'stop', ...end };
+        }),
+      };
+      const { contextTokens, canThink } = createModelLookup(() => client);
+      const handler = createExplainHandler({
+        getSettings: async () => settings,
+        createClient: () => client,
+        platform: 'windows',
+        contextTokens,
+        canThink,
+      });
+      const options = () =>
+        (vi.mocked(client.chatStream).mock.calls[0] as [unknown, ChatOptions])[1];
+      return { handler, client, options };
+    }
+
+    it('turns thinking off for a reasoning model, with no extra round trip', async () => {
+      const { handler, client, options } = thinkingSetup(['completion', 'thinking']);
+      const result = await handler({ context: SAMPLE_CONTEXT });
+      expect(options().think).toBe(false);
+      // The capabilities came with the context size.
+      expect(client.modelContext).toHaveBeenCalledTimes(1);
+      expect(result.trace?.tasks.map((t) => t.key)).not.toContain('can-think');
+    });
+
+    it('lets it think with the setting on, and keeps the thinking out of the answer', async () => {
+      const { handler, options } = thinkingSetup(
+        ['completion', 'thinking'],
+        { ...REASONING, letModelThink: true },
+        { thinking: 'The user wants three sections.' },
+      );
+      const result = await handler({ context: SAMPLE_CONTEXT });
+      expect(options().think).toBe(true);
+      expect(result).toMatchObject({
+        status: 'done',
+        explanation: { what: 'A.', why: 'B.', concerns: 'C.' },
+        thinking: 'The user wants three sections.',
+      });
+    });
+
+    it('sends no think for a model that cannot think, or when Ollama does not say', async () => {
+      for (const capabilities of [['completion'], undefined]) {
+        const { handler, options } = thinkingSetup(capabilities, {
+          ...REASONING,
+          letModelThink: true,
+        });
+        await handler({ context: SAMPLE_CONTEXT });
+        expect(options()).not.toHaveProperty('think');
+      }
+    });
+
+    it('checks the model once, as its own task, when Context size is set', async () => {
+      const { handler, client, options } = thinkingSetup(['thinking'], {
+        ...REASONING,
+        contextTokens: 4096,
+      });
+      const first = await handler({ context: SAMPLE_CONTEXT });
+      expect(options().think).toBe(false);
+      expect(first.trace?.tasks.map((t) => t.key)).toContain('can-think');
+      const second = await handler({ context: SAMPLE_CONTEXT });
+      expect(second.trace?.tasks.map((t) => t.key)).not.toContain('can-think');
+      expect(client.modelContext).toHaveBeenCalledTimes(1);
+    });
+
+    it('never sends think without a capability check', async () => {
+      const { handler, client } = setup(streamOf(ANSWER), REASONING);
+      await handler({ context: SAMPLE_CONTEXT });
+      const [, options] = vi.mocked(client.chatStream).mock.calls[0] as [unknown, ChatOptions];
+      expect(options).not.toHaveProperty('think');
     });
   });
 });

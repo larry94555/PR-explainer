@@ -111,6 +111,8 @@ export interface ExplainTiming {
   tasks?: TraceTask[];
   /** The whole reply as it streamed in, to estimate the thinking share. */
   reply?: string;
+  /** Thinking the model returned in its own field (PR 9.5), for the same. */
+  thinking?: string;
   /** What the debug log needs from the click (PR 9.3). */
   debug?: Omit<DebugLogPayload, 'tasks'>;
 }
@@ -353,6 +355,7 @@ export function explainInPopup(
           roundTrips: requestTrace.roundTrips(),
           reply,
           ...(result.status === 'done' && result.timings && { timings: result.timings }),
+          ...(result.status === 'done' && result.thinking && { thinking: result.thinking }),
         });
         if (result.status === 'done' && result.prompt) popup.showPrompt(result.prompt);
         report({
@@ -362,6 +365,7 @@ export function explainInPopup(
           ...(result.status === 'done' && result.timings ? { timings: result.timings } : {}),
           tasks,
           ...(reply && { reply }),
+          ...(result.status === 'done' && result.thinking && { thinking: result.thinking }),
           debug: debugOf(requestTrace),
         });
       },

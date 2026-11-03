@@ -45,6 +45,12 @@ export interface Settings {
    * straight from storage (src/prefetch.ts).
    */
   explainOnHover: boolean;
+  /**
+   * Let a reasoning model, such as deepseek-r1, think before it answers
+   * (PR 9.5). Off by default: explaining a few lines does not need it, and
+   * thinking was most of the wait. Other models are not affected.
+   */
+  letModelThink: boolean;
   /** Debug option: show the prompt sent to the model under each explanation. */
   showPrompt: boolean;
   /**
@@ -65,6 +71,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   contextTokens: 0,
   keepAliveMinutes: 30,
   explainOnHover: false,
+  letModelThink: false,
   showPrompt: false,
   debugWindow: false,
 });
@@ -147,6 +154,8 @@ function checkField(field: SettingsField, value: unknown): string | null {
       return checkNumber(value, KEEP_ALIVE_MINUTES_RANGE, true, 'Keep model loaded');
     case 'explainOnHover':
       return typeof value === 'boolean' ? null : 'Explain on hover must be on or off.';
+    case 'letModelThink':
+      return typeof value === 'boolean' ? null : 'Let the model think must be on or off.';
     case 'showPrompt':
       return typeof value === 'boolean' ? null : 'Show prompt must be on or off.';
     case 'debugWindow':

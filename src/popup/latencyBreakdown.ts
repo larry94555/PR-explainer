@@ -3,8 +3,10 @@
 // waterfall with one row per task. The model's task is split into Load, Read
 // prompt, Think and Write answer. Ollama reports one time for everything the
 // model wrote, so Think and Write answer are split by the share of the
-// reply's characters inside <think> (marked estimated) until PR 9.5 makes
-// Ollama report thinking on its own. The part of the measured wait that
+// characters it wrote that were thinking (marked estimated). Since PR 9.5,
+// Ollama returns a reasoning model's thinking in its own field, so that share
+// is exact rather than read from <think> tags, though the time and token
+// split are still in proportion to it. The part of the measured wait that
 // Ollama's times do not cover (the connection, streaming, fields it left
 // out) is its own Other model wait row, so no time goes missing. When
 // Ollama's times add up to more than the measured wait, they are scaled to
@@ -22,16 +24,19 @@ import type { TraceTask, TaskSource } from '../trace/types';
 export const formatDuration = formatMs;
 
 /**
- * The share of `reply` (0 to 1) inside <think> blocks, tags included. A
- * reply cut off inside <think> (no closing tag) is thinking to the end.
+ * The share (0 to 1) of what the model wrote that was thinking: `thinking`,
+ * returned in its own field (PR 9.5), plus any <think> blocks left in
+ * `reply`, tags included (an older Ollama). A reply cut off inside <think>
+ * (no closing tag) is thinking to the end.
  */
-export function thinkShare(reply: string): number {
-  if (!reply) return 0;
-  let thinking = 0;
+export function thinkShare(reply: string, thinking = ''): number {
+  const total = reply.length + thinking.length;
+  if (!total) return 0;
+  let inline = 0;
   for (const match of reply.matchAll(/<think>[\s\S]*?(?:<\/think>|$)/gi)) {
-    thinking += match[0].length;
+    inline += match[0].length;
   }
-  return thinking / reply.length;
+  return (thinking.length + inline) / total;
 }
 
 /** A count and a time, either of which may be unknown. */
@@ -107,6 +112,7 @@ function modelRows(
   task: TraceTask,
   timings: LlmTimings,
   reply: string,
+  thinking: string,
 ): { rows: RowDraft[]; scaled: boolean } {
   const parts: Omit<RowDraft, 'startMs' | 'source'>[] = [];
   if (timings.loadMs !== undefined) {
@@ -121,7 +127,7 @@ function modelRows(
     });
   }
   if (timings.answerMs !== undefined || timings.answerTokens !== undefined) {
-    const share = thinkShare(reply);
+    const share = thinkShare(reply, thinking);
     const { think, write } = splitAnswer(
       { tokens: timings.answerTokens, ms: timings.answerMs },
       share,
@@ -186,13 +192,14 @@ function modelRows(
 
 /**
  * The waterfall for a click's `tasks`. The model's task is split by the
- * server's `timings` and the `reply` (for Think); without timings it stays
- * one row. Rows are in the order they started.
+ * server's `timings`, and the `reply` and `thinking` (for Think); without
+ * timings it stays one row. Rows are in the order they started.
  */
 export function buildWaterfall(
   tasks: readonly TraceTask[],
   timings?: LlmTimings,
   reply = '',
+  thinking = '',
 ): Waterfall {
   const drafts: RowDraft[] = [];
   let firstTokenMs: number | undefined;
@@ -203,7 +210,9 @@ export function buildWaterfall(
     }
     // A failed model task has no timings to split it by, so it stays one row.
     const split =
-      task.key === 'model' && timings && !task.status ? modelRows(task, timings, reply) : null;
+      task.key === 'model' && timings && !task.status
+        ? modelRows(task, timings, reply, thinking)
+        : null;
     if (split?.rows.length) {
       drafts.push(...split.rows);
       scaled ||= split.scaled;

@@ -539,3 +539,103 @@ describe('createLlmClient', () => {
     expect(fetch.mock.calls[0]?.[0]).toBe('http://127.0.0.1:8080/api/tags');
   });
 });
+
+describe('thinking (PR 9.5)', () => {
+  const messages = [{ role: 'user' as const, content: 'Explain this' }];
+
+  it('reads the capabilities from the same /api/show reply as the context size', async () => {
+    const fetch = fakeFetch(() =>
+      jsonResponse({
+        model_info: { 'qwen2.context_length': 131072 },
+        capabilities: ['completion', 'thinking', 42],
+      }),
+    );
+    expect(await new OllamaClient({ baseUrl: BASE, fetch }).modelContext('deepseek-r1:7b')).toEqual(
+      { maxTokens: 131072, capabilities: ['completion', 'thinking'] },
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends think only when it is given', () => {
+    expect(buildChatBody(messages, { model: 'm', think: false })).toMatchObject({ think: false });
+    expect(buildChatBody(messages, { model: 'm', think: true })).toMatchObject({ think: true });
+    expect(buildChatBody(messages, { model: 'm' })).not.toHaveProperty('think');
+  });
+
+  it('keeps thinking from chat() apart from the answer', async () => {
+    const fetch = fakeFetch(() =>
+      jsonResponse({
+        ...CHAT_REPLY,
+        message: { role: 'assistant', content: 'OK', thinking: 'They want OK.' },
+      }),
+    );
+    const reply = await new OllamaClient({ baseUrl: BASE, fetch }).chat(messages, {
+      model: 'deepseek-r1:7b',
+      think: true,
+    });
+    expect(reply).toMatchObject({ content: 'OK', thinking: 'They want OK.' });
+    expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string)).toMatchObject({ think: true });
+  });
+
+  it('never yields thinking from a stream, and returns it at the end', async () => {
+    const lines = [
+      {
+        model: 'm',
+        message: { role: 'assistant', content: '', thinking: 'Look at ' },
+        done: false,
+      },
+      // A line with only thinking, as some Ollama versions send it.
+      { model: 'm', message: { role: 'assistant', thinking: 'the loop.' }, done: false },
+      { model: 'm', message: { role: 'assistant', content: 'It adds.' }, done: false },
+      { model: 'm', message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop' },
+    ];
+    const fetch = fakeFetch(
+      () => new Response(lines.map((l) => JSON.stringify(l)).join('\n') + '\n'),
+    );
+    const stream = new OllamaClient({ baseUrl: BASE, fetch }).chatStream(messages, {
+      model: 'm',
+      think: true,
+    });
+    const pieces: string[] = [];
+    let next = await stream.next();
+    while (!next.done) {
+      pieces.push(next.value);
+      next = await stream.next();
+    }
+    expect(pieces).toEqual(['It adds.']);
+    expect(next.value).toEqual({ model: 'm', doneReason: 'stop', thinking: 'Look at the loop.' });
+  });
+
+  it('still works with an older Ollama that ignores think and writes <think> in the answer', async () => {
+    const lines = [
+      { model: 'm', message: { content: '<think>hm</think>' }, done: false },
+      { model: 'm', message: { content: 'It adds.' }, done: false },
+      { model: 'm', message: { content: '' }, done: true },
+    ];
+    const fetch = fakeFetch(
+      () => new Response(lines.map((l) => JSON.stringify(l)).join('\n') + '\n'),
+    );
+    const stream = new OllamaClient({ baseUrl: BASE, fetch }).chatStream(messages, {
+      model: 'm',
+      think: false,
+    });
+    const pieces: string[] = [];
+    let next = await stream.next();
+    while (!next.done) {
+      pieces.push(next.value);
+      next = await stream.next();
+    }
+    // The <think> block reaches parseExplanation, which strips it (PR 3.3).
+    expect(pieces.join('')).toBe('<think>hm</think>It adds.');
+    expect(next.value).toEqual({ model: 'm' });
+  });
+
+  it('refuses thinking that is not text', async () => {
+    const fetch = fakeFetch(
+      () =>
+        new Response(JSON.stringify({ model: 'm', message: { thinking: 7 }, done: false }) + '\n'),
+    );
+    const stream = new OllamaClient({ baseUrl: BASE, fetch }).chatStream(messages, { model: 'm' });
+    await expectLlmError(stream.next(), 'bad-response');
+  });
+});

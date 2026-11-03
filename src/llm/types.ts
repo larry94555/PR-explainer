@@ -24,6 +24,14 @@ export interface ChatOptions {
    * minutes (PR 8.3). Left to the server's default (5 minutes) when omitted.
    */
   keepAliveMinutes?: number;
+  /**
+   * Whether a reasoning model thinks before answering (PR 9.5), sent as
+   * Ollama's `think`. false makes it answer directly; true makes it return
+   * the thinking in its own field (ChatReply.thinking, ChatStreamEnd.thinking)
+   * instead of inside the answer. Left out for a model that cannot think:
+   * Ollama refuses `think: true` for one, and an older Ollama ignores it.
+   */
+  think?: boolean;
   /** Cancels the request. The promise then rejects with kind "aborted". */
   signal?: AbortSignal;
 }
@@ -33,6 +41,8 @@ export interface ChatReply {
   content: string;
   /** The model that answered, as the server names it. */
   model: string;
+  /** Thinking the server returned in its own field (PR 9.5), if any. */
+  thinking?: string;
   /** Where the server's time went, when it says (PR 8.1). */
   timings?: LlmTimings;
 }
@@ -62,6 +72,11 @@ export interface ChatStreamEnd {
   model: string;
   /** Why the model stopped, when the server says: "stop" (finished) or "length" (hit the limit). */
   doneReason?: string;
+  /**
+   * Thinking the server returned in its own field (PR 9.5), if any. It is
+   * never yielded with the answer.
+   */
+  thinking?: string;
   /** Where the server's time went, when it says (PR 8.1). */
   timings?: LlmTimings;
 }
@@ -84,12 +99,28 @@ export interface RunningModel {
   contextTokens?: number;
 }
 
-/** What the server says about one model's context window (PR 6.2). */
+/**
+ * What the server says about one model (PR 6.2): its context window and,
+ * from PR 9.5, what it can do.
+ */
 export interface ModelContext {
   /** The longest context the model was trained for, when the server says. */
   maxTokens?: number;
   /** The context size the model's own settings ask for (Ollama's num_ctx), if any. */
   configuredTokens?: number;
+  /**
+   * What the model can do, such as "completion", "tools" or "thinking"
+   * (PR 9.5). Left out when the server does not say (an older Ollama).
+   */
+  capabilities?: string[];
+}
+
+/**
+ * Whether `model` is a reasoning model (PR 9.5): true or false when the
+ * server lists its capabilities, undefined when it does not say.
+ */
+export function canThink(model: Pick<ModelContext, 'capabilities'>): boolean | undefined {
+  return model.capabilities ? model.capabilities.includes('thinking') : undefined;
 }
 
 /** Whether `listed` (a name from /api/ps) is `model`; "llama3" is listed as "llama3:latest". */
@@ -123,7 +154,7 @@ export interface LlmClient {
     model: string,
     options?: { keepAliveMinutes?: number; contextTokens?: number; signal?: AbortSignal },
   ): Promise<void>;
-  /** Looks up `model`'s context window. */
+  /** Looks up `model`'s context window and capabilities. */
   modelContext(model: string, options?: { signal?: AbortSignal }): Promise<ModelContext>;
   chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatReply>;
   /**

@@ -30,7 +30,8 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 export function purposeOf(path: string, cause: RoundTripCause): string {
   switch (path) {
     case '/api/show':
-      return 'context size';
+      // The context size and, from PR 9.5, whether the model can think.
+      return 'model details';
     case '/api/ps':
       return cause === 'warmup' ? 'is the model loaded' : 'loaded window';
     case '/api/chat':
@@ -109,6 +110,17 @@ function messagesOf(body: RequestInit['body']): RoundTrip['messages'] {
       const { role, content } = (m ?? {}) as { role?: unknown; content?: unknown };
       return { role: String(role), content: typeof content === 'string' ? content : '' };
     });
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `think` field of a /api/chat body (PR 9.5), or undefined when it has none. */
+function thinkOf(body: RequestInit['body']): boolean | undefined {
+  if (typeof body !== 'string') return undefined;
+  try {
+    const { think } = JSON.parse(body) as { think?: unknown };
+    return typeof think === 'boolean' ? think : undefined;
   } catch {
     return undefined;
   }
@@ -215,6 +227,7 @@ export function createRoundTripLog(
     const { endpoint, path } = endpointOf(url);
     const isChat = path === '/api/chat';
     const messages = isChat ? messagesOf(init?.body) : undefined;
+    const think = isChat ? thinkOf(init?.body) : undefined;
     const entry: Entry = {
       startedAt: now(),
       trip: {
@@ -230,6 +243,7 @@ export function createRoundTripLog(
         bytesSent: sizeOf(init?.body),
         bytesReceived: 0,
         ...(messages && { messages }),
+        ...(think !== undefined && { think }),
       },
       ...(isChat && { body: '' }),
     };

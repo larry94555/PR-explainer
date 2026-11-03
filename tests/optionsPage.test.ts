@@ -19,6 +19,7 @@ const SAVED: Settings = {
   contextTokens: 0,
   keepAliveMinutes: 30,
   explainOnHover: false,
+  letModelThink: false,
   showPrompt: false,
   debugWindow: false,
 };
@@ -98,6 +99,78 @@ describe('options page', () => {
     $<HTMLInputElement>('explainOnHover').checked = true;
     await page.save();
     expect(await deps.getSettings()).toMatchObject({ explainOnHover: true });
+  });
+
+  it('loads and saves Let the model think (PR 9.5)', async () => {
+    const deps = fakeDeps(fakeClient());
+    await deps.saveSettings({ letModelThink: true });
+    const page = await initOptionsPage(document, deps);
+    expect($<HTMLInputElement>('letModelThink').checked).toBe(true);
+
+    $<HTMLInputElement>('letModelThink').checked = false;
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ letModelThink: false });
+  });
+
+  describe('reasoning model line (PR 9.5)', () => {
+    const capabilities: Record<string, string[] | undefined> = {
+      'deepseek-r1:7b': ['completion', 'thinking'],
+      'qwen2.5-coder:7b': ['completion', 'insert'],
+      'old:1b': undefined,
+    };
+    const client = () =>
+      fakeClient({
+        listModels: vi.fn(async () => Object.keys(capabilities).map((name) => ({ name }))),
+        modelContext: vi.fn(async (model: string) => {
+          const found = capabilities[model];
+          return found ? { capabilities: found } : {};
+        }),
+      });
+    const pick = async (model: string) => {
+      $<HTMLSelectElement>('model').value = model;
+      $<HTMLSelectElement>('model').dispatchEvent(new Event('change'));
+      await vi.waitFor(() => expect(text('thinking-status')).toContain(model));
+    };
+
+    it('says a reasoning model thinks only when the box is ticked', async () => {
+      const llm = client();
+      await initOptionsPage(document, fakeDeps(llm));
+      await pick('deepseek-r1:7b');
+      expect(text('thinking-status')).toBe(
+        'deepseek-r1:7b is a reasoning model. Thinking is off, so it answers sooner.',
+      );
+      const box = $<HTMLInputElement>('letModelThink');
+      box.checked = true;
+      box.dispatchEvent(new Event('change'));
+      await vi.waitFor(() => expect(text('thinking-status')).toContain('Thinking is on'));
+      // Ticking the box does not ask the server again.
+      expect(llm.modelContext).toHaveBeenCalledTimes(2);
+    });
+
+    it('says when a model is not a reasoning model, or Ollama does not say', async () => {
+      await initOptionsPage(document, fakeDeps(client()));
+      await vi.waitFor(() =>
+        expect(text('thinking-status')).toBe(
+          'qwen2.5-coder:7b is not a reasoning model, so it answers without thinking.',
+        ),
+      );
+      await pick('old:1b');
+      expect(text('thinking-status')).toContain('Update Ollama to 0.9 or later');
+    });
+
+    it('says nothing when the server cannot be asked', async () => {
+      await initOptionsPage(
+        document,
+        fakeDeps(
+          fakeClient({
+            modelContext: vi.fn(async () => {
+              throw new LlmError('connection', 'down');
+            }),
+          }),
+        ),
+      );
+      expect(text('thinking-status')).toBe('');
+    });
   });
 
   it('loads and saves how long to keep the model loaded (PR 8.3)', async () => {
@@ -283,8 +356,8 @@ describe('options page', () => {
 
     expect(errorFor('llmUrl')).toContain('must point to this computer');
     expect(text('models-status')).toBe('Fix the URL to load models.');
-    // Only the first load and its GPU check.
-    expect(deps.createClient).toHaveBeenCalledTimes(2);
+    // Only the first load, its GPU check and its thinking check.
+    expect(deps.createClient).toHaveBeenCalledTimes(3);
   });
 
   it('saves the form and clears old errors', async () => {
@@ -304,6 +377,7 @@ describe('options page', () => {
       contextTokens: 0,
       keepAliveMinutes: 30,
       explainOnHover: false,
+      letModelThink: false,
       showPrompt: false,
       debugWindow: false,
     });

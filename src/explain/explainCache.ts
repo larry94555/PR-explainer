@@ -57,14 +57,26 @@ export interface CacheKeyParts {
   maxResponseTokens: number;
   /** The prompt sent to the model (buildExplainPrompt). */
   messages: ChatMessage[];
+  /**
+   * The Let the model think setting (PR 9.5). Only added to the key when on,
+   * so answers saved before it existed (thinking stripped) still hit.
+   */
+  letModelThink?: boolean;
 }
 
 /** A short, fixed-length key for one explanation (hex SHA-256). */
 export async function explainCacheKey(parts: CacheKeyParts): Promise<string> {
-  const { pr, model, temperature, maxResponseTokens, messages } = parts;
+  const { pr, model, temperature, maxResponseTokens, messages, letModelThink } = parts;
   const prompt = messages.map(({ role, content }) => [role, content]);
   const data = new TextEncoder().encode(
-    JSON.stringify([pr, model, temperature, maxResponseTokens, prompt]),
+    JSON.stringify([
+      pr,
+      model,
+      temperature,
+      maxResponseTokens,
+      prompt,
+      ...(letModelThink ? ['think'] : []),
+    ]),
   );
   const digest = await crypto.subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');

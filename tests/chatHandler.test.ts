@@ -160,4 +160,42 @@ describe('chat handler', () => {
       },
     });
   });
+
+  describe('thinking (PR 9.5)', () => {
+    async function ask(thinks: boolean | undefined, letModelThink: boolean) {
+      const { chatStream } = setup(['A.']);
+      const handler = createChatHandler({
+        getSettings: async () => ({ ...SETTINGS, letModelThink }),
+        createClient: () => ({
+          listModels: vi.fn(),
+          loadedModels: vi.fn(),
+          loadedContextTokens: vi.fn(async () => undefined),
+          runningModels: vi.fn(async () => []),
+          loadModel: vi.fn(),
+          modelContext: vi.fn(),
+          chat: vi.fn(),
+          chatStream,
+        }),
+        platform: 'windows',
+        canThink: async () => thinks,
+      });
+      const result = await handler({ messages: MESSAGES });
+      return { result, options: chatStream.mock.calls[0]![1] };
+    }
+
+    it('follows the same setting as explanations', async () => {
+      expect((await ask(true, false)).options.think).toBe(false);
+      expect((await ask(true, true)).options.think).toBe(true);
+      expect((await ask(false, true)).options).not.toHaveProperty('think');
+      expect((await ask(undefined, false)).options).not.toHaveProperty('think');
+    });
+
+    it('answers with only the answer, never the thinking', async () => {
+      expect((await ask(true, true)).result).toEqual({
+        status: 'done',
+        answer: 'A.',
+        model: SETTINGS.model,
+      });
+    });
+  });
 });
