@@ -87,7 +87,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 9.12 | Facts that need no model, shown at once | Small | Not started |
 | 9.13 | Show each section as soon as it is written | Small | Not started |
 | 9.14 | A separate model for chat | Medium | Not started |
-| 10.0 | Plan Milestone 10 | Small | ✅ Done ([#PRNUM](https://github.com/larry94555/PR-explainer/pull/PRNUM)) |
+| 10.0 | Plan Milestone 10 | Small | ✅ Done ([#50](https://github.com/larry94555/PR-explainer/pull/50)) |
 | 10.1 | Measure requests at once on this laptop | Small | Not started |
 | 10.2 | A cache that holds a whole PR | Medium | Not started |
 | 10.3 | Background queue in the service worker | Medium | Not started |
@@ -986,7 +986,7 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
 **Order.** 10.1 measures first, so the defaults are set from numbers. 10.2 and 10.3 are the building blocks (a cache that holds a PR, and the queue), with no change you can see. 10.4 and 10.5 build the work for a whole PR, one request per hunk. 10.6 and 10.7 turn it on and show it, and 10.8 reports the result. 10.9 keeps the answers after the browser closes, so a PR prefetched once stays done.
 
 ### PR 10.0: Plan Milestone 10 (Small) ✅ Done
-- **Status:** Done ([#PRNUM](https://github.com/larry94555/PR-explainer/pull/PRNUM)).
+- **Status:** Done ([#50](https://github.com/larry94555/PR-explainer/pull/50)).
 - **Why it's needed:** Clicks should be answered at once, and on a CPU laptop the only way to do that is to explain lines before they are clicked. PR 9.10 does that for up to 30 lines on screen; the rest of the PR is still explained only when clicked.
 - **Problem it solves:** Adds this milestone to the roadmap and the matching feature to `features.md`: its goal, demo, whether the idea works on a CPU, and PRs 10.1 to 10.9. It also adds PRs 9.12 to 9.14 to Milestone 9 from a review of further speed ideas. No code changes.
 - **Unit tests added:** None (documentation only).
