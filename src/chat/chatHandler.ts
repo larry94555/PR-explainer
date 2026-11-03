@@ -12,9 +12,14 @@
 // Like explanations, a reasoning model is asked not to think unless the Let
 // the model think setting is on (PR 9.5). Thinking it returns in its own
 // field is never part of the answer.
+//
+// The window each question runs with is remembered (PR 9.7,
+// src/llm/loadedWindow.ts), so the next explanation knows how the model is
+// loaded without asking /api/ps.
 
 import { thinkOption, type ContextSizer, type ThinkingCheck } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
+import type { LoadedWindowMemory } from '../llm/loadedWindow';
 import type { ChatMessage, LlmClient } from '../llm/types';
 import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
 import { chatResponseTokens, type Settings } from '../settings';
@@ -49,6 +54,8 @@ export interface ChatDeps {
   thinking?: ThinkingCheck;
   /** Gets each round trip as it starts, runs and ends, for the debug log (PR 9.3, 9.4). */
   onRoundTrip?: RoundTripSink;
+  /** The window the model was last run with (PR 9.7), shared with explanations. */
+  loadedWindow?: LoadedWindowMemory;
 }
 
 const ROLES = new Set(['system', 'user', 'assistant']);
@@ -102,8 +109,11 @@ export function createChatHandler(deps: ChatDeps) {
         onChunk?.(next.value);
         next = await stream.next();
       }
+      // Without a window the server used its own, which is not known here.
+      deps.loadedWindow?.remember(settings, contextTokens);
       return { status: 'done', answer, model: next.value.model };
     } catch (error) {
+      deps.loadedWindow?.forget();
       const { message, fix } = describeLlmError(error, {
         url: settings.llmUrl,
         model: settings.model,

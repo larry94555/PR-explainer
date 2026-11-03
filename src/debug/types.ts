@@ -46,7 +46,8 @@ export type DebugEntryInput = Omit<DebugRoundTripEntry, 'id'> | Omit<DebugTraceE
  */
 export interface DebugLogPayload {
   group: string;
-  cause?: 'click' | 'hover';
+  /** "warmup" for the page's own reads before any click, such as the PR description (PR 9.7). */
+  cause?: 'click' | 'hover' | 'warmup';
   /** When the click came (Date.now()). */
   at: number;
   where?: string;

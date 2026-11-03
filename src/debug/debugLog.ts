@@ -267,7 +267,7 @@ export function pageEntries(payload: unknown): DebugEntryInput[] {
   const at = p.at;
   const base = {
     group,
-    cause: p.cause === 'hover' ? ('hover' as const) : ('click' as const),
+    cause: (p.cause === 'hover' || p.cause === 'warmup' ? p.cause : 'click') as DebugCause,
     at,
     ...(text(p.where) !== undefined && { where: text(p.where) }),
   };

@@ -10,6 +10,7 @@ import {
 } from '../src/llm/types';
 import { createContextSizer, createModelLookup } from '../src/llm/contextSize';
 import { createLlmClient } from '../src/llm/createClient';
+import { createLoadedWindowMemory } from '../src/llm/loadedWindow';
 import { createRoundTripLog } from '../src/net/roundTrips';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
@@ -361,6 +362,96 @@ describe('explain handler', () => {
       vi.mocked(client.loadedContextTokens).mockRejectedValue(new Error('down'));
       await handler({ context: SAMPLE_CONTEXT });
       expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(2048);
+    });
+
+    describe('the remembered window (PR 9.7)', () => {
+      function withMemory(chatStream: LlmClient['chatStream'], settings: () => Settings) {
+        const { client } = setup(chatStream);
+        vi.mocked(client.loadedContextTokens).mockResolvedValue(4096);
+        const loadedWindow = createLoadedWindowMemory();
+        const handler = createExplainHandler({
+          getSettings: async () => settings(),
+          createClient: () => client,
+          platform: 'other',
+          contextTokens: async () => 8192,
+          loadedWindow,
+        });
+        return { handler, client, loadedWindow };
+      }
+      const traceKeys = (result: Awaited<ReturnType<ReturnType<typeof createExplainHandler>>>) =>
+        result.trace!.tasks.map((t) => t.key);
+
+      it('asks /api/ps once, then uses the window the last request ran with', async () => {
+        const { handler, client, loadedWindow } = withMemory(streamOf(DONE), () => SETTINGS);
+        const first = await handler({ context: SAMPLE_CONTEXT });
+        expect(traceKeys(first)).toContain('loaded-window');
+        expect(loadedWindow.known(SETTINGS)).toBe(4096);
+
+        const second = await handler({ context: SAMPLE_CONTEXT });
+        expect(client.loadedContextTokens).toHaveBeenCalledTimes(1);
+        expect(traceKeys(second)).not.toContain('loaded-window');
+        expect(vi.mocked(client.chatStream).mock.calls[1]![1].contextTokens).toBe(4096);
+      });
+
+      it('uses a window a chat question or warm-up left, without asking', async () => {
+        const { handler, client, loadedWindow } = withMemory(streamOf(DONE), () => SETTINGS);
+        loadedWindow.remember(SETTINGS, 8192);
+        await handler({ context: SAMPLE_CONTEXT });
+        expect(client.loadedContextTokens).not.toHaveBeenCalled();
+        expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(8192);
+      });
+
+      it('asks again after the model or the server changes', async () => {
+        let settings = SETTINGS;
+        const { handler, client } = withMemory(streamOf(DONE), () => settings);
+        await handler({ context: SAMPLE_CONTEXT });
+        settings = { ...SETTINGS, model: 'deepseek-r1:7b' };
+        await handler({ context: SAMPLE_CONTEXT });
+        expect(client.loadedContextTokens).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(client.loadedContextTokens).mock.calls[1]![0]).toBe('deepseek-r1:7b');
+        settings = { ...settings, llmUrl: 'http://127.0.0.1:11434' };
+        await handler({ context: SAMPLE_CONTEXT });
+        expect(client.loadedContextTokens).toHaveBeenCalledTimes(3);
+        // Back to a model and server it now knows: no question.
+        await handler({ context: SAMPLE_CONTEXT });
+        expect(client.loadedContextTokens).toHaveBeenCalledTimes(3);
+      });
+
+      it('asks again after a failed or stopped request', async () => {
+        const { handler, client, loadedWindow } = withMemory(streamOf(DONE), () => SETTINGS);
+        await handler({ context: SAMPLE_CONTEXT });
+        vi.mocked(client.chatStream).mockImplementationOnce(
+          streamOf([], new LlmError('connection', 'down')),
+        );
+        const failed = await handler({ context: SAMPLE_CONTEXT });
+        expect(failed.status).toBe('failed');
+        expect(loadedWindow.known(SETTINGS)).toBeUndefined();
+        await handler({ context: SAMPLE_CONTEXT });
+        expect(client.loadedContextTokens).toHaveBeenCalledTimes(2);
+      });
+
+      it('does not touch what it knows for a cached answer', async () => {
+        const store = new Map<string, unknown>();
+        const { client } = setup(streamOf(DONE));
+        const loadedWindow = createLoadedWindowMemory();
+        loadedWindow.remember(SETTINGS, 4096);
+        const handler = createExplainHandler({
+          getSettings: async () => SETTINGS,
+          createClient: () => client,
+          platform: 'other',
+          loadedWindow,
+          cache: {
+            get: async (key) => (store.get(key) as never) ?? null,
+            set: async (key, value) => void store.set(key, value),
+          },
+        });
+        await handler({ context: SAMPLE_CONTEXT, pr: 'o/r#1' });
+        loadedWindow.forget();
+        const hit = await handler({ context: SAMPLE_CONTEXT, pr: 'o/r#1' });
+        expect(hit.status === 'done' && hit.cached).toBeTruthy();
+        expect(client.loadedContextTokens).not.toHaveBeenCalled();
+        expect(loadedWindow.known(SETTINGS)).toBeUndefined();
+      });
     });
 
     it('sends a Context size the user set as it is, without asking what is loaded', async () => {

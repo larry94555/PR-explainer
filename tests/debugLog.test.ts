@@ -268,6 +268,30 @@ describe('entries for the debug log (PR 9.3)', () => {
     ]);
   });
 
+  it("keeps a page's own reads in the warm-up's group (PR 9.7)", () => {
+    const github = trip({ target: 'github', endpoint: 'github.com/o/r/pull/1', cause: 'click' });
+    const entries = pageEntries({
+      group: 'page-1',
+      cause: 'warmup',
+      at: 1_000,
+      roundTrips: [github],
+      tasks: [],
+    });
+    expect(entries).toEqual([
+      {
+        kind: 'round-trip',
+        group: 'page-1',
+        cause: 'warmup',
+        at: 1_000 + github.startMs,
+        trip: github,
+      },
+    ]);
+    // Any other cause is a click's.
+    expect(
+      pageEntries({ group: 'g', cause: 'chat', at: 1, roundTrips: [github], tasks: [] })[0]!.cause,
+    ).toBe('click');
+  });
+
   it('leaves out anything not in the expected shape', () => {
     expect(pageEntries(null)).toEqual([]);
     expect(pageEntries({ group: 'g', at: 'now', roundTrips: [], tasks: [] })).toEqual([]);

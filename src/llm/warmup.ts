@@ -12,10 +12,15 @@
 // The model is loaded with the window the first explanation will most likely
 // ask for (PR 8.5, src/llm/numCtx.ts), since a different num_ctx would make
 // Ollama load it again on that click.
+//
+// Either way it notes the window the model is loaded with (PR 9.7,
+// src/llm/loadedWindow.ts): the one /api/ps reports, or the one it loaded the
+// model with, so the first click does not ask /api/ps again.
 
 import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
 import type { Settings } from '../settings';
 import type { ContextSizer } from './contextSize';
+import type { LoadedWindowMemory } from './loadedWindow';
 import { startingNumCtx } from './numCtx';
 import { isSameModel, type LlmClient } from './types';
 
@@ -33,6 +38,11 @@ export type WarmupOutcome = 'repeat' | 'off' | 'no-model' | 'already-loaded' | '
 export interface WarmupPayload {
   /** The PR whose diffs were opened, as "owner/repo#17". */
   pr: string;
+  /**
+   * Groups the warm-up's round trips with the page's own (the PR
+   * description) in the debug log (PR 9.7).
+   */
+  debugId?: string;
 }
 
 export interface WarmupResult {
@@ -54,6 +64,8 @@ export interface WarmupDeps {
   log?: (message: string) => void;
   /** Gets each round trip as it starts, runs and ends, for the debug log (PR 9.3, 9.4). */
   onRoundTrip?: RoundTripSink;
+  /** The window the model was last run with (PR 9.7), shared with explanations. */
+  loadedWindow?: LoadedWindowMemory;
 }
 
 export interface Warmup {
@@ -86,8 +98,12 @@ export function createWarmup(deps: WarmupDeps): Warmup {
     const { model, keepAliveMinutes } = settings;
     try {
       const client = deps.createClient(settings, { roundTrips });
-      if (isModelLoaded(await client.loadedModels(), model)) {
+      const running = await client.runningModels();
+      const found = running.find((m) => isSameModel(m.name, model));
+      if (found) {
         log(`[PR Explainer] warm-up: ${model} is already loaded`);
+        // Older Ollama versions do not say, which forgets.
+        deps.loadedWindow?.remember(settings, found.contextTokens);
         return 'already-loaded';
       }
       const window =
@@ -100,12 +116,14 @@ export function createWarmup(deps: WarmupDeps): Warmup {
         keepAliveMinutes,
         ...(window !== undefined && { contextTokens: window }),
       });
+      deps.loadedWindow?.remember(settings, window);
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
       log(`[PR Explainer] warm-up: loaded ${model} in ${seconds} s`);
       return 'loaded';
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`[PR Explainer] warm-up: could not load ${model} (${message})`);
+      deps.loadedWindow?.forget();
       return 'failed';
     }
   }
@@ -129,7 +147,11 @@ export function createWarmup(deps: WarmupDeps): Warmup {
     const key = `${settings.llmUrl} ${settings.model}`;
     let loading = running.get(key);
     if (!loading) {
-      const roundTrips = createRoundTripLog('warmup', Date.now, { onUpdate: deps.onRoundTrip });
+      const group = typeof payload.debugId === 'string' ? payload.debugId.slice(0, 100) : '';
+      const roundTrips = createRoundTripLog('warmup', Date.now, {
+        ...(group && { group }),
+        onUpdate: deps.onRoundTrip,
+      });
       logs.add(roundTrips);
       loading = load(settings, roundTrips).finally(() => {
         running.delete(key);

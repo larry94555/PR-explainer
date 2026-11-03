@@ -20,6 +20,7 @@ import { SAMPLE_CONTEXT } from './explain/sampleContext';
 import { createModelLookup } from './llm/contextSize';
 import { createLlmClient } from './llm/createClient';
 import { detectPlatform } from './llm/describeLlmError';
+import { createLoadedWindowMemory } from './llm/loadedWindow';
 import { createWarmup } from './llm/warmup';
 import { MessageRouter } from './messaging/router';
 import { listenForChatPorts, listenForExplainPorts } from './messaging/streamPort';
@@ -68,12 +69,17 @@ void setupDebugMenu({
 // lookup per model (src/llm/contextSize.ts).
 const { contextTokens, thinking } = createModelLookup(createLlmClient);
 
+// The window the model was last run with, so a warm click does not ask
+// /api/ps first (PR 9.7). Every request to the model updates it.
+const loadedWindow = createLoadedWindowMemory();
+
 // Loads the model when a PR's diffs open, before the first click (PR 8.3).
 // It loads it with the window the first click will ask for (PR 8.5).
 const warmup = createWarmup({
   getSettings,
   createClient: createLlmClient,
   contextTokens,
+  loadedWindow,
   // Read when each request starts, so turning the setting on or off applies to the next one.
   get onRoundTrip() {
     return roundTripSink();
@@ -89,6 +95,7 @@ const explain = createExplainHandler({
   cache: createExplainCache(chrome.storage.session),
   contextTokens,
   thinking,
+  loadedWindow,
   // A click while the model is still loading lists the warm-up's round trips (PR 9.2).
   warmupRoundTrips: () => warmup.inFlight(),
   // Read when each request starts, so turning the setting on or off applies to the next one.
@@ -130,6 +137,7 @@ listenForChatPorts(
     platform: detectPlatform(navigator.userAgent),
     contextTokens,
     thinking,
+    loadedWindow,
     // Read when each request starts, so turning the setting on or off applies to the next one.
     get onRoundTrip() {
       return roundTripSink();

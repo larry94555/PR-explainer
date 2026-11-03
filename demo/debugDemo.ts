@@ -2,6 +2,8 @@
 // recorded flow over a fake debug log port: the warm-up, a click on a line
 // with its GitHub reads, tasks and explanation, Explain on hover, and a chat
 // question. A second click then runs live, its reply growing word by word.
+// From PR 9.7 the warm-up group also has the PR description, read as the page
+// opens, and a warm click's only round trip to Ollama is the explanation.
 // No extension APIs and no LLM. Add ?live=0 to the address to skip the live click.
 
 import '../src/debug/debugWindow.css';
@@ -70,17 +72,32 @@ const task = (
   durationMs: number,
 ): TraceTask => ({ key, label, source, startMs, durationMs });
 
+// The PR description was read as the page opened (PR 9.7), so the click
+// finds it at once; the file fetch starts at the click. The loaded window is
+// known from the warm-up, so there is no /api/ps.
 const CLICK_TASKS: TraceTask[] = [
   task('find-code', 'Find the clicked code', 'page', 0, 4),
-  task('pr-description', 'Read the PR description', 'page', 5, 180),
+  task('pr-description', 'Read the PR description', 'page', 5, 0),
   task('file-at-head', 'Fetch the file at head', 'page', 5, 260),
   task('send', 'Send the request', 'page', 266, 3),
   task('settings', 'Read settings', 'worker', 270, 2),
-  task('loaded-window', 'Check the loaded window', 'worker', 273, 9),
-  task('fit-prompt', 'Build and fit the prompt', 'worker', 283, 6),
-  task('model', 'Wait for the model', 'model', 290, 2_480),
-  task('parse', 'Parse the answer', 'worker', 2_771, 2),
-  task('show', 'Show answer', 'page', 2_775, 12),
+  task('fit-prompt', 'Build and fit the prompt', 'worker', 273, 6),
+  task('model', 'Wait for the model', 'model', 280, 2_480),
+  task('parse', 'Parse the answer', 'worker', 2_761, 2),
+  task('show', 'Show answer', 'page', 2_765, 12),
+];
+
+// A second click in the same file: the file is already fetched too.
+const SECOND_CLICK_TASKS: TraceTask[] = [
+  task('find-code', 'Find the clicked code', 'page', 0, 3),
+  task('pr-description', 'Read the PR description', 'page', 4, 0),
+  task('file-at-head', 'Fetch the file at head', 'page', 4, 1),
+  task('send', 'Send the request', 'page', 6, 3),
+  task('settings', 'Read settings', 'worker', 10, 2),
+  task('fit-prompt', 'Build and fit the prompt', 'worker', 13, 6),
+  task('model', 'Wait for the model', 'model', 20, 2_230),
+  task('parse', 'Parse the answer', 'worker', 2_251, 2),
+  task('show', 'Show answer', 'page', 2_255, 12),
 ];
 
 const warmAt = T0;
@@ -90,6 +107,20 @@ const chatAt = T0 + 70_000;
 const where = 'src/llm/retry.ts:14';
 
 const ENTRIES: DebugEntry[] = [
+  // The page reads the PR description as it opens (PR 9.7).
+  rt(
+    'warm',
+    'warmup',
+    warmAt + 2,
+    trip({
+      target: 'github',
+      method: 'GET',
+      endpoint: 'github.com/acme/api/pull/482',
+      purpose: 'PR description',
+      durationMs: 180,
+      bytesReceived: 41_200,
+    }),
+  ),
   rt(
     'warm',
     'warmup',
@@ -149,20 +180,6 @@ const ENTRIES: DebugEntry[] = [
     trip({
       target: 'github',
       method: 'GET',
-      endpoint: 'github.com/acme/api/pull/482',
-      purpose: 'PR description',
-      durationMs: 180,
-      bytesReceived: 41_200,
-    }),
-    where,
-  ),
-  rt(
-    'click-1',
-    'click',
-    clickAt + 5,
-    trip({
-      target: 'github',
-      method: 'GET',
       endpoint: 'raw.githubusercontent.com/acme/api/9f3c1e2/src/llm/retry.ts',
       purpose: 'file at head',
       durationMs: 260,
@@ -173,19 +190,7 @@ const ENTRIES: DebugEntry[] = [
   rt(
     'click-1',
     'click',
-    clickAt + 273,
-    trip({
-      method: 'GET',
-      endpoint: 'localhost:11434/api/ps',
-      purpose: 'loaded window',
-      durationMs: 9,
-      bytesReceived: 240,
-    }),
-  ),
-  rt(
-    'click-1',
-    'click',
-    clickAt + 290,
+    clickAt + 280,
     trip({
       endpoint: 'localhost:11434/api/chat',
       purpose: 'explanation',
@@ -292,7 +297,7 @@ function liveClick(send: (m: DebugLogPortMessage) => void) {
   const at = Date.now();
   const words = LIVE_REPLY.split(/(?<=\s)/);
   const base = trip({
-    id: 'click-2:2',
+    id: 'click-2:1',
     endpoint: 'localhost:11434/api/chat',
     purpose: 'explanation',
     think: false,
@@ -309,22 +314,6 @@ function liveClick(send: (m: DebugLogPortMessage) => void) {
     cause: 'click',
     at,
     trip: { ...base, reply, durationMs: Date.now() - at, bytesReceived: reply.length * 9 },
-  });
-  send({
-    type: 'entry',
-    entry: rt(
-      'click-2',
-      'click',
-      at - 12,
-      trip({
-        id: 'click-2:1',
-        method: 'GET',
-        endpoint: 'localhost:11434/api/ps',
-        purpose: 'loaded window',
-        durationMs: 8,
-        bytesReceived: 240,
-      }),
-    ),
   });
   send({ type: 'running', entry: running('') });
   let shown = 0;
@@ -359,9 +348,9 @@ function liveClick(send: (m: DebugLogPortMessage) => void) {
         kind: 'trace',
         group: 'click-2',
         cause: 'click',
-        at: at - 280,
+        at: at - 20,
         where: 'src/llm/retry.ts:11',
-        tasks: CLICK_TASKS,
+        tasks: SECOND_CLICK_TASKS,
       },
     });
   }, 250);

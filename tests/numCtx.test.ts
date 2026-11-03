@@ -1,4 +1,5 @@
 import { PROMPT_MARGIN_TOKENS } from '../src/llm/contextSize';
+import { createLoadedWindowMemory } from '../src/llm/loadedWindow';
 import {
   chooseNumCtx,
   MIN_NUM_CTX,
@@ -48,5 +49,43 @@ describe('num_ctx for an explanation (PR 8.5)', () => {
   it('warms up with the smallest window, or the limit when that is smaller', () => {
     expect(startingNumCtx(4096)).toBe(MIN_NUM_CTX);
     expect(startingNumCtx(1024)).toBe(1024);
+  });
+});
+
+describe('the remembered loaded window (PR 9.7)', () => {
+  const AT = { llmUrl: 'http://localhost:11434', model: 'qwen2.5-coder:7b' };
+
+  it('knows nothing until a request says which window it used', () => {
+    const memory = createLoadedWindowMemory();
+    expect(memory.known(AT)).toBeUndefined();
+    memory.remember(AT, 4096);
+    expect(memory.known(AT)).toBe(4096);
+    // The newest request wins.
+    memory.remember(AT, 2048);
+    expect(memory.known(AT)).toBe(2048);
+  });
+
+  it('does not know the window for another model or server', () => {
+    const memory = createLoadedWindowMemory();
+    memory.remember(AT, 4096);
+    expect(memory.known({ ...AT, model: 'deepseek-r1:7b' })).toBeUndefined();
+    expect(memory.known({ ...AT, llmUrl: 'http://127.0.0.1:11434' })).toBeUndefined();
+    expect(memory.known({ ...AT, model: '' })).toBeUndefined();
+  });
+
+  it('forgets after a request with no window, a bad one, or forget()', () => {
+    const memory = createLoadedWindowMemory();
+    memory.remember(AT, 4096);
+    memory.remember(AT, undefined);
+    expect(memory.known(AT)).toBeUndefined();
+    memory.remember(AT, 4096);
+    memory.remember(AT, 0);
+    expect(memory.known(AT)).toBeUndefined();
+    memory.remember(AT, 4096);
+    memory.forget();
+    expect(memory.known(AT)).toBeUndefined();
+    // No model, nothing to remember.
+    memory.remember({ ...AT, model: '' }, 4096);
+    expect(memory.known(AT)).toBeUndefined();
   });
 });

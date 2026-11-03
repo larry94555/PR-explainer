@@ -128,7 +128,41 @@ const WARMUP_TIMEOUT_MS = 120_000;
 function warmUpModel(): void {
   const pr = prName(location.href);
   if (!pr || !showsDiffs(location.href) || enabled.current() !== true) return;
-  sendRequest('warmup', { pr }, { timeoutMs: WARMUP_TIMEOUT_MS }).catch(() => {});
+  sendRequest('warmup', { pr, debugId: pageOpen.id }, { timeoutMs: WARMUP_TIMEOUT_MS }).catch(
+    () => {},
+  );
+}
+
+// The page's own round trips before any click (PR 9.7): the warm-up and the
+// PR description read ahead share one group in the debug log, so it shows
+// what opening the page cost and that the first click did not wait for it.
+const newPageGroup = () => ({
+  id: crypto.randomUUID(),
+  at: Date.now(),
+  tripsFrom: githubTrips.now(),
+});
+let pageOpen = newPageGroup();
+
+/**
+ * Reads the PR description as the page opens, so the first click does not
+ * wait for it (PR 6.1). With the Debug window setting on, its GitHub round
+ * trip joins the warm-up's group.
+ */
+function readDescriptionAhead(): void {
+  const { id, at, tripsFrom } = pageOpen;
+  void loadPrMetadata().then(() => {
+    if (!debugSetting.current()) return;
+    // Only the ones this read started; a click's own are in its group.
+    const roundTrips = githubTrips
+      .since(tripsFrom)
+      .filter((trip) => trip.purpose === 'PR description' && trip.cause === 'click');
+    if (roundTrips.length === 0) return;
+    sendRequest('debugLogAdd', { group: id, cause: 'warmup', at, roundTrips, tasks: [] }).catch(
+      () => {
+        // Only the debug log misses it.
+      },
+    );
+  });
 }
 
 function update(): void {
@@ -340,7 +374,7 @@ const features = new DiffPageFeatures(() => {
 update();
 features.sync(location.href);
 // Read the description ahead of the first click, so it does not wait.
-void loadPrMetadata();
+readDescriptionAhead();
 
 // GitHub changes pages without a full reload (Turbo, or pushState in its
 // React views), so this script keeps running when the user moves from a PR
@@ -353,6 +387,8 @@ function onPageChanged(url: string): void {
   // A popup or chat whose part of the page GitHub replaced is closed, so
   // its request stops and clicks do not go to it.
   closeDetached([currentPopup(), currentChatPanel()]);
+  // A new page is a new group in the debug log (its warm-up and description).
+  pageOpen = newPageGroup();
   // A redraw can also drop the badge.
   update();
   features.sync(url);
@@ -360,6 +396,6 @@ function onPageChanged(url: string): void {
   fileContexts.forget();
   // A prefetch or wait from before the move is for code that may be gone.
   prefetcher.pageChanged();
-  void loadPrMetadata();
+  readDescriptionAhead();
 }
 watchNavigation(window, onPageChanged, { onRedraw: onPageChanged });
