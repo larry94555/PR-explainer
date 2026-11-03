@@ -79,7 +79,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 9.4 | Debug window | Medium | ✅ Done ([#47](https://github.com/larry94555/PR-explainer/pull/47)) |
 | 9.5 | Turn off thinking for reasoning models | Small | ✅ Done ([#48](https://github.com/larry94555/PR-explainer/pull/48)) |
 | 9.6 | Show the whole answer at once | Small | ✅ Done ([#49](https://github.com/larry94555/PR-explainer/pull/49)) |
-| 9.7 | Fewer round trips per click | Small | ✅ Done ([#50](https://github.com/larry94555/PR-explainer/pull/50)) |
+| 9.7 | Fewer round trips per click | Small | ✅ Done ([#51](https://github.com/larry94555/PR-explainer/pull/51)) |
 | 9.8 | One-sentence answers | Small | Not started |
 | 9.9 | Aim the Speed test and benchmark at 2 seconds | Small | Not started |
 | 9.10 | Explain changed lines ahead of time | Medium | Not started |
