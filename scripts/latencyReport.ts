@@ -78,6 +78,7 @@ export function parseSection(section: string): StepResult[] {
     }
     if (!current || !line.startsWith('| **All samples**')) continue;
     // Sample | Runs | Median | Slowest | First token | Load | Prompt tokens | Answer tokens | Tokens/s
+    // (then Think tokens | Think time since PR 9.1, which are not read here)
     const cells = line.split('|').map((c) => c.trim());
     const median = parseDuration(cells[3] ?? '');
     const slowest = parseDuration(cells[4] ?? '');

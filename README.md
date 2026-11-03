@@ -54,7 +54,7 @@ The popup and chat follow whichever GitHub appearance you use: light, dark (incl
 | **Chat in the dark theme** | **Split view, selecting a block of lines** |
 | <img src="docs/screenshots/pr-7.3/2-dark-chat.png" alt="Follow-up chat panel in GitHub's dark theme" width="420"> | <img src="docs/screenshots/pr-7.2/2-right-side-selection.png" alt="Selecting four lines on the right side of a split diff, with the Explain selection button" width="420"> |
 | **Where the time went** | **Speed test on the settings page** |
-| <img src="docs/screenshots/pr-8.1/2-details-open.png" alt="Popup with the Details panel open, showing load, prompt and answer time" width="420"> | <img src="docs/screenshots/pr-8.6/3-speed-test-results.png" alt="Settings page speed test ranking installed models" width="420"> |
+| <img src="docs/screenshots/pr-9.1/1-waterfall-light.png" alt="Popup with Details open, showing a bar for each task of the click, with the model split into load, prompt, think and answer" width="420"> | <img src="docs/screenshots/pr-8.6/3-speed-test-results.png" alt="Settings page speed test ranking installed models" width="420"> |
 
 <sub>Screenshots were taken while each feature was built, on saved GitHub diff pages with a fake model that streams a canned reply, so the times shown are not real model speeds. Real numbers are in <a href="docs/latency.md">docs/latency.md</a>.</sub>
 

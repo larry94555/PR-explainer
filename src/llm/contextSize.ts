@@ -25,15 +25,25 @@ export const FALLBACK_CONTEXT_TOKENS = 4096;
 /** Room left for the reply's framing and the estimate's rough edges. */
 export const PROMPT_MARGIN_TOKENS = 32;
 
-export type ContextSizer = (settings: Settings, signal?: AbortSignal) => Promise<number>;
+/**
+ * The window for `settings`. `onLookup` is called when the answer is not
+ * already known and the server is asked, so a click's trace (PR 9.1) can
+ * show the lookup only when it ran.
+ */
+export type ContextSizer = (
+  settings: Settings,
+  signal?: AbortSignal,
+  onLookup?: () => void,
+) => Promise<number>;
 
 export function createContextSizer(createClient: (settings: Settings) => LlmClient): ContextSizer {
   const known = new Map<string, number>();
-  return async (settings, signal) => {
+  return async (settings, signal, onLookup) => {
     if (settings.contextTokens > 0) return settings.contextTokens;
     const key = `${settings.llmUrl} ${settings.model}`;
     const remembered = known.get(key);
     if (remembered !== undefined) return remembered;
+    onLookup?.();
     try {
       const { maxTokens, configuredTokens } = await createClient(settings).modelContext(
         settings.model,

@@ -17,7 +17,8 @@ import { trackEnabled } from './enabledState';
 import { openAfter, openChatStream, openExplainStream, sendRequest } from './messaging/client';
 import { closeDetached, DiffPageFeatures, showsDiffs, watchNavigation } from './navigation';
 import { currentPopup, openPopup } from './popup/popup';
-import { latencyBreakdown, latencySummary } from './popup/latencyBreakdown';
+import { buildWaterfall } from './popup/latencyBreakdown';
+import { traceLine } from './trace/clickTrace';
 import { createFileContextLoader, type CodeSpan } from './fileContext';
 import type { FileContext } from './explain/explainPrompt';
 import { createPrefetcher, trackHoverSetting, type PrefetchEvent } from './prefetch';
@@ -141,10 +142,21 @@ const chats = new ChatSessions();
 // The PR names the cache entry, so the same code in two PRs is asked
 // separately (src/explain/explainCache.ts). The PR's title and description
 // go with the code, so the answer can say why the PR needs it (PR 6.1).
-// The block around the code in the full file goes too (PR 6.3).
-const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, { fresh, code }) => {
+// The block around the code in the full file goes too (PR 6.3). Each step is
+// a task in the click's trace (PR 9.1); the two reads run at the same time.
+const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, { fresh, code, trace }) => {
   const pr = prName(location.href);
-  const ready = Promise.all([loadPrMetadata(), loadFileContext(code)]);
+  const description = loadPrMetadata();
+  const file = loadFileContext(code);
+  if (trace) {
+    const onPr = Boolean(parsePrUrl(location.href));
+    const record = (key: string, label: string, work: Promise<unknown>, ran: boolean) =>
+      ran ? void trace.time(key, label, work) : trace.skip(key, label);
+    record('pr-description', 'Read the PR description', description, onPr);
+    // Removed lines are not in the file at the PR's head.
+    record('file-at-head', 'Fetch the file at head', file, onPr && code !== undefined);
+  }
+  const ready = Promise.all([description, file]);
   return openAfter(ready, ([prInfo, fileContext]) => {
     if (import.meta.env.MODE === 'development') {
       if (prInfo) {
@@ -161,7 +173,11 @@ const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, { fresh, code 
             : '(none)'),
       );
     }
-    return openExplainStream({ context, pr, fresh, prInfo, fileContext }, onChunk);
+    trace?.markSent();
+    const sent = trace?.start('send', 'Send the request');
+    const stream = openExplainStream({ context, pr, fresh, prInfo, fileContext }, onChunk);
+    sent?.();
+    return stream;
   });
 };
 
@@ -222,15 +238,15 @@ const explainDeps: ClickHandlerDeps = {
       : undefined,
   // Every build logs how long each explanation took, to track the local
   // model's latency.
-  onTiming: ({ elapsedMs, status, model, firstChunkMs, cached, timings }) => {
+  onTiming: ({ elapsedMs, status, model, firstChunkMs, cached, timings, tasks, reply }) => {
     const verb = { done: 'explained', failed: 'failed', stopped: 'stopped' }[status];
-    // Where the time went, as the popup's Details shows it (PR 8.1).
-    const breakdown = latencyBreakdown(elapsedMs, timings);
+    // Every task, as the popup's Details shows it (PR 9.1).
+    const waterfall = tasks?.length ? buildWaterfall(tasks, timings, reply) : undefined;
     const details = [
       model,
       firstChunkMs === undefined ? '' : `first text after ${(firstChunkMs / 1000).toFixed(1)} s`,
       cached ? 'from cache' : '',
-      breakdown ? latencySummary(breakdown) : '',
+      waterfall ? `tasks: ${traceLine(waterfall.rows)}` : '',
     ].filter(Boolean);
     console.info(
       `[PR Explainer] ${verb} in ${(elapsedMs / 1000).toFixed(1)} s` +

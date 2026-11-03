@@ -13,6 +13,9 @@ import { describeLlmError } from '../src/llm/describeLlmError';
 import type { ChatMessage, LlmTimings } from '../src/llm/types';
 import { LlmError } from '../src/llm/types';
 import { openPopup } from '../src/popup/popup';
+import type { TraceTask } from '../src/trace/types';
+import { traceLine } from '../src/trace/clickTrace';
+import { buildWaterfall } from '../src/popup/latencyBreakdown';
 import { isExplainShortcut } from '../src/a11y';
 import { resolveTheme, watchTheme } from '../src/theme';
 import { buildFittedExplainPrompt, type PromptReport } from '../src/explain/fitPrompt';
@@ -40,6 +43,50 @@ const TIMINGS: LlmTimings = {
   answerTokens: 240,
   answerMs: 8_000,
 };
+
+// A click on a reasoning model that thinks before it answers (PR 9.1): the
+// page's tasks, the service worker's, and the model's, timed from the click.
+// About 45% of the reply is inside <think>, so Think gets that share of the
+// 8 s Ollama spent writing.
+const page = (key: string, label: string, startMs: number, durationMs: number): TraceTask => ({
+  key,
+  label,
+  source: 'page',
+  startMs,
+  durationMs,
+});
+const worker = (key: string, label: string, startMs: number, durationMs: number): TraceTask => ({
+  ...page(key, label, startMs, durationMs),
+  source: 'worker',
+});
+const TASKS: TraceTask[] = [
+  page('find-code', 'Find the code', 0, 3),
+  page('pr-description', 'Read the PR description', 3, 180),
+  page('file-at-head', 'Fetch the file at head', 3, 410),
+  page('send', 'Send the request', 413, 1),
+  worker('settings', 'Read settings', 416, 4),
+  worker('fit-prompt', 'Build the prompt', 420, 12),
+  worker('cache', 'Check the cache', 432, 3),
+  worker('loaded-window', 'Check loaded window', 435, 25),
+  { ...worker('model', 'Wait for the model', 460, 13_560), firstChunkMs: 5_500 },
+  worker('parse', 'Parse the answer', 14_020, 2),
+  worker('cache-save', 'Save to the cache', 14_022, 6),
+  page('show', 'Show answer', 14_028, 172),
+];
+const THINKING_REPLY =
+  `<think>${'The loop retries fetch with a growing delay. '.repeat(9)}</think>\n` +
+  `## What it does\n${'Retries the fetch call up to three times. '.repeat(9)}`;
+// A cached answer: no model, a few milliseconds in all.
+const CACHED_TASKS: TraceTask[] = [
+  page('find-code', 'Find the code', 0, 2),
+  page('pr-description', 'Read the PR description', 2, 1),
+  page('file-at-head', 'Fetch the file at head', 2, 1),
+  page('send', 'Send the request', 3, 1),
+  worker('settings', 'Read settings', 5, 2),
+  worker('fit-prompt', 'Build the prompt', 7, 4),
+  worker('cache', 'Check the cache', 11, 3),
+  page('show', 'Show answer', 15, 4),
+];
 
 // A reply that hit the answer limit partway through "Why it's needed" (PR 8.4).
 const CUT_OFF = parseExplanation(
@@ -269,7 +316,7 @@ function explainRow(row: Element): void {
   // answer took 14.2 s, to match its Details (PR 8.1).
   let fakeTime = 0;
   const popup = openPopup(row, {
-    ...(chosen() === 'done' && { now: () => fakeTime }),
+    ...((chosen() === 'done' || chosen() === 'failed') && { now: () => fakeTime }),
     onClose: () => (status.textContent = 'Last event: closed'),
     onAsk: () => {
       const session = new ChatSession({
@@ -289,7 +336,16 @@ function explainRow(row: Element): void {
     case 'done':
       fakeTime = 14_200;
       popup.showExplanation(SAMPLE, MODEL);
-      popup.showTimings(TIMINGS);
+      popup.showTrace({ tasks: TASKS, timings: TIMINGS, reply: THINKING_REPLY });
+      // The same line the content script logs for each click (PR 9.1).
+      console.info(
+        `[PR Explainer] explained in 14.2 s (${MODEL}, first text after 6.0 s, tasks: ` +
+          `${traceLine(buildWaterfall(TASKS, TIMINGS, THINKING_REPLY).rows)})`,
+      );
+      break;
+    case 'cached':
+      popup.showExplanation(SAMPLE, MODEL, { elapsedMs: 14_200 });
+      popup.showTrace({ tasks: CACHED_TASKS });
       break;
     case 'prompt':
       popup.showExplanation(SAMPLE, MODEL);
@@ -303,23 +359,47 @@ function explainRow(row: Element): void {
       popup.showLoading(MODEL);
       setTimeout(() => {
         popup.showExplanation(SAMPLE, MODEL);
-        // Ollama's own share of the 2 s, so the rest shows as Outside Ollama.
-        popup.showTimings({
-          totalMs: 1_700,
-          loadMs: 15,
-          promptTokens: 812,
-          promptMs: 400,
-          answerTokens: 40,
-          answerMs: 1_280,
+        // A model that does not think, already loaded: no Think row.
+        popup.showTrace({
+          tasks: [
+            page('find-code', 'Find the code', 0, 2),
+            page('send', 'Send the request', 2, 1),
+            worker('fit-prompt', 'Build the prompt', 4, 10),
+            { ...worker('model', 'Wait for the model', 14, 1_900), firstChunkMs: 450 },
+            page('show', 'Show answer', 1_914, 86),
+          ],
+          timings: {
+            totalMs: 1_700,
+            loadMs: 15,
+            promptTokens: 812,
+            promptMs: 400,
+            answerTokens: 40,
+            answerMs: 1_280,
+          },
+          reply: '## What it does\nRetries the fetch call.',
         });
       }, 2000);
       break;
     case 'failed': {
+      fakeTime = 30_370;
       const { message, fix } = describeLlmError(new LlmError('connection', 'fetch failed'), {
         url: 'http://localhost:11434',
         platform: 'windows',
       });
       popup.showError(message, fix);
+      // Ollama stopped answering after 30 s: the failed wait shows in Details.
+      popup.showTrace({
+        tasks: [
+          page('find-code', 'Find the code', 0, 3),
+          page('pr-description', 'Read the PR description', 3, 120),
+          page('file-at-head', 'Fetch the file at head', 3, 300),
+          page('send', 'Send the request', 303, 1),
+          worker('settings', 'Read settings', 306, 4),
+          worker('fit-prompt', 'Build the prompt', 310, 12),
+          { ...worker('model', 'Wait for the model', 330, 30_000), status: 'failed' },
+          page('show', 'Show answer', 30_330, 40),
+        ],
+      });
       break;
     }
     case 'unsafe':

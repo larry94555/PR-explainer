@@ -12,6 +12,7 @@ import { gpuStatus } from '../src/llm/gpuStatus';
 import { OllamaClient } from '../src/llm/ollamaClient';
 import { isSameModel } from '../src/llm/types';
 import type { Platform } from '../src/llm/describeLlmError';
+import { splitAnswer, thinkShare } from '../src/popup/latencyBreakdown';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 import type { BenchRun, BenchSample } from './benchStats.ts';
 
@@ -54,6 +55,7 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
       });
       const startedAt = performance.now();
       let firstTokenMs: number | undefined;
+      let reply = '';
       try {
         const result = await explain(
           {
@@ -65,17 +67,25 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
           },
           {
             onChunk: (chunk) => {
+              reply += chunk;
               if (firstTokenMs === undefined && chunk) firstTokenMs = performance.now() - startedAt;
             },
           },
         );
         const totalMs = performance.now() - startedAt;
         if (result.status === 'failed') return { ok: false, error: result.message };
+        const { timings } = result;
+        // The thinking part of the answer, as the popup's Think row estimates it (PR 9.1).
+        const { think } = splitAnswer(
+          { tokens: timings?.answerTokens, ms: timings?.answerMs },
+          thinkShare(reply),
+        );
         return {
           ok: true,
           totalMs,
           ...(firstTokenMs !== undefined && { firstTokenMs }),
-          ...('timings' in result && result.timings && { timings: result.timings }),
+          ...(timings && { timings }),
+          ...((think.tokens !== undefined || think.ms !== undefined) && { think }),
         };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };

@@ -38,7 +38,7 @@ Everything you need to work on PR Explainer: requirements, commands, the project
 - **Service worker console:** on `chrome://extensions`, click **service worker** on the PR Explainer card. In a `npm run dev` build, `debugLlm` and `debugSettings` are available there, for example `await debugLlm.listModels()` or `await debugLlm.explainSample()`.
 - **Page console:** in a dev build, the content script logs the prompt, the PR description and the file context it sent, and every build logs a timing line per explanation.
 - **Show prompt (debug):** tick it on the settings page to see the exact prompt, and what was trimmed, under each explanation.
-- **Details:** the popup's **Details** button shows where the time went (load, prompt, answer, outside Ollama).
+- **Details:** the popup's **Details** button shows a bar for each task of the click (finding the code, the GitHub fetches, the service worker's steps, and the model's Load, Read prompt, Think and Write answer), and the console logs the same tasks.
 
 ## Project layout
 

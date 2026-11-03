@@ -31,10 +31,14 @@
 // under the explanation shows the prompt, its estimated size against the
 // budget, and what was trimmed to fit.
 //
-// Once a model's answer is shown, a Details button next to the time opens a
-// short table of where the time went (PR 8.1): loading the model, reading
-// the prompt, writing the answer (with tokens per second), and the time spent
-// outside Ollama. It is not shown for a cached answer.
+// Once an answer is shown, a Details button next to the time opens a small
+// waterfall of where the time went (PR 9.1, replacing PR 8.1's table): one
+// row per task of the click, with a bar showing when it started and how long
+// it took, its time and its share of the total. Tasks that ran at the same
+// time have bars side by side, and a line on the bars marks the first word.
+// The model's time is split into Load, Read prompt, Think and Write answer
+// (src/popup/latencyBreakdown.ts). A cached answer shows only its own short
+// trace.
 //
 // The content script opens it from its click handler (src/clickHandler.ts),
 // and the demo page (`npm run demo:popup`) shows it with fake data.
@@ -42,7 +46,8 @@
 import type { PromptReport } from '../explain/fitPrompt';
 import type { Explanation, SectionKey } from '../explain/parseExplanation';
 import type { LlmTimings } from '../llm/types';
-import { latencyBreakdown, latencyRows } from './latencyBreakdown';
+import type { TraceTask } from '../trace/types';
+import { buildWaterfall, formatDuration, rowDescription, rowValue } from './latencyBreakdown';
 import { appendInline, renderMarkdown } from './renderMarkdown';
 import { POPUP_STYLE } from './popupStyle';
 import { restoreFocus } from '../a11y';
@@ -130,12 +135,21 @@ export interface Popup {
   /** Adds the prompt that was sent under the explanation (the Show prompt setting). */
   showPrompt(report: PromptReport): void;
   /**
-   * Adds the Details button and its latency table for the answer shown
-   * (PR 8.1). Does nothing unless an answer is shown, or when the timings
-   * have nothing to split the time by.
+   * Adds the Details button and its waterfall for the answer or error shown
+   * (PR 9.1). Does nothing unless one is shown, or when there are no tasks.
    */
-  showTimings(timings: LlmTimings | undefined): void;
+  showTrace(trace: TraceDetails): void;
   close(): void;
+}
+
+/** What the Details waterfall is drawn from (PR 9.1). */
+export interface TraceDetails {
+  /** The click's tasks (src/trace/clickTrace.ts). */
+  tasks: readonly TraceTask[];
+  /** The server's timings, which split the model's task. Left out for a cached answer. */
+  timings?: LlmTimings;
+  /** The whole reply, to estimate how much of it was thinking. */
+  reply?: string;
 }
 
 /** The summary line of the Prompt sent section. */
@@ -258,10 +272,9 @@ export function openPopup(
     closeButton,
   );
 
-  const latency = doc.createElement('dl');
+  const latency = doc.createElement('div');
   latency.className = 'latency';
   latency.id = 'pe-latency';
-  latency.setAttribute('aria-label', 'Where the time went');
   latency.hidden = true;
   let detailsOpen = false;
   const showDetails = (open: boolean) => {
@@ -473,20 +486,71 @@ export function openPopup(
       error.append(messageEl, fixEl);
       setBody('failed', error);
     },
-    showTimings(timings) {
-      if (state !== 'done') return;
-      const breakdown = latencyBreakdown(elapsed(), timings);
-      if (!breakdown) return;
-      latency.replaceChildren(
-        ...latencyRows(breakdown).flatMap((row) => {
-          const term = doc.createElement('dt');
-          term.textContent = row.label;
-          const value = doc.createElement('dd');
-          value.dataset.row = row.key;
-          value.textContent = row.value;
-          return [term, value];
-        }),
-      );
+    showTrace({ tasks, timings, reply }) {
+      // A failed answer shows its trace too: that is when it matters most.
+      if ((state !== 'done' && state !== 'failed') || tasks.length === 0) return;
+      const waterfall = buildWaterfall(tasks, timings, reply);
+      const total = waterfall.totalMs || 1;
+      const percent = (ms: number) => `${Math.min(100, (Math.max(0, ms) / total) * 100)}%`;
+      const list = doc.createElement('ul');
+      list.className = 'tasks';
+      list.setAttribute('aria-label', 'Where the time went');
+      for (const row of waterfall.rows) {
+        const item = doc.createElement('li');
+        item.className = 'task';
+        item.dataset.task = row.key;
+        item.dataset.source = row.source;
+        if (row.status) item.dataset.status = row.status;
+        // The visible cells are hidden from screen readers, which read one
+        // sentence per row instead.
+        const spoken = doc.createElement('span');
+        spoken.className = 'sr-only';
+        spoken.textContent = rowDescription(row);
+        const label = doc.createElement('span');
+        label.className = 'task-label';
+        label.setAttribute('aria-hidden', 'true');
+        label.textContent = row.label;
+        if (row.detail) label.title = row.detail;
+        const track = doc.createElement('span');
+        track.className = 'track';
+        track.setAttribute('aria-hidden', 'true');
+        const bar = doc.createElement('span');
+        bar.className = 'bar';
+        bar.style.left = percent(row.startMs);
+        // At least a sliver, so a task of a few milliseconds can be seen.
+        bar.style.width = `max(2px, ${percent(row.durationMs)})`;
+        track.append(bar);
+        if (waterfall.firstTokenMs !== undefined) {
+          const mark = doc.createElement('span');
+          mark.className = 'first-token';
+          mark.style.left = percent(waterfall.firstTokenMs);
+          track.append(mark);
+        }
+        const value = doc.createElement('span');
+        value.className = 'task-time';
+        value.setAttribute('aria-hidden', 'true');
+        value.textContent = rowValue(row);
+        item.append(spoken, label, track, value);
+        list.append(item);
+      }
+      const summary = doc.createElement('p');
+      summary.className = 'trace-total';
+      const parts = [`Total ${formatDuration(waterfall.totalMs)}`];
+      if (waterfall.firstTokenMs !== undefined) {
+        parts.push(
+          `first word at ${formatDuration(waterfall.firstTokenMs)} (the line on the bars)`,
+        );
+      }
+      if (waterfall.rows.some((r) => r.key === 'think')) {
+        parts.push('~ estimated from the share of the reply inside <think>');
+      }
+      if (waterfall.scaled) {
+        parts.push(
+          "Ollama's own times added up to more than the measured wait, so they are scaled to fit",
+        );
+      }
+      summary.textContent = parts.join(' · ');
+      latency.replaceChildren(list, summary);
       detailsButton.hidden = false;
     },
     showPrompt(report) {

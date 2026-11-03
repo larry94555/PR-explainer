@@ -65,11 +65,8 @@ export const POPUP_STYLE = `
   .popup:not([data-state='loading']):not([data-state='streaming']) .stop { display: none; }
   .details[hidden] { display: none; }
   .details:hover, .details:focus-visible, .details[aria-expanded='true'] { background: var(--pe-hover-bg); }
-  /* Where the time went (PR 8.1): a two-column table under the header. */
+  /* Where the time went (PR 9.1): a waterfall under the header, one row per task. */
   .latency {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 2px 12px;
     margin: 0;
     padding: 8px 12px;
     background: var(--pe-subtle-bg);
@@ -78,9 +75,31 @@ export const POPUP_STYLE = `
     font-variant-numeric: tabular-nums;
   }
   .latency[hidden] { display: none; }
-  .latency dt { color: var(--pe-muted); }
-  .latency dd { margin: 0; }
-  .latency dt:nth-last-of-type(1), .latency dd:last-of-type { font-weight: 600; }
+  .tasks { list-style: none; margin: 0; padding: 0; }
+  .task {
+    display: grid;
+    grid-template-columns: 11.5em 1fr 9.5em;
+    align-items: center;
+    gap: 8px;
+    line-height: 18px;
+  }
+  .task-label { color: var(--pe-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task[data-source='model'] .task-label { color: var(--pe-fg); }
+  .task-time { text-align: right; white-space: nowrap; }
+  .track { position: relative; height: 10px; border-radius: 2px; background: var(--pe-border-muted); }
+  .bar { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--pe-muted); }
+  .task[data-source='worker'] .bar { background: var(--pe-attention); }
+  .task[data-source='model'] .bar { background: var(--pe-accent); }
+  .task[data-task='think'] .bar { background: var(--pe-danger); }
+  .task[data-status='failed'] .bar { background: var(--pe-danger); }
+  .task[data-status='skipped'] .bar { display: none; }
+  .task[data-status] .task-time { color: var(--pe-muted); }
+  .first-token { position: absolute; top: -2px; bottom: -2px; width: 0; border-left: 1px dashed var(--pe-fg); }
+  .trace-total { margin: 6px 0 0; color: var(--pe-muted); }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
   .regenerate:hover, .regenerate:focus-visible { background: var(--pe-accent-bg); border-color: var(--pe-accent); color: var(--pe-accent); }
   /* Regenerate only makes sense once the model has stopped working. */
   .popup:not([data-state='done']):not([data-state='failed']):not([data-state='stopped']) .regenerate { display: none; }
