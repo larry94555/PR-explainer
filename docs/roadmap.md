@@ -72,6 +72,18 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 8.6 | Model and GPU check on the settings page | Medium | ✅ Done ([#39](https://github.com/larry94555/PR-explainer/pull/39)) |
 | 8.7 | Explain on hover (prefetch) | Medium | ✅ Done ([#40](https://github.com/larry94555/PR-explainer/pull/40)) |
 | 8.8 | Latency report and faster defaults | Small | ✅ Done ([#41](https://github.com/larry94555/PR-explainer/pull/41)) |
+| 9.0 | Plan Milestone 9 | Small | ✅ Done ([#43](https://github.com/larry94555/PR-explainer/pull/43)) |
+| 9.1 | Where the time goes, task by task | Medium | Not started |
+| 9.2 | Round trips and prompts for each click | Medium | Not started |
+| 9.3 | Debug log in the service worker | Small | Not started |
+| 9.4 | Debug window | Medium | Not started |
+| 9.5 | Turn off thinking for reasoning models | Small | Not started |
+| 9.6 | Show the whole answer at once | Small | Not started |
+| 9.7 | Fewer round trips per click | Small | Not started |
+| 9.8 | One-sentence answers | Small | Not started |
+| 9.9 | Aim the Speed test and benchmark at 2 seconds | Small | Not started |
+| 9.10 | Explain changed lines ahead of time | Medium | Not started |
+| 9.11 | Latency report against 2 seconds | Small | Not started |
 
 ## Milestone overview
 
@@ -85,6 +97,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 6 | Smarter context | Explanations use the PR description and more of the file, and stay within the model's context limit |
 | 7 | Robust on real GitHub | Works across split view, dark mode, lazy-loaded diffs, and in-page navigation; ready to share |
 | 8 | Optimize LLM latency | An explanation finishes in under 10 seconds on your laptop, or a report shows the lowest time that laptop can reach and why |
+| 9 | Two-second answers | Click a line and the whole explanation appears at once within 2 seconds, and a debug window shows every round trip to the local LLM with its prompt, reply and time |
 
 ---
 
@@ -720,6 +733,179 @@ This milestone comes last because it builds on streaming (4.1, 4.2), caching (4.
   4. Open `docs/latency.md` and confirm the new **Latency report** section has a row per step, a **Conclusion** (goal met with which model, or the floor, what limits it, and the next step), and each step's tables under it.
   5. Commit `docs/latency.md` (or send the section to Claude to commit), so the defaults can be set from it.
   6. Reset the extension's settings to defaults, pick the model the conclusion names, click 5 lines on a real PR, and confirm each popup says "Answered in" with a time at or near the reported median.
+
+---
+
+## Milestone 9: Two-second answers
+
+**Goal:** after a click, the popup shows the **whole** explanation within **2 seconds**, measured from the click to "Answered in …", on the laptop the extension is used on. The answer appears all at once instead of word by word. Every step of those 2 seconds can be seen: which tasks ran, how long each took, how many round trips went to the local LLM and to GitHub, and the prompt and reply of each one.
+
+**Demo:** Turn on **Debug window** in the settings, open a PR, and click a line. The debug window lists every round trip the click made (to GitHub and to Ollama) with its prompt, reply and time, and the popup's **Details** shows a bar for each task. Then click lines and show the full answer appearing at once in 2 seconds or less, and run `npm run bench` to show the before and after table in `docs/latency.md`.
+
+**Where things stand.** Milestone 8 brought the median from 94 s to 53 s on the test laptop (Windows 11, i7-1360P, `deepseek-r1:7b` on 100% CPU), with the first word arriving after 30 to 100 seconds. The popup itself opens at once in its loading state (PR 3.5); what takes 30 seconds or more is the first word of the answer, which is then written out at about 6.4 tokens per second.
+
+**The arithmetic of 2 seconds.** From PR 8.1:
+
+> total ≈ load time + prompt tokens ÷ prompt speed + thinking tokens ÷ generation speed + answer tokens ÷ generation speed + extension overhead
+
+At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on this CPU cannot write a fresh answer in 2 seconds whatever the extension does. Each term needs to shrink:
+
+- **Thinking tokens.** `deepseek-r1` is a reasoning model. It writes a hidden `<think>` section before the answer, and with the 300-token limit it often spent the whole budget thinking. This is very likely most of the 30 to 100 seconds before the first word. PR 9.1 measures it and PR 9.5 turns it off.
+- **Answer tokens.** One sentence per section instead of two (PR 9.8).
+- **Generation and prompt speed.** A 1.5B coding model usually writes four to five times faster than a 7B one on a laptop CPU. PR 9.9 points the Speed test and benchmark at 2 seconds and recommends such a model.
+- **Overhead and round trips.** PRs 9.2 to 9.4 show every round trip and PR 9.7 removes the ones a click does not need.
+- **Waiting at all.** Even a fast small model may take 2 to 5 seconds on a CPU for a fresh answer. PR 9.10 explains the changed lines on screen ahead of time, so most clicks are answered from the cache at once. PR 9.11 reports how many clicks meet 2 seconds both ways.
+
+**Order.** The first four PRs only measure and show. They come first so each later fix can be checked in the debug window and in **Details**, one PR at a time. If the 2-second goal cannot be met for fresh answers on this laptop, PR 9.11 says what the floor is and what limits it, as PR 8.8 did.
+
+### PR 9.0: Plan Milestone 9 (Small) ✅ Done
+- **Status:** Done ([#43](https://github.com/larry94555/PR-explainer/pull/43)).
+- **Why it's needed:** The popup takes over 30 seconds to answer and writes the text one word at a time. The roadmap needed a milestone with a 2-second target and a way to see where the time goes.
+- **Problem it solves:** Adds this milestone to the roadmap: its goal, demo, the arithmetic behind the target, and PRs 9.1 to 9.11. No code changes.
+- **Unit tests added:** None (documentation only).
+- **How to test:** Read this section and the PR status table, and confirm each PR is Small or Medium and lists why it is needed, the problem it solves, its unit tests and how to test it.
+
+### PR 9.1: Where the time goes, task by task (Medium)
+- **Why it's needed:** The popup's **Details** (PR 8.1) splits Ollama's time into load, prompt and answer, and lumps everything else into "Outside Ollama". It does not say what the extension itself did during a click, in what order, or how much of the "answer" time was the model thinking. To get from 30+ seconds to 2 we need to see every task.
+- **Problem it solves:** Each click gets a **trace**: a list of tasks, each with a start time and a duration measured from the click. The content script records its own tasks (find the clicked code in the diff, read the PR description, fetch the file at the PR's head, send the request) and the service worker records its tasks (read the settings, look up the context size, check which window the model is loaded with, build and fit the prompt, wait for the model, parse the answer) and returns them with the result. The two lists are lined up by the moment the request was sent, so the content script and the service worker still share no module (PR 7.4). The model's time is split into **Load**, **Read prompt**, **Think** and **Write answer**. Think and Write answer are split by the share of the reply's characters inside `<think>` (marked "estimated"), and by the model's own count once PR 9.5 makes Ollama report thinking separately. **Show answer** (from the last word to the popup showing it) is the final task. **Details** becomes a small waterfall: one row per task with a bar showing when it started and how long it took, its time, and its share of the total, with tasks that ran at the same time (such as the two GitHub fetches) shown side by side. The first-token time is marked on the bar. The console line from PR 3.5 lists the same tasks. `npm run bench` adds **Think tokens** and **Think time** columns.
+- **Unit tests added:** `clickTrace.test.ts` (fake clock) checks tasks are recorded in order with their start and duration, that overlapping tasks keep their own times, that the service worker's tasks are lined up with the content script's, that a task that failed or was skipped is marked so, and the console line. `explainHandler.test.ts` checks the service worker returns its tasks, including the context-size lookup only when it ran. `latencyBreakdown.test.ts` checks the split of answer time into Think and Write answer (all thinking, none, and a reply cut off inside `<think>`), and that the shares add up to 100%. `popup.test.ts` checks the waterfall rows, their labels for screen readers, and that a cached answer shows only its own short trace. `benchStats.test.ts` checks the new columns.
+- **Screenshots:** the waterfall in **Details** for a slow answer, the same in dark mode, and the console line (from `npm run demo:popup`, with a fake model that thinks before it answers).
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Optional, without Ollama: run `npm run demo:popup`, click a line, click **Details**, and confirm the waterfall matches the screenshot. Press `Ctrl+C` to stop the demo.
+  3. Run `npm run dev`, click the reload icon on the PR Explainer card on `chrome://extensions`, and refresh a PR's **Files changed** tab.
+  4. With `deepseek-r1:7b` picked, click a line and wait for "Answered in …". Click **Details**. Confirm there is a row for each task, the bars start where the previous task ended (or overlap for the GitHub fetches), and the times add up to roughly the total.
+  5. Confirm **Think** has its own row, and note how much of the total it takes. (If it is most of the time, PR 9.5 is the biggest fix.)
+  6. Press `F12`, choose **Console**, and confirm the `[PR Explainer] explained in …` line lists the same tasks and times.
+  7. Click the same line again. Confirm the cached answer shows only a few milliseconds of tasks and no model rows.
+  8. Run `npm run bench -- deepseek-r1:7b` and confirm `docs/latency.md` gets **Think tokens** and **Think time** columns.
+
+### PR 9.2: Round trips and prompts for each click (Medium)
+- **Why it's needed:** A click can talk to GitHub (the PR description, the file at the PR's head) and to Ollama (the context size, which window the model is loaded with, the explanation itself). Nobody can say today how many of these a click makes, whether any are repeated, or what exactly was sent to the model.
+- **Problem it solves:** Every request already goes through the two guarded fetch wrappers from PR 7.4, `src/net/githubFetch.ts` (content script) and `src/net/llmFetch.ts` (service worker). Each now records a **round trip**: where it went (GitHub or Ollama), the endpoint (`/api/ps`, `/api/show`, `/api/chat`, the file URL), why it was made ("PR description", "file at head", "context size", "loaded window", "explanation"), when it started and how long it took, its status, and the bytes sent and received. For `/api/chat` it also keeps the messages sent and the whole reply, thinking included. Round trips made for a click are tied to it; those made by the warm-up (PR 8.3) or Explain on hover (PR 8.7) are tagged with that cause, so they are visible but not counted against the click. **Details** gets a line such as "4 round trips: GitHub 1, Ollama 3" and a list of them with their times; the explanation's row shows its prompt, so this replaces the separate **Show prompt** box (the setting now just opens that row). Round trips are kept in memory for the open popup only; nothing is stored.
+- **Unit tests added:** `roundTrips.test.ts` checks a request is recorded with its endpoint, purpose, times, status and sizes, that a failed or cancelled request is recorded as such, that a chat request keeps its messages and reply (and a stream's reply is put together from its pieces), and that round trips are tied to the right click or cause. `githubFetch.test.ts` and `llmFetch.test.ts` check every request is recorded and that the privacy rules from PR 7.4 still refuse other hosts (a refused request is recorded as refused). `explainHandler.test.ts` checks the round trips are returned with the result. `popup.test.ts` checks the count line, the list, and that the explanation's row shows the prompt.
+- **Screenshots:** **Details** with the round trip count and list, and the explanation's round trip opened to show its prompt.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, click the reload icon on the PR Explainer card on `chrome://extensions`, and open a PR's **Files changed** tab you have not opened since Chrome started.
+  3. Click a line, wait for the answer, and click **Details**. Confirm the round trip line (for example "5 round trips: GitHub 2, Ollama 3") and that the list names each one with its time.
+  4. Open the `/api/chat` row and confirm it shows the system prompt and the user prompt with the code you clicked.
+  5. Click a different line in the same file. Confirm fewer round trips this time (the PR description, the file and the context size are already known), and note which ones are left.
+  6. Quit Ollama from the system tray, click a new line, and confirm the failed round trip is listed with its error. Open Ollama again.
+  7. Check `npm test` still runs the privacy test from PR 7.4 and it passes.
+
+### PR 9.3: Debug log in the service worker (Small)
+- **Why it's needed:** **Details** shows one click at a time and is gone when the popup closes. To follow the whole flow (warm-up, hover, clicks, chat) there needs to be one place that keeps every round trip, which the debug window in PR 9.4 reads.
+- **Problem it solves:** A new **Debug window** setting, off by default, in a **Debug** section of the settings page next to **Show prompt**. When it is on, the service worker keeps every round trip from PR 9.2, with its click's trace from PR 9.1, in a log of the last 200 entries in `chrome.storage.session` (kept in memory by Chrome, survives the service worker being stopped, and cleared when Chrome closes). The content script sends its GitHub round trips to the service worker so they join the log. A `debugLog` port sends each new entry to anyone listening, and `debugLogClear` empties it. When the setting is off, nothing is kept. Prompts contain code from the PR, so `PRIVACY.md` says what is kept, where, and for how long; nothing leaves the machine.
+- **Unit tests added:** `debugLog.test.ts` checks entries are added in order, the oldest is dropped after 200, the log is read back after a service worker restart, a listener gets each new entry, clearing works, and nothing is kept when the setting is off (or turned off, which also clears the log). `settings.test.ts` checks the new default (off). `optionsPage.test.ts` checks the checkbox loads and saves. `messaging.test.ts` checks the content script's round trips reach the log.
+- **Screenshots:** the settings page with the new **Debug** section.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension on `chrome://extensions`, open its settings page, and confirm **Debug window** is unticked under **Debug**. Tick it and click **Save**.
+  3. Open a PR's **Files changed** tab and click two lines.
+  4. On `chrome://extensions`, click **service worker** on the PR Explainer card, and in its console run `chrome.storage.session.get(null).then(console.log)`. Confirm the log lists the warm-up and both clicks' round trips, with the prompt on each `/api/chat` entry.
+  5. Click **Stop** next to the service worker on the extensions page (or wait for Chrome to stop it), click another line, and run the same command. Confirm the earlier entries are still there and the new click was added.
+  6. Untick **Debug window** and save. Run the command again and confirm the log is empty.
+
+### PR 9.4: Debug window (Medium)
+- **Why it's needed:** To see the debug flow as it happens: every round trip between the extension and the local LLM (and GitHub), its prompt, its reply, and the time it took, in one window beside the PR.
+- **Problem it solves:** With **Debug window** on, the popup header gets a **Debug** button, and the toolbar button's right-click menu gets **Open debug window**. Both open `debug.html` in its own window (one at a time; a second click brings it to the front). The window reads the log from PR 9.3 and updates live through the `debugLog` port. It lists round trips newest first, grouped under the click (or warm-up, hover or chat question) that caused them, with the file and line, the total time and the number of round trips. Each row shows the time, where it went, the endpoint, why it was made, how long it took and its status. Opening a row shows the request (a chat prompt shown message by message, with its role), the reply (with the thinking shown apart from the answer), Ollama's timings, and the click's task waterfall from PR 9.1. A row still in progress shows its reply growing and a ticking time. **Pause**, **Clear**, filters for GitHub and Ollama, and **Copy as JSON** (to paste into an issue or a chat) are at the top. The window follows the light or dark theme and works with the keyboard and a screen reader.
+- **Unit tests added:** `debugWindow.test.ts` (jsdom, fake port) checks rows are grouped by cause and ordered newest first, that a new entry appears live and a row in progress updates, opening a row shows the prompt by role, the reply with thinking apart, the timings and the waterfall, that Pause stops updates and Resume catches up, Clear empties the window and the log, the filters, Copy as JSON (the whole log as shown, valid JSON), and keyboard focus and labels. `popup.test.ts` checks the **Debug** button appears only with the setting on. `toolbarToggle.test.ts` checks the menu item opens one window and focuses it the second time.
+- **Screenshots:** the debug window after a click (light and dark), a round trip opened to show its prompt and reply, and the popup's **Debug** button. Taken with `npm run demo:debug`, a new demo page that fills the window with a recorded flow.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Optional, without Ollama: run `npm run demo:debug`, open the address it prints, and confirm the window matches the screenshots. Press `Ctrl+C` to stop it.
+  3. Run `npm run dev`, reload the extension on `chrome://extensions`, and make sure **Debug window** is ticked in the settings.
+  4. Open a PR's **Files changed** tab, click a line, and click **Debug** in the popup. Confirm a window opens beside Chrome and shows the warm-up and the click, with its round trips under it, while the answer is still being written.
+  5. Open the `/api/chat` row. Confirm the system and user messages, the reply (with any thinking shown apart), the times, and the task waterfall.
+  6. Rest the pointer on a line with **Explain on hover** on, and confirm a hover group appears. Ask a question in the chat and confirm a chat group appears.
+  7. Click **Pause**, click a line, confirm nothing new appears, then click **Resume** and confirm it does. Try the GitHub and Ollama filters, then **Copy as JSON**, paste into Notepad, and confirm it is readable JSON.
+  8. Right-click the toolbar button, choose **Open debug window**, and confirm the same window comes to the front instead of a second one opening.
+
+### PR 9.5: Turn off thinking for reasoning models (Small)
+- **Why it's needed:** A reasoning model such as `deepseek-r1` writes a long hidden `<think>` section before the answer. PR 8.8 found it often used the whole 300-token limit thinking, and the waterfall from PR 9.1 shows how long that takes. An explanation of a few lines of code does not need it.
+- **Problem it solves:** For a model that can think (Ollama's `/api/show` lists `thinking` in its `capabilities`), explanations are sent with Ollama's `think: false`, so the model answers directly. When Ollama does think (an older Ollama, or the new **Let the model think** setting, off by default), it is asked to return the thinking in its own field (`message.thinking`), which the client keeps apart from the answer: the popup never shows it, the debug window does, and PR 9.1's **Think** row uses the model's real count instead of an estimate. The `<think>` stripping from PR 3.3 stays as a fallback. Chat questions follow the same setting. The settings page says whether the picked model is a reasoning model and that thinking is off.
+- **Unit tests added:** `ollamaClient.test.ts` checks `think: false` is sent only for a model with the `thinking` capability, the thinking field is read from `chat()` and from a stream, and an older Ollama that ignores the field still works. `contextSize.test.ts` checks capabilities are read with the context size from the same `/api/show` call (no extra round trip). `explainHandler.test.ts` and `chatHandler.test.ts` check the setting reaches the request. `settings.test.ts` checks the new default (off). `parseExplanation.test.ts` checks thinking in its own field is never shown.
+- **Screenshots:** the settings page line for a reasoning model, and the debug window showing a reply with no thinking.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `ollama --version` and confirm it is 0.9 or later (older versions cannot turn thinking off; update from [ollama.com](https://ollama.com/download)).
+  3. Run `npm run bench -- deepseek-r1:7b` and compare with the section from PR 9.1: **Think tokens** should be close to zero, and the median total and first-token times much lower.
+  4. Run `npm run dev`, reload the extension, and open the settings page. With `deepseek-r1:7b` picked, confirm it says it is a reasoning model and thinking is off.
+  5. On a PR, click a line. Confirm the first word comes much sooner than before and **Details** has no (or a tiny) **Think** row. In the debug window, confirm the `/api/chat` request has `"think": false`.
+  6. Tick **Let the model think**, save, click a new line, and confirm **Think** comes back in **Details** and the thinking is shown in the debug window but not in the popup. Untick it and save.
+
+### PR 9.6: Show the whole answer at once (Small)
+- **Why it's needed:** The popup writes the answer out one word at a time as the model produces it (PR 4.2). With a slow model that is slow to read and the sections jump around as they fill in. A complete answer appearing at once looks much better.
+- **Problem it solves:** By default the popup no longer shows the reply as it arrives. Until the answer is complete it shows a steady loading state: the three section headings with placeholder lines, a spinner and a ticking time ("Explaining… 1.4 s"), and **Stop**. When the answer is complete it is parsed and shown at once, with no reflow. The request still streams under the hood, so **Stop** still cancels at once, the timer still knows the first-token time, and a click that joins a hover prefetch (PR 8.7) works as before. A new **Show answers as they are written** setting (off by default) brings back word-by-word display for anyone who prefers it. The chat panel follows the same setting: its answer appears whole under "Thinking…".
+- **Unit tests added:** `popup.test.ts` checks the placeholder state, that partial text is not shown with the setting off and is with it on, that the full answer replaces the placeholder in one update, that **Stop** still works and says "Stopped after …", and that the placeholder is announced once to screen readers rather than on every word. `chatPanel.test.ts` checks the same for chat answers. `clickHandler.test.ts` and `prefetch.test.ts` check a joined prefetch shows its answer whole. `settings.test.ts` and `optionsPage.test.ts` check the new setting.
+- **Screenshots:** the loading state with placeholders, the full answer a moment later, the same in dark mode, and the chat waiting and answered (from `npm run demo:popup` and `npm run demo:chat`).
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Optional, without Ollama: run `npm run demo:popup`, click a line, and confirm the placeholders show and then the whole answer appears at once.
+  3. Run `npm run dev`, reload the extension, and refresh a PR's **Files changed** tab. Click a line and confirm the popup opens at once with the placeholders and a ticking time, and the full answer appears in one go.
+  4. Click another line and press **Stop** while it waits. Confirm it says "Stopped after … s".
+  5. Ask a question in the chat and confirm the answer appears whole.
+  6. Tick **Show answers as they are written** in the settings, save, click a line, and confirm the text appears word by word again. Untick it and save.
+
+### PR 9.7: Fewer round trips per click (Small)
+- **Why it's needed:** Every round trip adds time, and PR 9.2 makes them visible. Reading the code, a warm click still asks Ollama's `/api/ps` which window the model is loaded with before every explanation (PR 8.5), and the PR description and file fetches wait for each other.
+- **Problem it solves:** The service worker remembers the window the model was loaded with from the last request it sent (an explanation, chat question or warm-up) and asks `/api/ps` again only when it does not know, the model or server changed, or a request failed. The PR description is fetched when the **Files changed** tab opens, alongside the warm-up, instead of on the first click, and the file at the PR's head is fetched at the same time as the description rather than after it. The exact changes follow what the debug window shows after PR 9.6; the target is **one round trip per warm click** (the `/api/chat` request itself).
+- **Unit tests added:** `numCtx.test.ts` and `explainHandler.test.ts` check the remembered window is used without asking `/api/ps`, and that `/api/ps` is asked again after a model change, a server change or a failed request. `prMetadata.test.ts` checks the description is fetched on page open and reused by the click. `fileContext.test.ts` and `clickHandler.test.ts` check the two GitHub fetches run at the same time.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, make sure **Debug window** is on, and open a PR's **Files changed** tab. Open the debug window and confirm the warm-up group includes the PR description.
+  3. Click a line. Confirm its group has no `/api/ps` round trip and the GitHub fetch for the file started at the click.
+  4. Click a second line in the same file. Confirm its group has exactly one round trip, `/api/chat`.
+  5. Pick another model in the settings, save, click a line, and confirm `/api/ps` is asked once again.
+
+### PR 9.8: One-sentence answers (Small)
+- **Why it's needed:** Writing the answer is still the biggest term once thinking is off. At 30 tokens per second, the roughly 150-token answers PR 8.4 allows take 5 seconds on their own.
+- **Problem it solves:** The explain prompt asks for one short sentence on what the code does, one on why, and at most two one-line concerns (or "None found."), and the default **Max response length** drops from 300 to 120 tokens. Users who never changed it get the new default. The cut-off note from PR 8.4 still applies. Chat answers are not affected. The snapshot of the prompt and the bench samples are updated, and the change is kept only if the answers on the bench samples are still useful (checked by hand and noted in the PR).
+- **Unit tests added:** `explainPrompt.test.ts` snapshot is updated for the new wording. `settings.test.ts` checks the new default of 120 and that chat still gets at least 1024. `explainHandler.test.ts` checks 120 is sent. `parseExplanation.test.ts` checks a one-sentence answer per section parses.
+- **Screenshots:** a one-sentence answer in the popup, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run bench -- deepseek-r1:7b` (and the small model from PR 9.9 if you have it) and compare with the section from PR 9.5: **Answer tokens** and the median total should both be lower.
+  3. Run `npm run dev`, reload the extension, and check **Max response length** is 120 in the settings (type `120` and save if you set it earlier).
+  4. Click 5 lines on a real PR and confirm each answer is one sentence per section, still says what the code does and why, and names real concerns.
+
+### PR 9.9: Aim the Speed test and benchmark at 2 seconds (Small)
+- **Why it's needed:** The model is the biggest lever left. The Speed test (PR 8.6) and the latency report (PR 8.8) are aimed at 10 seconds, so they cannot tell you which model meets 2.
+- **Problem it solves:** The goal becomes one constant, `LATENCY_GOAL_MS = 2000`, used by the Speed test's mark (**Fastest under 2 s**), its summary line, and the conclusion in `scripts/latencyReport.ts`. When no installed model makes it, the Speed test suggests a small coding model by name with the command to get it (`ollama pull qwen2.5-coder:1.5b`, or `qwen2.5-coder:0.5b` on a slow CPU), and says when the picked model is a reasoning model. The README and `docs/improvements.md` recommend the same. The fastest model is still picked from those whose answers you find useful.
+- **Unit tests added:** `speedTest.test.ts` checks the mark goes to the fastest model under 2 seconds and to none at 2 seconds or more. `optionsPage.test.ts` checks the new wording and the suggestion with its command when none made it. `latencyReport.test.ts` checks the conclusion uses the new goal.
+- **Screenshots:** the Speed test with a model marked **Fastest under 2 s**, and the suggestion when none made it.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `ollama pull qwen2.5-coder:1.5b`.
+  3. Run `npm run dev`, reload the extension, open the settings page, and click **Speed test**. Confirm the small model is timed and, if it took under 2 seconds, has the **Fastest under 2 s** mark.
+  4. Click **Use this model** on it, then click 5 lines on a real PR and check the answers are still useful. Note the times in **Details**.
+  5. Run `npm run bench -- qwen2.5-coder:1.5b deepseek-r1:7b` and confirm the new section in `docs/latency.md` compares both against 2 seconds.
+
+### PR 9.10: Explain changed lines ahead of time (Medium)
+- **Why it's needed:** On a CPU-only laptop even a small model may need a few seconds for a fresh answer. If the changed lines on screen are explained before they are clicked, most clicks are answered from the cache at once, well under 2 seconds.
+- **Problem it solves:** A new **Explain ahead** setting (off by default, since it keeps the model busy and uses battery). When it is on, after the PR's **Files changed** tab has been idle for 2 seconds, the content script explains the added and changed lines in the visible part of the diff, top to bottom, one at a time, using the same request a click would build (`lineRequest` from PR 8.7), so each answer goes into the cache from PR 4.3. It skips lines already cached, blank lines and lines that only close a block, does at most 30 per page, and starts again from the new visible lines when you scroll. It pauses while a click's answer or a chat answer is being written, while the hover prefetch runs, and when the tab is hidden, and a click on a line still being explained ahead joins it, as with hover. The toolbar button turning click-to-explain off stops it. The debug window shows these as an "ahead" group.
+- **Unit tests added:** `explainAhead.test.ts` (fake timers, fake service worker, a saved GitHub diff) checks the idle wait, that only visible added and changed lines are picked, in order, skipping cached, blank and closing lines, the 30-line cap, one at a time, starting again after a scroll, pausing for a click, a chat answer, a hover prefetch and a hidden tab, a click joining a line in progress, that a later click on an explained line comes from the cache, and that nothing happens when the setting or click-to-explain is off. `settings.test.ts` and `optionsPage.test.ts` check the new setting.
+- **Screenshots:** the setting, and the debug window showing the "ahead" group filling in.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, tick **Explain ahead** and **Debug window** in the settings, and save.
+  3. Open a PR's **Files changed** tab, open the debug window, and leave the page alone. Confirm an "ahead" group starts after about 2 seconds and adds one line at a time.
+  4. After a few lines are done, click one of them. Confirm the popup says "From cache" and "Answered in" well under 2 seconds.
+  5. Click a line the ahead work has not reached yet and confirm the ahead work pauses until your answer is shown, then carries on.
+  6. Scroll down to new changed lines, wait, and confirm they are explained next. Switch to another tab and confirm it pauses.
+  7. Untick **Explain ahead**, save, and confirm nothing new is added to the debug window.
+
+### PR 9.11: Latency report against 2 seconds (Small)
+- **Why it's needed:** The milestone needs a clear answer, as PR 8.8 gave for Milestone 8: are answers shown within 2 seconds, how often, and if not, what is the lowest time this laptop can reach?
+- **Problem it solves:** `npm run bench:history` gets the Milestone 9 steps (9.5, 9.7, 9.8, and the code as it is now) after the Milestone 8 steps, and the report adds two numbers the click flow cares about: the time for a **fresh** answer (median and slowest, with the model warm) and the share of clicks answered within 2 seconds when **Explain ahead** has run (measured by a new bench mode that explains a sample file's lines ahead, then times a click on each). The conclusion says whether the goal is met for fresh answers, for clicks after Explain ahead, or neither, and as before gives the floor, what limits it, and the next step. The result on the laptop goes into `docs/latency.md`, `docs/improvements.md` and the README, and the defaults are changed only where the numbers support it.
+- **Unit tests added:** `latencyReport.test.ts` checks the new steps are commits on this branch, the fresh-answer and after-ahead numbers are read and summarised, and each conclusion (met for both, met only after ahead, met for neither with the floor). `benchStats.test.ts` checks the ahead mode's summary.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Make sure Ollama is running and close other apps that use the GPU. Run `npm run bench:history -- qwen2.5-coder:1.5b deepseek-r1:7b` (or the models you use). It takes about 20 to 40 minutes.
+  3. Open `docs/latency.md` and confirm the new **Latency report** has a row per step including the Milestone 9 ones, the fresh-answer and after-ahead numbers, and a conclusion against 2 seconds.
+  4. Commit `docs/latency.md` (or send the section to Claude to commit).
+  5. With the model the conclusion names, turn on **Explain ahead**, open a real PR, wait a few seconds, and click 5 changed lines. Confirm each answer appears whole within about 2 seconds.
 
 ---
 
