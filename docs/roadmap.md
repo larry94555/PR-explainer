@@ -84,6 +84,9 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 9.9 | Aim the Speed test and benchmark at 2 seconds | Small | Not started |
 | 9.10 | Explain changed lines ahead of time | Medium | Not started |
 | 9.11 | Latency report against 2 seconds | Small | Not started |
+| 9.12 | Facts that need no model, shown at once | Small | Not started |
+| 9.13 | Show each section as soon as it is written | Small | Not started |
+| 9.14 | A separate model for chat | Medium | Not started |
 | 10.0 | Plan Milestone 10 | Small | ✅ Done ([#PRNUM](https://github.com/larry94555/PR-explainer/pull/PRNUM)) |
 | 10.1 | Measure requests at once on this laptop | Small | Not started |
 | 10.2 | A cache that holds a whole PR | Medium | Not started |
@@ -93,6 +96,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 10.6 | Prefetch the whole PR | Medium | Not started |
 | 10.7 | Show prefetch progress | Small | Not started |
 | 10.8 | Report: how many clicks are instant | Small | Not started |
+| 10.9 | Keep answers after the browser closes | Medium | Not started |
 
 ## Milestone overview
 
@@ -922,6 +926,42 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
   4. Commit `docs/latency.md` (or send the section to Claude to commit).
   5. With the model the conclusion names, turn on **Explain ahead**, open a real PR, wait a few seconds, and click 5 changed lines. Confirm each answer appears whole within about 2 seconds.
 
+**Added later: PRs 9.12 to 9.14.** These three came from a review of further speed ideas after the milestone was planned. They make the wait shorter or feel shorter, and can land before PR 9.11 so its report includes them. Ideas that were already planned (keeping the model warm, PR 8.3; a prompt that starts the same way every time, PR 8.5; a context window that fits the prompt and a capped answer, PRs 8.5, 8.4 and 9.8; a smaller default model, PR 9.9) are not repeated here.
+
+### PR 9.12: Facts that need no model, shown at once (Small)
+- **Why it's needed:** For the seconds before the answer, the popup shows only placeholders. The extension already knows useful facts about the clicked code without asking the model, so the popup can be useful from the first moment.
+- **Problem it solves:** A line at the top of the popup, filled in as it opens from what the content script already has: the file path and line number, the function or block from GitHub's hunk header (the text after `@@ … @@`, when there is one), and what kind of change it is ("Added line", "Removed line", "Changed line, was: `…`" for a line whose old version is next to it, or "12 lines selected, 8 added and 4 removed"). It stays above the answer when it arrives, and is the same for a cached answer. No request is sent for it.
+- **Unit tests added:** `codeFacts.test.ts` checks, on saved GitHub diff fixtures (unified and split), the path and line number, the function from the hunk header and none when the header has none, each kind of change, the old version of a changed line (and none when it is not next to it), and the counts for a selection. `popup.test.ts` checks the line shows while loading, stays after the answer, is read once by screen readers, and is shown for a cached answer.
+- **Screenshots:** the popup while loading and after the answer, with the facts line, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Optional, without Ollama: run `npm run demo:popup`, pick **Writing for 3 s, then explanation**, click a line, and confirm the facts line shows at once, before the answer.
+  3. Run `npm run dev`, reload the extension, and refresh a PR's **Files changed** tab. Click an added line inside a function and confirm the popup shows the file, line number, function name and "Added line" before the answer arrives.
+  4. Click a changed line next to its old version and confirm it says "Changed line, was: …". Select several lines and confirm the counts.
+
+### PR 9.13: Show each section as soon as it is written (Small)
+- **Why it's needed:** Since PR 9.6 the popup waits for the whole answer. The model writes **What it does** first, so the most useful part is ready well before **Concerns**; with one-sentence answers (PR 9.8) it is often done in a third of the time. Showing it then cuts the wait you notice without the word-by-word jumping PR 9.6 removed. This gets the benefit of asking in two steps without a second request, which would read the prompt again.
+- **Problem it solves:** With **Show answers as they are written** off, each section replaces its placeholder in one update as soon as the model starts the next section's heading (or finishes), so **What it does** appears first, then **Why it's needed**, then **Concerns**, each one whole. The timer keeps running until the last one. A cut-off answer (PR 8.4) and **Stop** work as before, and a cached answer shows all three at once. The chat is unchanged.
+- **Unit tests added:** `popup.test.ts` checks that a section is shown whole once the next heading arrives and not before, that the others keep their placeholders, the order, that each section is announced once to screen readers, a stopped and a cut-off answer, and that a cached answer shows all three at once. `clickHandler.test.ts` and `prefetch.test.ts` check a click and a joined prefetch show sections one at a time.
+- **Screenshots:** the popup with **What it does** shown and the other two still loading, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Optional, without Ollama: run `npm run demo:popup`, pick **Writing for 3 s, then explanation**, click a line, and confirm the sections appear one at a time, each whole.
+  3. Run `npm run dev`, reload the extension, and click a line on a real PR. Confirm **What it does** appears before the other two, while the timer is still running, and the time in the header stops only when **Concerns** is shown.
+  4. Click the same line again and confirm the cached answer shows all three at once.
+
+### PR 9.14: A separate model for chat (Medium)
+- **Why it's needed:** PR 9.9 moves explanations to a small fast model, but a follow-up question in the chat ("Is this thread safe?") benefits from a bigger one, and is asked less often, so it can wait a little longer.
+- **Problem it solves:** A new **Chat model** setting, "Same as explanations" by default, picked from the installed models. Chat questions use it; explanations, hover and Explain ahead keep using **Model**. When the chat opens, the chat model is loaded the way the warm-up loads the explanation model (PR 8.3), so the first question does not pay for loading it. The settings page warns that two models loaded at once need memory for both, and that if Ollama can hold only one (`OLLAMA_MAX_LOADED_MODELS`, or too little memory) every switch between explaining and chatting reloads a model, which on a CPU can take 10 seconds or more. The debug window names the model on each request.
+- **Unit tests added:** `settings.test.ts` checks the new setting and its default. `chatHandler.test.ts` checks chat sends the chat model, or the explanation model when it is "Same as explanations". `warmup.test.ts` checks opening the chat loads the chat model once, and does nothing when it is the same. `optionsPage.test.ts` checks the dropdown loads, saves and shows the memory note.
+- **Screenshots:** the **Chat model** setting with its note, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, set **Model** to a small model (such as `qwen2.5-coder:1.5b`) and **Chat model** to a bigger one (such as `qwen2.5-coder:7b`), and save.
+  3. Click a line on a PR and confirm the popup names the small model. Open the chat, wait a few seconds, run `ollama ps`, and confirm both models are listed.
+  4. Ask a question and confirm the debug window shows it sent to the chat model.
+  5. Set **Chat model** back to "Same as explanations" and confirm chat uses **Model** again.
+
 ---
 
 ## Milestone 10: Answers ready before you click
@@ -943,12 +983,12 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
 
 **Why a new milestone rather than more of Milestone 9.** Milestone 9's goal is a 2-second answer, measured one click at a time, and PR 9.10 is the last piece it needs. Prefetching the whole PR has its own demo, its own settings and its own risks (battery, a busy model), and Milestone 9 can be finished and reported (PR 9.11) without it. This milestone starts after PR 9.10, and reuses its idle wait and pause rules instead of replacing them.
 
-**Order.** 10.1 measures first, so the defaults are set from numbers. 10.2 and 10.3 are the building blocks (a cache that holds a PR, and the queue), with no change you can see. 10.4 and 10.5 build the work for a whole PR, one request per hunk. 10.6 and 10.7 turn it on and show it, and 10.8 reports the result.
+**Order.** 10.1 measures first, so the defaults are set from numbers. 10.2 and 10.3 are the building blocks (a cache that holds a PR, and the queue), with no change you can see. 10.4 and 10.5 build the work for a whole PR, one request per hunk. 10.6 and 10.7 turn it on and show it, and 10.8 reports the result. 10.9 keeps the answers after the browser closes, so a PR prefetched once stays done.
 
 ### PR 10.0: Plan Milestone 10 (Small) ✅ Done
 - **Status:** Done ([#PRNUM](https://github.com/larry94555/PR-explainer/pull/PRNUM)).
 - **Why it's needed:** Clicks should be answered at once, and on a CPU laptop the only way to do that is to explain lines before they are clicked. PR 9.10 does that for up to 30 lines on screen; the rest of the PR is still explained only when clicked.
-- **Problem it solves:** Adds this milestone to the roadmap and the matching feature to `features.md`: its goal, demo, whether the idea works on a CPU, and PRs 10.1 to 10.8. No code changes.
+- **Problem it solves:** Adds this milestone to the roadmap and the matching feature to `features.md`: its goal, demo, whether the idea works on a CPU, and PRs 10.1 to 10.9. It also adds PRs 9.12 to 9.14 to Milestone 9 from a review of further speed ideas. No code changes.
 - **Unit tests added:** None (documentation only).
 - **How to test:** Read this section, the milestone overview and the PR status table, and confirm each PR is Small or Medium and lists why it is needed, the problem it solves, its unit tests and how to test it.
 
@@ -1040,6 +1080,18 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
   3. Open `docs/latency.md` and confirm the new section gives the whole-PR time, the time per line, the share cached after 1, 5 and 15 minutes, and a conclusion.
   4. Commit `docs/latency.md` (or send the section to Claude to commit).
   5. With **Whole PR** on, open a real PR, read it for 5 minutes, then click 10 changed lines. Confirm the share answered "Prefetched" or "From cache" is close to the report's 5-minute number.
+
+### PR 10.9: Keep answers after the browser closes (Medium)
+- **Why it's needed:** The cache lives in Chrome's session storage, which is cleared when the browser closes. A whole PR can take the model half an hour or more to prefetch, and coming back to the same PR the next day should not start over.
+- **Problem it solves:** Answers are also saved in IndexedDB in the service worker, under the same cache key (a hash of the exact prompt, so it follows the code: a new commit that changes a line gives a new key, and answers for code that no longer exists are never shown). The session cache from PR 10.2 is checked first, then IndexedDB. A **Keep answers for (days)** setting (7 by default, 0 to keep them only until the browser closes, as now) and a size limit (50 MB, oldest used dropped first) bound the space, old answers are removed when the service worker starts, and a **Clear saved answers** button on the settings page empties both caches. Nothing leaves the laptop, and `PRIVACY.md` says where answers are kept.
+- **Unit tests added:** `persistentCache.test.ts` (with `fake-indexeddb`) checks a save and a read, the session cache checked first, answers older than the setting removed at start, the size limit dropping the least recently used, 0 keeping nothing on disk, **Clear saved answers** emptying both, and a failing IndexedDB being a miss rather than an error. `settings.test.ts` and `optionsPage.test.ts` check the new setting and the button.
+- **Screenshots:** the **Keep answers for** setting and **Clear saved answers** button, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, and click 3 lines on a PR so they are cached.
+  3. Close every Chrome window, open Chrome again, open the same PR, and click the same 3 lines. Confirm each says "From cache" at once.
+  4. Click **Clear saved answers** on the settings page, click one of the lines again, and confirm it is answered fresh.
+  5. Set **Keep answers for** to 0, save, repeat step 3, and confirm the lines are answered fresh after the restart.
 
 ---
 
