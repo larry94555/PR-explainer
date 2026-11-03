@@ -84,6 +84,19 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 9.9 | Aim the Speed test and benchmark at 2 seconds | Small | Not started |
 | 9.10 | Explain changed lines ahead of time | Medium | Not started |
 | 9.11 | Latency report against 2 seconds | Small | Not started |
+| 9.12 | Facts that need no model, shown at once | Small | Not started |
+| 9.13 | Show each section as soon as it is written | Small | Not started |
+| 9.14 | A separate model for chat | Medium | Not started |
+| 10.0 | Plan Milestone 10 | Small | ✅ Done ([#50](https://github.com/larry94555/PR-explainer/pull/50)) |
+| 10.1 | Measure requests at once on this laptop | Small | Not started |
+| 10.2 | A cache that holds a whole PR | Medium | Not started |
+| 10.3 | Background queue in the service worker | Medium | Not started |
+| 10.4 | Line requests from the PR's diff, not the page | Medium | Not started |
+| 10.5 | Explain a whole hunk in one request | Medium | Not started |
+| 10.6 | Prefetch the whole PR | Medium | Not started |
+| 10.7 | Show prefetch progress | Small | Not started |
+| 10.8 | Report: how many clicks are instant | Small | Not started |
+| 10.9 | Keep answers after the browser closes | Medium | Not started |
 
 ## Milestone overview
 
@@ -98,6 +111,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 7 | Robust on real GitHub | Works across split view, dark mode, lazy-loaded diffs, and in-page navigation; ready to share |
 | 8 | Optimize LLM latency | An explanation finishes in under 10 seconds on your laptop, or a report shows the lowest time that laptop can reach and why |
 | 9 | Two-second answers | Click a line and the whole explanation appears at once within 2 seconds, and a debug window shows every round trip to the local LLM with its prompt, reply and time |
+| 10 | Answers ready before you click | Open a PR, keep reading, and the lines you click are already explained: the toolbar badge shows how much of the PR is done, and a click on a done line is answered at once from the cache |
 
 ---
 
@@ -911,6 +925,173 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
   3. Open `docs/latency.md` and confirm the new **Latency report** has a row per step including the Milestone 9 ones, the fresh-answer and after-ahead numbers, and a conclusion against 2 seconds.
   4. Commit `docs/latency.md` (or send the section to Claude to commit).
   5. With the model the conclusion names, turn on **Explain ahead**, open a real PR, wait a few seconds, and click 5 changed lines. Confirm each answer appears whole within about 2 seconds.
+
+**Added later: PRs 9.12 to 9.14.** These three came from a review of further speed ideas after the milestone was planned. They make the wait shorter or feel shorter, and can land before PR 9.11 so its report includes them. Ideas that were already planned (keeping the model warm, PR 8.3; a prompt that starts the same way every time, PR 8.5; a context window that fits the prompt and a capped answer, PRs 8.5, 8.4 and 9.8; a smaller default model, PR 9.9) are not repeated here.
+
+### PR 9.12: Facts that need no model, shown at once (Small)
+- **Why it's needed:** For the seconds before the answer, the popup shows only placeholders. The extension already knows useful facts about the clicked code without asking the model, so the popup can be useful from the first moment.
+- **Problem it solves:** A line at the top of the popup, filled in as it opens from what the content script already has: the file path and line number, the function or block from GitHub's hunk header (the text after `@@ … @@`, when there is one), and what kind of change it is ("Added line", "Removed line", "Changed line, was: `…`" for a line whose old version is next to it, or "12 lines selected, 8 added and 4 removed"). It stays above the answer when it arrives, and is the same for a cached answer. No request is sent for it.
+- **Unit tests added:** `codeFacts.test.ts` checks, on saved GitHub diff fixtures (unified and split), the path and line number, the function from the hunk header and none when the header has none, each kind of change, the old version of a changed line (and none when it is not next to it), and the counts for a selection. `popup.test.ts` checks the line shows while loading, stays after the answer, is read once by screen readers, and is shown for a cached answer.
+- **Screenshots:** the popup while loading and after the answer, with the facts line, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Optional, without Ollama: run `npm run demo:popup`, pick **Writing for 3 s, then explanation**, click a line, and confirm the facts line shows at once, before the answer.
+  3. Run `npm run dev`, reload the extension, and refresh a PR's **Files changed** tab. Click an added line inside a function and confirm the popup shows the file, line number, function name and "Added line" before the answer arrives.
+  4. Click a changed line next to its old version and confirm it says "Changed line, was: …". Select several lines and confirm the counts.
+
+### PR 9.13: Show each section as soon as it is written (Small)
+- **Why it's needed:** Since PR 9.6 the popup waits for the whole answer. The model writes **What it does** first, so the most useful part is ready well before **Concerns**; with one-sentence answers (PR 9.8) it is often done in a third of the time. Showing it then cuts the wait you notice without the word-by-word jumping PR 9.6 removed. This gets the benefit of asking in two steps without a second request, which would read the prompt again.
+- **Problem it solves:** With **Show answers as they are written** off, each section replaces its placeholder in one update as soon as the model starts the next section's heading (or finishes), so **What it does** appears first, then **Why it's needed**, then **Concerns**, each one whole. The timer keeps running until the last one. A cut-off answer (PR 8.4) and **Stop** work as before, and a cached answer shows all three at once. The chat is unchanged.
+- **Unit tests added:** `popup.test.ts` checks that a section is shown whole once the next heading arrives and not before, that the others keep their placeholders, the order, that each section is announced once to screen readers, a stopped and a cut-off answer, and that a cached answer shows all three at once. `clickHandler.test.ts` and `prefetch.test.ts` check a click and a joined prefetch show sections one at a time.
+- **Screenshots:** the popup with **What it does** shown and the other two still loading, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Optional, without Ollama: run `npm run demo:popup`, pick **Writing for 3 s, then explanation**, click a line, and confirm the sections appear one at a time, each whole.
+  3. Run `npm run dev`, reload the extension, and click a line on a real PR. Confirm **What it does** appears before the other two, while the timer is still running, and the time in the header stops only when **Concerns** is shown.
+  4. Click the same line again and confirm the cached answer shows all three at once.
+
+### PR 9.14: A separate model for chat (Medium)
+- **Why it's needed:** PR 9.9 moves explanations to a small fast model, but a follow-up question in the chat ("Is this thread safe?") benefits from a bigger one, and is asked less often, so it can wait a little longer.
+- **Problem it solves:** A new **Chat model** setting, "Same as explanations" by default, picked from the installed models. Chat questions use it; explanations, hover and Explain ahead keep using **Model**. When the chat opens, the chat model is loaded the way the warm-up loads the explanation model (PR 8.3), so the first question does not pay for loading it. The settings page warns that two models loaded at once need memory for both, and that if Ollama can hold only one (`OLLAMA_MAX_LOADED_MODELS`, or too little memory) every switch between explaining and chatting reloads a model, which on a CPU can take 10 seconds or more. The debug window names the model on each request.
+- **Unit tests added:** `settings.test.ts` checks the new setting and its default. `chatHandler.test.ts` checks chat sends the chat model, or the explanation model when it is "Same as explanations". `warmup.test.ts` checks opening the chat loads the chat model once, and does nothing when it is the same. `optionsPage.test.ts` checks the dropdown loads, saves and shows the memory note.
+- **Screenshots:** the **Chat model** setting with its note, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, set **Model** to a small model (such as `qwen2.5-coder:1.5b`) and **Chat model** to a bigger one (such as `qwen2.5-coder:7b`), and save.
+  3. Click a line on a PR and confirm the popup names the small model. Open the chat, wait a few seconds, run `ollama ps`, and confirm both models are listed.
+  4. Ask a question and confirm the debug window shows it sent to the chat model.
+  5. Set **Chat model** back to "Same as explanations" and confirm chat uses **Model** again.
+
+---
+
+## Milestone 10: Answers ready before you click
+
+**Goal:** open a PR's **Files changed** tab, keep reading, and find that most lines you click were already explained in the background, so the popup shows the answer at once from the cache. The background work goes through the whole PR, not only the lines on screen, starts with the code you are looking at, never makes your own click wait, and shows how far it has got.
+
+**Demo:** Turn on **Prefetch whole PR**, open a PR with a few hundred changed lines, and watch the toolbar badge count up ("37%"). Scroll to a file further down, click a line, and the popup says "From cache" with an answer time well under a second. Click a line the background work has not reached, and it is answered fresh first, then the background work carries on. The debug window shows the queue: what ran, what is waiting, and what was cancelled for a click.
+
+**Does the idea make sense?** Mostly yes, with two changes: one request per section instead of one per line, and one queue instead of many threads. Explaining lines before they are clicked is the best way to get instant answers on a CPU laptop: Milestone 8 showed a fresh answer there is limited by how fast the model writes, and the cache from PR 4.3 already makes a repeat click instant. PR 8.7 (on hover) and PR 9.10 (the changed lines on screen, one at a time, at most 30 per page) are small versions of it. This milestone grows that into the whole PR. Here is what holds up and what does not:
+
+- **Memory is not the problem.** An answer is about 1 KB of text, so 2,000 of them are about 2 MB. Chrome's session storage, where the cache lives, allows 10 MB. But the cache today keeps only 100 entries and rewrites all of them on every save, so PR 10.2 changes how it is stored before it can hold a whole PR.
+- **Several threads at once will not make it faster on this laptop.** The work is not done by the extension, it is done by Ollama, and on a CPU every request shares the same cores and memory bandwidth. Depending on its version and free memory, Ollama runs one or a few requests at once (`OLLAMA_NUM_PARALLEL`). When it runs several on a CPU, each answer gets slower and the total number of answers per minute rises a little or not at all; each extra request also needs its own share of memory for its context. When it runs one at a time, the others just queue. Either way, your click would be stuck behind the background work, which is the opposite of what we want. So instead of one thread per section, the plan is **one queue with priorities**: sections still matter, because they are the unit of work and decide the order (code on screen and the line under the pointer first, then the code near it, then the rest), but by default only **one** background request runs at a time. PR 10.1 measures whether 2 at once helps on this laptop before any default is set, and a GPU may well do better.
+- **One request per section, not per line.** Sections are the right unit, but for a different reason: a line's request repeats the instructions and the code around it, so 10 lines of one hunk would read nearly the same prompt 10 times. One request per diff hunk (a section of the diff) that answers every changed line in it reads that prompt once, and Ollama's fixed cost per request is paid once. PR 10.5 does this, and each line's part of the answer is saved under the same cache key a click on that line uses, so a click finds it. Answers written for a whole hunk may be a little less sharp than one written for a single line, so PR 10.5 compares them, and **Regenerate** always asks about the line alone.
+- **The cache follows the code.** An answer's cache key is a hash of the exact prompt, which includes the line and the code around it (PR 4.3), so a new commit that changes the code gives new keys and an old answer is never shown for new code. Prefetching starts over for the parts that changed.
+- **Your click always goes first.** When you click a line, any background request for a different line is cancelled at once, so Ollama is free for yours, and put back in the queue. A click on a line that is being explained right now joins it, as with hover.
+- **Time is the real limit.** On this laptop `deepseek-r1:7b` writes about 6.4 tokens per second, so one answer takes about 20 seconds; a small model such as `qwen2.5-coder:1.5b` (PR 9.9) may take about 4 to 8 seconds. These are estimates; PR 10.1 measures them. At 5 seconds a line, a PR with 300 changed lines takes about 25 minutes, and a big PR can take hours. That is why order matters, why there is a per-PR limit, and why answering a hunk per request (PR 10.5) matters.
+- **Prefetching hides the wait, it does not remove it.** The model takes just as long per answer; the work is done earlier, while you read. A click on a line it has reached is instant, and a click on one it has not reached is as slow as today (a little slower if a background request has to be cancelled first). It also keeps the CPU busy, which costs battery and turns the fan on, so it is **off by default**, has a per-PR limit, and pauses when the tab is hidden.
+- **"As soon as the extension loads" means as soon as a PR opens.** There is nothing to explain until a PR's **Files changed** tab is open, and GitHub does not draw every file until you scroll to it, so PR 10.4 builds the requests for files that are not on the page from the PR's diff, which GitHub's API returns in one go.
+
+**Why a new milestone rather than more of Milestone 9.** Milestone 9's goal is a 2-second answer, measured one click at a time, and PR 9.10 is the last piece it needs. Prefetching the whole PR has its own demo, its own settings and its own risks (battery, a busy model), and Milestone 9 can be finished and reported (PR 9.11) without it. This milestone starts after PR 9.10, and reuses its idle wait and pause rules instead of replacing them.
+
+**Order.** 10.1 measures first, so the defaults are set from numbers. 10.2 and 10.3 are the building blocks (a cache that holds a PR, and the queue), with no change you can see. 10.4 and 10.5 build the work for a whole PR, one request per hunk. 10.6 and 10.7 turn it on and show it, and 10.8 reports the result. 10.9 keeps the answers after the browser closes, so a PR prefetched once stays done.
+
+### PR 10.0: Plan Milestone 10 (Small) ✅ Done
+- **Status:** Done ([#50](https://github.com/larry94555/PR-explainer/pull/50)).
+- **Why it's needed:** Clicks should be answered at once, and on a CPU laptop the only way to do that is to explain lines before they are clicked. PR 9.10 does that for up to 30 lines on screen; the rest of the PR is still explained only when clicked.
+- **Problem it solves:** Adds this milestone to the roadmap and the matching feature to `features.md`: its goal, demo, whether the idea works on a CPU, and PRs 10.1 to 10.9. It also adds PRs 9.12 to 9.14 to Milestone 9 from a review of further speed ideas. No code changes.
+- **Unit tests added:** None (documentation only).
+- **How to test:** Read this section, the milestone overview and the PR status table, and confirm each PR is Small or Medium and lists why it is needed, the problem it solves, its unit tests and how to test it.
+
+### PR 10.1: Measure requests at once on this laptop (Small)
+- **Why it's needed:** Whether 2 or more background requests at once help depends on the laptop and on Ollama's `OLLAMA_NUM_PARALLEL`. Guessing wrong either wastes the CPU or makes every click slower, so it should be measured before a default is set.
+- **Problem it solves:** `npm run bench -- --parallel 1,2,4 [model ...]` sends the bench samples 1, 2 and 4 at a time and reports, for each level, **answers per minute** (the total) and the median and slowest time **per answer**, plus how long a single extra request (a "click") waits when sent while the others are running. It prints the value of `OLLAMA_NUM_PARALLEL` if set, and notes when Ollama ran the requests one after another anyway. The result goes into `docs/latency.md`, with one line saying which level PR 10.6 should use by default (1 unless 2 gives clearly more answers per minute without slowing the click).
+- **Unit tests added:** `benchStats.test.ts` checks answers per minute, per-answer median and slowest, and the click wait from fake timings at each level, and the note when the timings show the requests ran one at a time. `benchArgs.test.ts` checks `--parallel` parsing (a list of whole numbers from 1 to 8, and an error for anything else).
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Make sure Ollama is running. Run `npm run bench -- --parallel 1,2,4 qwen2.5-coder:1.5b` (or the model you use). Confirm it prints a row per level with answers per minute, the per-answer times and the click wait.
+  3. Quit Ollama from the system tray, run `set OLLAMA_NUM_PARALLEL=2` and then `ollama serve` in the same Command Prompt, and run step 2 again in a second Command Prompt. Confirm the output names `OLLAMA_NUM_PARALLEL=2` and compare the rows.
+  4. Open `docs/latency.md` and confirm the new section and its one-line recommendation.
+
+### PR 10.2: A cache that holds a whole PR (Medium)
+- **Why it's needed:** The explanation cache (PR 4.3) keeps 100 answers and stores them all under one key, so every save rewrites all of them. Prefetching a PR with 500 changed lines would push out its own answers, and each save would rewrite hundreds of entries.
+- **Problem it solves:** Each answer is stored under its own key in `chrome.storage.session`, with a small index (key, PR, size, last used) under one key. The limit becomes a size, about 8 MB of the 10 MB Chrome allows (about 5,000 answers), and when it is passed the least recently used answers go first, as now. Answers from a closed PR go before answers from the open one. Entries saved in the old single-key format are moved over once and the old key is removed. Nothing you can see changes.
+- **Unit tests added:** `explainCache.test.ts` checks that a save writes one entry and the index (not every entry), that a hit updates its last-used time, that passing the size limit removes the least recently used first and the open PR's last, that the old format is read once, moved over and removed, and that a storage error is still a miss (reads) or ignored (writes). A test with 2,000 fake answers checks the total stays under the limit.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Before reloading, click 2 lines on a PR so the old cache has entries. Then run `npm run dev` and reload the extension.
+  3. Click the same 2 lines again and confirm both say "From cache" (the old entries were moved over).
+  4. Open the service worker's DevTools (**Inspect views: service worker** on `chrome://extensions`), and in its console run `chrome.storage.session.get(null).then(console.log)`. Confirm there is one entry per answer plus the index, and no `explainCache` key.
+
+### PR 10.3: Background queue in the service worker (Medium)
+- **Why it's needed:** Hover (PR 8.7) and Explain ahead (PR 9.10) each decide on their own when to send a request. With a whole PR to work through, one place has to decide what runs next, how many run at once, and what gives way to a click, and it has to be the service worker so two PR tabs do not each keep the model busy.
+- **Problem it solves:** A new `src/explain/prefetchQueue.ts` in the service worker. A job is a request (for now one line, built as a click would build it; PR 10.5 adds whole hunks) with a priority: **click**, **hovered**, **on screen**, **near the screen** and **rest of the PR**. A job whose answer is already cached is skipped, and a second job for the same line is merged with the first and keeps the higher priority. It runs at most `concurrency` jobs at once (1 by default), highest priority first, then in the order the lines appear in the PR. A click always runs at once: it cancels the running background jobs for other lines (so Ollama is free), puts them back at the front of their priority, and joins a job for the same line instead of starting a new one. Jobs can be re-prioritised (when you scroll) and dropped for a tab or PR (when you leave it). A job that fails is tried once more later, then skipped. Hover and Explain ahead now hand their lines to the queue instead of running their own requests, and behave as before. The debug window shows each job's start, finish and cancel in a "queue" group.
+- **Unit tests added:** `prefetchQueue.test.ts` (fake service worker, fake model) checks the priority order and the PR order within a priority, at most `concurrency` running (1 and 2), skipping cached lines, merging a duplicate line and keeping the higher priority, a click cancelling running background jobs and putting them back first, a click joining a job for the same line (one request, same answer), re-prioritising and dropping by tab and PR, a failed job tried once more then skipped, and two tabs sharing one queue. `prefetch.test.ts` and `explainAhead.test.ts` are updated to check hover and Explain ahead now go through the queue and still pass their old checks.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, tick **Explain ahead**, **Explain on hover** and **Debug window** in the settings, and save.
+  3. Open a PR's **Files changed** tab and the debug window. Confirm the ahead lines appear in a "queue" group, one running at a time.
+  4. While one is running, click a different changed line. Confirm the debug window shows the running job cancelled and put back, your click answered, and the queue carrying on after.
+  5. Rest the pointer on a line that is still waiting in the queue, then click it. Confirm only one request is sent for it.
+  6. Open the same PR in a second tab and confirm the debug window still shows one job running at a time.
+
+### PR 10.4: Line requests from the PR's diff, not the page (Medium)
+- **Why it's needed:** A request is built from the diff drawn on the page (`lineRequest` from PR 8.7). GitHub does not draw a file until you scroll near it, and folds big ones, so lines further down the PR cannot be prefetched.
+- **Problem it solves:** A new `src/explain/patchRequests.ts` builds the same line requests from the PR's diff that GitHub's API returns for every file at once (`/repos/{owner}/{repo}/pulls/{n}/files`, the `patch` of each file), fetched once per PR head commit through the service worker. Each request must give **exactly** the prompt a click on that line builds from the page, so its answer lands under the same cache key and a later click finds it. Files GitHub leaves out of the API (too big, binary or renamed only) are listed and left to be explained from the page when drawn. It only builds requests; PR 10.5 groups them by hunk and PR 10.6 sends them.
+- **Unit tests added:** `patchRequests.test.ts` checks, on saved GitHub diff fixtures (unified and split, with an added, a changed and a removed line, a file with several hunks, and a file the page has folded), that every changed line built from the patch gives the same prompt and the same cache key as a click on the drawn line, that blank and closing-brace lines are skipped as in PR 9.10, that left-out files are listed, and that the diff is fetched once per head commit. `privacy.test.ts` checks the new fetch only goes to the GitHub API.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass, including `patchRequests`. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, turn on **Debug window**, and open the **Files changed** tab of a PR with several files.
+  3. Confirm the debug window shows one GitHub request for the PR's files, with the number of files and changed lines.
+  4. Optional: in the service worker's DevTools console, run `prExplainerDebug.patchRequests()` (a debug helper added here) and confirm it lists changed lines from files you have not scrolled to.
+
+### PR 10.5: Explain a whole hunk in one request (Medium)
+- **Why it's needed:** One request per line reads the same instructions and the same surrounding code again for every changed line of a hunk, and Ollama has a fixed cost per request. Explaining every changed line of a hunk (a section of the diff) in one request should make each line several times cheaper, which matters most on a CPU and decides whether a whole PR can be done while you read it.
+- **Problem it solves:** A background job becomes one hunk instead of one line. Its request (`src/explain/hunkPrompt.ts`) sends the instructions and the code around the hunk once and asks for a short explanation of each numbered changed line, in a fixed format, with an answer limit that grows with the number of lines; a hunk with more than 15 changed lines is split into parts. The reply is split per line (`parseHunkExplanation.ts`), and each line's answer is saved under the cache key a click on that line would use (from PR 10.4), so a click finds it, and a new commit that changes the hunk gives new keys. A line whose part of the reply is missing or cannot be read goes back into the queue as a single-line job. Clicks, hover and **Regenerate** still ask about one line, so a click's own answer is unchanged. `npm run bench -- --by-hunk [model ...]` compares the time per line one line at a time and by hunk, and prints both answers side by side. If the answers by hunk are clearly worse on the bench samples (checked by hand and noted in the PR), the queue keeps one line per request and this is recorded in `docs/latency.md`.
+- **Unit tests added:** `hunkPrompt.test.ts` snapshots the prompt and checks the numbering, the split at 15 lines and the answer limit. `parseHunkExplanation.test.ts` checks a full reply, one with a line missing, one out of order and one cut off. `prefetchQueue.test.ts` checks a hunk job saves each line under its click key, that missing lines go back as single-line jobs, and that a click on a line in a running hunk job waits for that job instead of sending its own request. `benchStats.test.ts` checks the by-hunk summary.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run bench -- --by-hunk qwen2.5-coder:1.5b` (or the model you use). Confirm the time per line by hunk is lower than one line at a time, and read the side-by-side answers to check they are still about their own line.
+  3. Run `npm run dev`, reload the extension, tick **Explain ahead** and **Debug window**, and open a PR. Confirm the debug window shows one request per hunk, each listing its lines.
+  4. Click 5 lines that are done and confirm each popup says "From cache" and the answer is about that line. Click **Regenerate** on one and confirm a single-line request is sent.
+
+### PR 10.6: Prefetch the whole PR (Medium)
+- **Why it's needed:** This is the feature: work through every changed line in the PR in the background, starting with what you are reading, so most clicks are answered at once.
+- **Problem it solves:** **Explain ahead** becomes a choice of **Off**, **Lines on screen** (PR 9.10) and **Whole PR**, with **Off** still the default, since it keeps the model busy and uses battery. With **Whole PR**, once the **Files changed** tab has been idle for 2 seconds (as in PR 9.10), every hunk with changed lines from PR 10.4 goes into the queue as one job (PR 10.5): lines on screen first, then the files just above and below, then the rest in PR order. Scrolling re-prioritises the queue (an `IntersectionObserver` on each file), so the code you move to comes next. It stops at a per-PR limit (500 changed lines by default) to bound battery and fan use and starts over when the PR gets a new commit, since the code and so the cache keys change. It pauses while the tab is hidden, while click-to-explain is off, and while you are answering a click or chat, and stops when you leave the PR. A **Requests at once** setting (1 by default, or what PR 10.1 recommends, up to 4) sets the queue's limit, with a note that more than 1 only helps when Ollama is set to run several and usually helps on a GPU, not a CPU.
+- **Unit tests added:** `explainAhead.test.ts` checks the three modes, that **Whole PR** queues every changed line with the right priority, that a scroll changes which file comes next, the 500-line limit, starting over on a new head commit, pausing for a hidden tab, a click or chat answer and click-to-explain off, and that nothing is queued after leaving the PR. `settings.test.ts` checks the new choice (an old on or off is read as **Lines on screen** or **Off**) and **Requests at once** (whole numbers 1 to 4). `optionsPage.test.ts` checks both load and save.
+- **Screenshots:** the **Explain ahead** choice and **Requests at once** on the settings page, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, set **Explain ahead** to **Whole PR**, turn on **Debug window**, and save.
+  3. Open the **Files changed** tab of a PR with at least 3 files and leave it alone for a few minutes. Confirm the queue works through the lines on screen first, one at a time.
+  4. Scroll to the last file and wait. Confirm its lines come next in the debug window.
+  5. Click a line already done and confirm the popup says "From cache" at once. Click one not done yet and confirm it is answered fresh, then the queue carries on.
+  6. Switch to another tab for a minute and confirm nothing new is sent while you are away.
+  7. Set **Explain ahead** to **Off**, save, and confirm the queue stops.
+
+### PR 10.7: Show prefetch progress (Small)
+- **Why it's needed:** Without a sign of progress you cannot tell whether a click will be instant, or whether the model is busy in the background (and why the fan is on).
+- **Problem it solves:** While **Whole PR** is working, the toolbar badge shows how much of the PR is done ("37%") and its tooltip says "Explained 112 of 300 changed lines". It shows "✓" briefly when the PR is done and clears when paused or off. The popup's header says "Prefetched" instead of "From cache" when the answer came from the background work (written for its whole hunk), and the debug window's "queue" group shows the counts waiting, running, done and cancelled.
+- **Unit tests added:** `badge.test.ts` checks the percentage, the tooltip text, the tick when done and clearing when paused or off. `popup.test.ts` checks the "Prefetched" label. `debugWindow.test.ts` checks the queue counts.
+- **Screenshots:** the badge part way through and done, its tooltip, and a popup saying "Prefetched", light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, set **Explain ahead** to **Whole PR**, and open a PR's **Files changed** tab.
+  3. Confirm the toolbar badge counts up and its tooltip gives the line counts.
+  4. Click a line that is done and confirm the popup says "Prefetched".
+  5. Switch tabs and confirm the badge clears while paused, and comes back when you return.
+
+### PR 10.8: Report: how many clicks are instant (Small)
+- **Why it's needed:** The milestone needs a clear answer, as PRs 8.8 and 9.11 gave: after a PR has been open a while, how many clicks are answered at once, and how long does a whole PR take on this laptop?
+- **Problem it solves:** A new bench mode, `npm run bench -- --whole-pr [model ...]`, runs the queue over a saved sample PR and reports how long the whole PR took, the time per line (one line at a time and by hunk), and the share of clicks that would be answered from the cache after 1, 5 and 15 minutes. It also checks that a click sent during the run waited no longer than one cancelled request. The result goes into `docs/latency.md`, `docs/improvements.md` and the README, and the defaults (**Requests at once** and the per-PR limit) change only where the numbers support it.
+- **Unit tests added:** `benchStats.test.ts` checks the whole-PR summary (total time, time per line, the share cached at each time, and the click wait) from fake timings. `latencyReport.test.ts` checks the new section's conclusion.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Make sure Ollama is running. Run `npm run bench -- --whole-pr qwen2.5-coder:1.5b`. It takes about 10 to 30 minutes.
+  3. Open `docs/latency.md` and confirm the new section gives the whole-PR time, the time per line, the share cached after 1, 5 and 15 minutes, and a conclusion.
+  4. Commit `docs/latency.md` (or send the section to Claude to commit).
+  5. With **Whole PR** on, open a real PR, read it for 5 minutes, then click 10 changed lines. Confirm the share answered "Prefetched" or "From cache" is close to the report's 5-minute number.
+
+### PR 10.9: Keep answers after the browser closes (Medium)
+- **Why it's needed:** The cache lives in Chrome's session storage, which is cleared when the browser closes. A whole PR can take the model half an hour or more to prefetch, and coming back to the same PR the next day should not start over.
+- **Problem it solves:** Answers are also saved in IndexedDB in the service worker, under the same cache key (a hash of the exact prompt, so it follows the code: a new commit that changes a line gives a new key, and answers for code that no longer exists are never shown). The session cache from PR 10.2 is checked first, then IndexedDB. A **Keep answers for (days)** setting (7 by default, 0 to keep them only until the browser closes, as now) and a size limit (50 MB, oldest used dropped first) bound the space, old answers are removed when the service worker starts, and a **Clear saved answers** button on the settings page empties both caches. Nothing leaves the laptop, and `PRIVACY.md` says where answers are kept.
+- **Unit tests added:** `persistentCache.test.ts` (with `fake-indexeddb`) checks a save and a read, the session cache checked first, answers older than the setting removed at start, the size limit dropping the least recently used, 0 keeping nothing on disk, **Clear saved answers** emptying both, and a failing IndexedDB being a miss rather than an error. `settings.test.ts` and `optionsPage.test.ts` check the new setting and the button.
+- **Screenshots:** the **Keep answers for** setting and **Clear saved answers** button, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, and click 3 lines on a PR so they are cached.
+  3. Close every Chrome window, open Chrome again, open the same PR, and click the same 3 lines. Confirm each says "From cache" at once.
+  4. Click **Clear saved answers** on the settings page, click one of the lines again, and confirm it is answered fresh.
+  5. Set **Keep answers for** to 0, save, repeat step 3, and confirm the lines are answered fresh after the restart.
 
 ---
 
