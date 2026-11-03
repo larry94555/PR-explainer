@@ -51,6 +51,14 @@ export interface Settings {
    * thinking was most of the wait. Other models are not affected.
    */
   letModelThink: boolean;
+  /**
+   * Show explanations and chat answers word by word as the model writes them
+   * (PR 9.6). Off by default: the popup and chat wait for the whole answer
+   * and show it at once, which reads better than sections that jump around as
+   * they fill in. The content script reads it straight from storage
+   * (src/streamSetting.ts).
+   */
+  streamAnswers: boolean;
   /** Debug option: show the prompt sent to the model under each explanation. */
   showPrompt: boolean;
   /**
@@ -72,6 +80,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   keepAliveMinutes: 30,
   explainOnHover: false,
   letModelThink: false,
+  streamAnswers: false,
   showPrompt: false,
   debugWindow: false,
 });
@@ -156,6 +165,10 @@ function checkField(field: SettingsField, value: unknown): string | null {
       return typeof value === 'boolean' ? null : 'Explain on hover must be on or off.';
     case 'letModelThink':
       return typeof value === 'boolean' ? null : 'Let the model think must be on or off.';
+    case 'streamAnswers':
+      return typeof value === 'boolean'
+        ? null
+        : 'Show answers as they are written must be on or off.';
     case 'showPrompt':
       return typeof value === 'boolean' ? null : 'Show prompt must be on or off.';
     case 'debugWindow':

@@ -2,10 +2,17 @@
 // Shadow DOM root so GitHub's CSS cannot restyle it and its CSS cannot leak
 // into GitHub (same approach as the badge in src/badge.ts).
 //
-// The popup's states: loading (spinner), streaming (the reply so far, as
-// markdown, while the model writes it), done (the three sections), failed (a
-// message and a fix from describeLlmError), and stopped (the Stop button was
-// pressed; the text so far stays). It closes with the close button, the Esc
+// The popup's states: loading (a spinner and the three section headings with
+// placeholder lines), streaming (the model is writing), done (the three
+// sections), failed (a message and a fix from describeLlmError), and stopped
+// (the Stop button was pressed; the text so far is shown).
+//
+// By default (PR 9.6) the reply is not shown while the model writes it: the
+// placeholders stay, untouched, until the whole answer is shown at once, so
+// the sections do not jump around as they fill in and screen readers hear
+// "Explaining…" once instead of every word. With the Show answers as they are
+// written setting on (streamAnswers), the reply so far is shown as markdown
+// while it streams in, as before. It closes with the close button, the Esc
 // key, or a click anywhere outside it. Once stopped or closed it ignores
 // further updates, so a late answer changes nothing. Once the model has
 // finished, failed, or been stopped, a Regenerate button asks it again,
@@ -110,6 +117,12 @@ export interface PopupOptions {
    * only when this is passed: with the Debug window setting on.
    */
   onDebug?: () => void;
+  /**
+   * Show the reply as markdown while the model writes it (PR 9.6, the Show
+   * answers as they are written setting). Off by default: the placeholders
+   * stay until the whole answer is shown.
+   */
+  streamAnswers?: boolean;
   /** Clock in milliseconds, for the elapsed time. Tests pass a fake one. */
   now?: () => number;
 }
@@ -130,6 +143,47 @@ export type PopupState = 'loading' | 'streaming' | 'done' | 'failed' | 'stopped'
 /** Shown in place of the reply when Stop is pressed before any text arrived. */
 export const STOPPED_EMPTY = 'Stopped before the model wrote anything.';
 
+/** The loading line, read once by screen readers (PR 9.6). */
+export function loadingText(model?: string): string {
+  return model ? `Explaining with ${model}…` : 'Explaining…';
+}
+
+/**
+ * The loading state's body: a spinner and a line saying what is happening,
+ * then the three section headings with grey placeholder lines where the
+ * answer will go (PR 9.6). The placeholders are hidden from screen readers,
+ * which only hear the loading line.
+ */
+function loadingBody(doc: Document, model?: string): HTMLElement[] {
+  const loading = doc.createElement('div');
+  loading.className = 'loading';
+  const spinner = doc.createElement('span');
+  spinner.className = 'spinner';
+  spinner.setAttribute('aria-hidden', 'true');
+  const text = doc.createElement('span');
+  text.textContent = loadingText(model);
+  loading.append(spinner, text);
+  const placeholder = doc.createElement('div');
+  placeholder.className = 'placeholder';
+  placeholder.setAttribute('aria-hidden', 'true');
+  for (const key of Object.keys(SECTION_TITLES) as SectionKey[]) {
+    const section = doc.createElement('section');
+    section.dataset.section = key;
+    const heading = doc.createElement('h3');
+    heading.textContent = SECTION_TITLES[key];
+    section.append(heading);
+    // Two lines for each section, the second shorter, like a short answer.
+    for (const width of ['92%', '64%']) {
+      const line = doc.createElement('span');
+      line.className = 'placeholder-line';
+      line.style.width = width;
+      section.append(line);
+    }
+    placeholder.append(section);
+  }
+  return [loading, placeholder];
+}
+
 export interface Popup {
   readonly host: HTMLElement;
   readonly state: PopupState;
@@ -138,9 +192,12 @@ export interface Popup {
    * frozen when the answer or error arrives.
    */
   readonly elapsedMs: number;
-  /** Shows the spinner and restarts the timer. */
+  /** Shows the spinner and placeholders, and restarts the timer. */
   showLoading(model?: string): void;
-  /** Shows the reply so far (markdown) while the model is still writing. */
+  /**
+   * The reply so far (markdown) while the model is still writing. Shown only
+   * with streamAnswers on; otherwise kept, and shown only if Stop is pressed.
+   */
   showPartial(markdown: string): void;
   /** `cached` is set when the answer came from the cache. */
   showExplanation(explanation: Explanation, model?: string, cached?: { elapsedMs: number }): void;
@@ -469,7 +526,10 @@ export function openPopup(
   stopButton.addEventListener('click', () => {
     if (state !== 'loading' && state !== 'streaming') return;
     stopTicking('Stopped after ');
-    if (state === 'loading') {
+    // A reply that was kept back is shown now, so what the model wrote is not lost.
+    if (state === 'streaming' && !options.streamAnswers) {
+      setBody('stopped', partialBody(written));
+    } else if (state === 'loading') {
       const note = doc.createElement('p');
       note.className = 'stopped-note';
       note.textContent = STOPPED_EMPTY;
@@ -486,6 +546,14 @@ export function openPopup(
   // Keeps the newest text in view while it streams in, unless the user has
   // scrolled up to read something.
   const nearBottom = () => panel.scrollHeight - panel.scrollTop - panel.clientHeight < 24;
+  // The reply so far, kept while it is not shown (streamAnswers off).
+  let written = '';
+  const partialBody = (markdown: string) => {
+    const partial = doc.createElement('div');
+    partial.className = 'partial';
+    partial.append(renderMarkdown(doc, markdown));
+    return partial;
+  };
 
   const popup: Popup = {
     host,
@@ -500,23 +568,16 @@ export function openPopup(
       setModel(model);
       startTicking();
       hideTimings();
-      const loading = doc.createElement('div');
-      loading.className = 'loading';
-      const spinner = doc.createElement('span');
-      spinner.className = 'spinner';
-      spinner.setAttribute('aria-hidden', 'true');
-      const text = doc.createElement('span');
-      text.textContent = `Asking ${model || 'the model'}…`;
-      loading.append(spinner, text);
-      setBody('loading', loading);
+      written = '';
+      setBody('loading', ...loadingBody(doc, model || undefined));
     },
     showPartial(markdown) {
       if (state !== 'loading' && state !== 'streaming') return;
+      written = markdown;
+      // Kept back: the placeholders stay as they are until the answer is whole.
+      if (!options.streamAnswers) return setState('streaming');
       const follow = state === 'loading' || nearBottom();
-      const partial = doc.createElement('div');
-      partial.className = 'partial';
-      partial.append(renderMarkdown(doc, markdown));
-      setBody('streaming', partial);
+      setBody('streaming', partialBody(markdown));
       if (follow) panel.scrollTop = panel.scrollHeight;
     },
     showExplanation(explanation, model, cached) {

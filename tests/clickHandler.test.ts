@@ -776,17 +776,45 @@ describe('click handler with the real popup', () => {
     const root = document.getElementById(POPUP_ID)!.shadowRoot!;
     expect(root.querySelector('.loading')).not.toBeNull();
 
+    // The reply is kept back while it is written (PR 9.6): the placeholders stay.
     send('Marks **2.4**');
     expect(currentPopup()!.state).toBe('streaming');
-    expect(root.querySelector('.partial strong')!.textContent).toBe('2.4');
+    expect(root.querySelector('.partial')).toBeNull();
+    expect(root.querySelector('.placeholder')).not.toBeNull();
 
     answer.resolve(DONE);
     await flush();
     expect(currentPopup()!.state).toBe('done');
+    expect(root.querySelector('.placeholder')).toBeNull();
     expect(root.querySelectorAll('section')).toHaveLength(3);
 
     click(root.querySelector('section')!);
     expect(explain).toHaveBeenCalledTimes(1);
+  });
+
+  it('streams the reply with Show answers as they are written on (PR 9.6)', async () => {
+    document.body.innerHTML = fixture('github-diff-classic.html');
+    const answer = deferred<ExplainResult>();
+    let send!: (text: string) => void;
+    const handler = createClickHandler({
+      explain: (_context, onChunk) => {
+        send = onChunk;
+        return { result: answer.promise, stop: vi.fn() };
+      },
+      openPopup: (anchor, options) => openPopup(anchor, { ...options, streamAnswers: true }),
+    });
+    document.addEventListener('click', handler);
+    cleanup = () => document.removeEventListener('click', handler);
+
+    click(
+      document.getElementById(`${ANCHOR}R44`)!.closest('tr')!.querySelector('.blob-code-inner')!,
+    );
+    const root = document.getElementById(POPUP_ID)!.shadowRoot!;
+    send('Marks **2.4**');
+    expect(root.querySelector('.partial strong')!.textContent).toBe('2.4');
+    answer.resolve(DONE);
+    await flush();
+    expect(root.querySelectorAll('section')).toHaveLength(3);
   });
 });
 

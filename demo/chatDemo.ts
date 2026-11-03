@@ -1,6 +1,8 @@
 // Static demo for the chat panel (`npm run demo:chat`). Uses fake data only:
 // no extension APIs and no LLM. Each question gets a canned answer that
 // streams in word by word, so auto-scroll and the busy state can be checked.
+// It appears whole when it is done (PR 9.6), or word by word with the Show
+// answers as they are written box ticked.
 
 import { openChatPanel, type ChatPanelMessage, type ChatSubject } from '../src/chat/chatPanel';
 
@@ -59,6 +61,7 @@ function open(subject: ChatSubject, messages: ChatPanelMessage[]): void {
   const chat = openChatPanel({
     subject,
     messages,
+    streamAnswers: document.querySelector<HTMLInputElement>('#stream-answers')!.checked,
     onClose: () => (status.textContent = 'Last event: closed'),
     onSend: (question) => {
       status.textContent = `Last event: sent "${question}"`;

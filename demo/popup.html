@@ -83,7 +83,9 @@
     <div class="controls" role="radiogroup" aria-label="Popup state">
       <label><input type="radio" name="state" value="loading" /> Loading</label>
       <label><input type="radio" name="state" value="done" checked /> Explanation</label>
-      <label><input type="radio" name="state" value="slow" /> Loading, then explanation</label>
+      <label
+        ><input type="radio" name="state" value="slow" /> Writing for 3 s, then explanation</label
+      >
       <label><input type="radio" name="state" value="cached" /> From cache</label>
       <label><input type="radio" name="state" value="prompt" /> Explanation with Show prompt</label>
       <label
@@ -97,6 +99,12 @@
       <label><input type="radio" name="theme" value="auto" checked /> System theme</label>
       <label><input type="radio" name="theme" value="light" /> Light</label>
       <label><input type="radio" name="theme" value="dark" /> Dark</label>
+    </div>
+    <div class="controls">
+      <label
+        ><input type="checkbox" id="stream-answers" /> Show answers as they are written (off by
+        default: the whole answer appears at once)</label
+      >
     </div>
     <p id="status" class="hint">Last event: none</p>
     <table class="diff" id="diff"></table>

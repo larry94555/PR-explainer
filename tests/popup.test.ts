@@ -50,7 +50,9 @@ describe('popup', () => {
     popup.showLoading('qwen2.5-coder:7b');
     expect(popup.state).toBe('loading');
     expect(shadow().querySelector('.spinner')).not.toBeNull();
-    expect(shadow().querySelector('.loading')?.textContent).toBe('Asking qwen2.5-coder:7b…');
+    expect(shadow().querySelector('.loading')?.textContent).toBe(
+      'Explaining with qwen2.5-coder:7b…',
+    );
     expect(shadow().querySelector('.model')?.textContent).toBe('qwen2.5-coder:7b');
     // The name is cut short when the header is full, so it is also the tooltip.
     expect(shadow().querySelector<HTMLElement>('.model')?.title).toBe('qwen2.5-coder:7b');
@@ -335,11 +337,11 @@ describe('popup', () => {
     expect(popup.host.style.left).toBe('30px');
   });
 
-  describe('streaming', () => {
+  describe('streaming with Show answers as they are written on', () => {
     const stopButton = () => shadow().querySelector<HTMLButtonElement>('button.stop')!;
 
     it('renders the reply so far as markdown, replacing it with each update', () => {
-      const popup = openPopup(ANCHOR);
+      const popup = openPopup(ANCHOR, { streamAnswers: true });
       popup.showPartial('## What it does\nAdds a `retry`');
       expect(popup.state).toBe('streaming');
       expect(shadow().querySelector('.spinner')).toBeNull();
@@ -353,7 +355,7 @@ describe('popup', () => {
     });
 
     it('swaps the streamed text for the three sections at the end', () => {
-      const popup = openPopup(ANCHOR);
+      const popup = openPopup(ANCHOR, { streamAnswers: true });
       popup.showPartial('## What it does\nAdds');
       popup.showExplanation(SAMPLE, 'llama3');
       expect(shadow().querySelector('.partial')).toBeNull();
@@ -363,14 +365,16 @@ describe('popup', () => {
     });
 
     it('shows HTML in streamed text as plain text', () => {
-      openPopup(ANCHOR).showPartial('<img src=x onerror="window.__pwned = 6"> <script>x</script>');
+      openPopup(ANCHOR, { streamAnswers: true }).showPartial(
+        '<img src=x onerror="window.__pwned = 6"> <script>x</script>',
+      );
       expect(shadow().querySelectorAll('img, script')).toHaveLength(0);
       expect(shadow().querySelector('.partial')!.textContent).toContain('<img');
     });
 
     it('Stop keeps the text so far, calls onStop once, and ignores later updates', () => {
       const onStop = vi.fn();
-      const popup = openPopup(ANCHOR, { onStop });
+      const popup = openPopup(ANCHOR, { onStop, streamAnswers: true });
       popup.showPartial('Adds a loop');
       stopButton().click();
       stopButton().click();
@@ -386,7 +390,7 @@ describe('popup', () => {
 
     it('Stop while still loading says nothing was written', () => {
       const onStop = vi.fn();
-      const popup = openPopup(ANCHOR, { onStop });
+      const popup = openPopup(ANCHOR, { onStop, streamAnswers: true });
       stopButton().click();
       expect(onStop).toHaveBeenCalledOnce();
       expect(popup.state).toBe('stopped');
@@ -396,11 +400,103 @@ describe('popup', () => {
 
     it('does nothing when Stop is clicked after the answer arrived', () => {
       const onStop = vi.fn();
-      const popup = openPopup(ANCHOR, { onStop });
+      const popup = openPopup(ANCHOR, { onStop, streamAnswers: true });
       popup.showExplanation(SAMPLE);
       stopButton().click();
       expect(onStop).not.toHaveBeenCalled();
       expect(popup.state).toBe('done');
+    });
+  });
+
+  describe('the whole answer at once (PR 9.6, the default)', () => {
+    const stopButton = () => shadow().querySelector<HTMLButtonElement>('button.stop')!;
+    const body = () => shadow().querySelector<HTMLElement>('.body')!;
+
+    it('shows the three headings with placeholder lines while it waits', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showLoading('qwen2.5-coder:7b');
+      expect(shadow().querySelector('.spinner')).not.toBeNull();
+      expect(shadow().querySelector('.loading')!.textContent).toBe(
+        'Explaining with qwen2.5-coder:7b…',
+      );
+      const placeholder = shadow().querySelector('.placeholder')!;
+      const titles = [...placeholder.querySelectorAll('h3')].map((h) => h.textContent);
+      expect(titles).toEqual(['What it does', "Why it's needed", 'Concerns']);
+      expect(placeholder.querySelectorAll('.placeholder-line')).toHaveLength(6);
+      // Screen readers hear only the loading line, not the empty sections.
+      expect(placeholder.getAttribute('aria-hidden')).toBe('true');
+      expect(shadow().querySelector('.content')).toBeNull();
+    });
+
+    it('says only "Explaining…" before the model is known', () => {
+      openPopup(ANCHOR);
+      expect(shadow().querySelector('.loading')!.textContent).toBe('Explaining…');
+    });
+
+    it('keeps the reply back while it is written: the placeholders are not touched', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showLoading('llama3');
+      const before = [...body().childNodes];
+      popup.showPartial('## What it does\nAdds a `retry`');
+      popup.showPartial('## What it does\nAdds a `retry` loop.');
+      expect(popup.state).toBe('streaming');
+      expect(shadow().querySelector('.partial')).toBeNull();
+      expect(body().textContent).not.toContain('retry');
+      // The very same nodes: nothing was redrawn, so nothing is announced again.
+      expect([...body().childNodes]).toEqual(before);
+      expect(before.every((node) => node.isConnected)).toBe(true);
+      expect(shadow().querySelector('.spinner')).not.toBeNull();
+    });
+
+    it('replaces the placeholders with the whole answer in one update', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showPartial('## What it does\nAdds');
+      const observer = new MutationObserver(() => {});
+      observer.observe(body(), { childList: true });
+      popup.showExplanation(SAMPLE, 'llama3');
+      const changes = observer.takeRecords();
+      observer.disconnect();
+      // One swap: the placeholders out, the three sections in.
+      expect(changes).toHaveLength(1);
+      expect(changes[0]!.addedNodes).toHaveLength(3);
+      expect(popup.state).toBe('done');
+      expect(shadow().querySelector('.placeholder, .loading')).toBeNull();
+      expect(shadow().querySelectorAll('section')).toHaveLength(3);
+      expect(section('what').querySelector('code')?.textContent).toBe('retry');
+    });
+
+    it('Stop shows what the model had written and says how long it took', () => {
+      let clock = 0;
+      const onStop = vi.fn();
+      const popup = openPopup(ANCHOR, { onStop, now: () => clock });
+      popup.showPartial('Adds a `loop`');
+      clock = 2_300;
+      stopButton().click();
+      expect(onStop).toHaveBeenCalledOnce();
+      expect(popup.state).toBe('stopped');
+      expect(shadow().querySelector('.elapsed')!.textContent).toBe('Stopped after 2.3 s');
+      expect(shadow().querySelector('.placeholder')).toBeNull();
+      expect(shadow().querySelector('.partial code')!.textContent).toBe('loop');
+      popup.showExplanation(SAMPLE);
+      expect(popup.state).toBe('stopped');
+    });
+
+    it('Stop before any text says nothing was written', () => {
+      const popup = openPopup(ANCHOR);
+      stopButton().click();
+      expect(popup.state).toBe('stopped');
+      expect(shadow().querySelector('.stopped-note')!.textContent).toBe(STOPPED_EMPTY);
+    });
+
+    it('Regenerate forgets the text kept back from the last answer', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showPartial('Old text');
+      popup.showError('Broke.', 'Fix it.');
+      shadow().querySelector<HTMLButtonElement>('button.regenerate')!.click();
+      expect(shadow().querySelector('.placeholder')).not.toBeNull();
+      stopButton().click();
+      expect(shadow().querySelector('.stopped-note')!.textContent).toBe(STOPPED_EMPTY);
+      expect(body().textContent).not.toContain('Old text');
     });
   });
 
@@ -621,7 +717,9 @@ describe('popup', () => {
       popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
       regenerateButton().click();
       expect(shadow().querySelector('.model')!.textContent).toBe('qwen2.5-coder:7b');
-      expect(shadow().querySelector('.loading')!.textContent).toBe('Asking qwen2.5-coder:7b…');
+      expect(shadow().querySelector('.loading')!.textContent).toBe(
+        'Explaining with qwen2.5-coder:7b…',
+      );
     });
 
     it('does nothing while the model is still working', () => {

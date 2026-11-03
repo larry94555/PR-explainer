@@ -27,6 +27,7 @@ import { parsePrUrl } from './prUrl';
 import { installSelection } from './selection';
 import { createGithubFetch, createGithubRoundTrips } from './net/githubFetch';
 import { trackDebugSetting } from './debug/debugSetting';
+import { trackStreamSetting } from './streamSetting';
 
 // Every request the content script makes goes through this, and it only
 // reaches GitHub (PR 7.4). Each one is recorded as a round trip, so a click
@@ -228,6 +229,9 @@ const prefetcher = createPrefetcher({
 
 // The Debug window setting (PR 9.3), for the popup's Debug button.
 const debugSetting = trackDebugSetting(chrome.storage.sync, chrome.storage.onChanged);
+// Show answers as they are written (PR 9.6): off, the popup and the chat show
+// each answer whole once it is ready. Read again for each popup and chat.
+const streamSetting = trackStreamSetting(chrome.storage.sync, chrome.storage.onChanged);
 
 const explainDeps: ClickHandlerDeps = {
   isEnabled: () => enabled.current() === true,
@@ -238,6 +242,7 @@ const explainDeps: ClickHandlerDeps = {
   openPopup: (anchor, options) =>
     openPopup(anchor, {
       ...options,
+      streamAnswers: streamSetting.current(),
       ...(debugSetting.current() && {
         onDebug: () => {
           sendRequest('openDebugWindow', undefined).catch((error: unknown) => {
@@ -254,7 +259,8 @@ const explainDeps: ClickHandlerDeps = {
     const chat = startChat(
       {
         ask: (messages, onChunk) => openChatStream({ messages }, onChunk),
-        openPanel: (options) => openChatPanel(options),
+        openPanel: (options) =>
+          openChatPanel({ ...options, streamAnswers: streamSetting.current() }),
       },
       session,
       subject,

@@ -21,6 +21,7 @@ import { resolveTheme, watchTheme } from '../src/theme';
 import { buildFittedExplainPrompt, type PromptReport } from '../src/explain/fitPrompt';
 import { promptBudget } from '../src/llm/contextSize';
 import { parseExplanation, type Explanation } from '../src/explain/parseExplanation';
+import { formatExplanation } from '../src/chat/chatSession';
 
 const MODEL = 'qwen2.5-coder:7b';
 
@@ -356,6 +357,9 @@ function demoFilePrompt(row: Element): { report: PromptReport; messages: ChatMes
   };
 }
 
+/** The Show answers as they are written box (PR 9.6). */
+const streamAnswers = () => document.querySelector<HTMLInputElement>('#stream-answers')!.checked;
+
 const chosen = () =>
   document.querySelector<HTMLInputElement>('input[name="state"]:checked')?.value ?? 'done';
 
@@ -387,6 +391,7 @@ function explainRow(row: Element): void {
   // answer took 14.2 s, to match its Details (PR 8.1).
   let fakeTime = 0;
   const popup = openPopup(row, {
+    streamAnswers: streamAnswers(),
     ...(['done', 'failed', 'prompt', 'file'].includes(chosen()) && { now: () => fakeTime }),
     onClose: () => (status.textContent = 'Last event: closed'),
     // As with the Debug window setting on (PR 9.4); `npm run demo:debug` shows the window.
@@ -396,7 +401,14 @@ function explainRow(row: Element): void {
         context: LINES.map(([marker, code]) => marker + code).join('\n'),
         explanation: chosen() === 'unsafe' ? UNSAFE : SAMPLE,
       });
-      activeChat = startChat({ ask: fakeAsk, openPanel: openChatPanel }, session, subjectOf(row));
+      activeChat = startChat(
+        {
+          ask: fakeAsk,
+          openPanel: (options) => openChatPanel({ ...options, streamAnswers: streamAnswers() }),
+        },
+        session,
+        subjectOf(row),
+      );
       activeChat.focus();
       status.textContent = 'Last event: chat opened';
     },
@@ -440,9 +452,22 @@ function explainRow(row: Element): void {
       popup.showPrompt(report);
       break;
     }
-    case 'slow':
+    case 'slow': {
       popup.showLoading(MODEL);
+      // The model writes the answer word by word for 3 s after a short wait.
+      // The popup keeps it back and shows it whole at the end (PR 9.6), or
+      // shows each word with Show answers as they are written ticked.
+      const words = formatExplanation(SAMPLE).split(/(?<=\s)/);
+      let written = 0;
+      const writer = setInterval(() => {
+        if (popup.state !== 'loading' && popup.state !== 'streaming') {
+          return clearInterval(writer);
+        }
+        written = Math.min(words.length, written + Math.ceil(words.length / 25));
+        popup.showPartial(words.slice(0, written).join(''));
+      }, 100);
       setTimeout(() => {
+        clearInterval(writer);
         popup.showExplanation(SAMPLE, MODEL);
         // A model that does not think, already loaded: no Think row.
         popup.showTrace({
@@ -463,8 +488,9 @@ function explainRow(row: Element): void {
           },
           reply: '## What it does\nRetries the fetch call.',
         });
-      }, 2000);
+      }, 3500);
       break;
+    }
     case 'failed': {
       fakeTime = 30_370;
       const { message, fix } = describeLlmError(new LlmError('connection', 'fetch failed'), {

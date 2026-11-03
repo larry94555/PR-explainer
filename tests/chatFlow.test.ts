@@ -44,7 +44,7 @@ interface FakeRequest {
 }
 
 /** Opens the real chat panel with a mocked client. */
-function setup(session = new ChatSession(SEED)) {
+function setup(session = new ChatSession(SEED), streamAnswers = false) {
   const requests: FakeRequest[] = [];
   const ask = vi.fn((messages: ChatMessage[], onChunk: (text: string) => void) => {
     let resolve!: (result: ChatResult) => void;
@@ -59,7 +59,7 @@ function setup(session = new ChatSession(SEED)) {
     return { result, stop };
   });
   const panel = startChat(
-    { ask, openPanel: (options) => openChatPanel(options) },
+    { ask, openPanel: (options) => openChatPanel({ ...options, streamAnswers }) },
     session,
     SUBJECT,
   );
@@ -100,7 +100,7 @@ describe('chat flow', () => {
     ]);
   });
 
-  it('sends the code and the explanation with the first question, and streams the answer', async () => {
+  it('sends the code and the explanation with the first question, and shows the answer whole', async () => {
     const { session, last } = setup();
     send('How would I unit test this?');
 
@@ -114,16 +114,30 @@ describe('chat flow', () => {
     expect(sendDisabled()).toBe(true);
     expect(root().querySelector('.chat')!.getAttribute('data-busy')).toBe('true');
 
+    // Kept back while it is written (PR 9.6): the answer stays empty ("Thinking…").
     last().chunk('Use **fake');
     last().chunk(' timers**.');
-    expect(lastAnswer().querySelector('strong')!.textContent).toBe('fake timers');
+    expect(lastAnswer().textContent).toBe('');
+    expect(lastAnswer().childNodes).toHaveLength(0);
 
     last().resolve({ status: 'done', answer: 'Use **fake timers**.', model: MODEL });
     await flush();
+    expect(lastAnswer().querySelector('strong')!.textContent).toBe('fake timers');
     expect(root().querySelector('.chat')!.getAttribute('data-busy')).toBe('false');
     expect(session.turns).toEqual([
       { question: 'How would I unit test this?', answer: 'Use **fake timers**.' },
     ]);
+  });
+
+  it('streams the answer word by word with Show answers as they are written on (PR 9.6)', async () => {
+    const { last } = setup(new ChatSession(SEED), true);
+    send('How would I unit test this?');
+    last().chunk('Use **fake');
+    last().chunk(' timers**.');
+    expect(lastAnswer().querySelector('strong')!.textContent).toBe('fake timers');
+    last().resolve({ status: 'done', answer: 'Use **fake timers**.', model: MODEL });
+    await flush();
+    expect(lastAnswer().textContent).toBe('Use fake timers.');
   });
 
   it('includes earlier turns in a follow-up question', async () => {

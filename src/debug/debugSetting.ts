@@ -6,6 +6,7 @@
 
 import type { StorageChangedEvent } from '../enabledState';
 import type { SyncStorageLike } from '../prefetch';
+import { trackSyncFlag } from '../syncFlag';
 
 /** The chrome.storage.sync key of the Debug window setting (storageKey('debugWindow')). */
 export const DEBUG_SETTING_KEY = 'settings.debugWindow';
@@ -19,18 +20,5 @@ export function trackDebugSetting(
   storage: SyncStorageLike,
   events: StorageChangedEvent,
 ): { current(): boolean } {
-  let current = false;
-  let changed = false;
-  events.addListener((changes, areaName) => {
-    if (areaName !== 'sync' || !Object.hasOwn(changes, DEBUG_SETTING_KEY)) return;
-    changed = true;
-    current = changes[DEBUG_SETTING_KEY]?.newValue === true;
-  });
-  storage.get([DEBUG_SETTING_KEY]).then(
-    (stored) => {
-      if (!changed) current = stored[DEBUG_SETTING_KEY] === true;
-    },
-    () => undefined,
-  );
-  return { current: () => current };
+  return trackSyncFlag(DEBUG_SETTING_KEY, storage, events);
 }
