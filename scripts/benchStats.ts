@@ -21,6 +21,11 @@ export type BenchRun =
       /** From sending the request to the first piece of the answer. */
       firstTokenMs?: number;
       timings?: RunTimings;
+      /**
+       * The part of the answer spent thinking (PR 9.1), estimated from the
+       * share of the reply inside <think>.
+       */
+      think?: { tokens?: number; ms?: number };
     }
   | { ok: false; error: string };
 
@@ -35,6 +40,8 @@ export interface BenchSummary {
   promptTokens?: number;
   answerTokens?: number;
   tokensPerSecond?: number;
+  thinkTokens?: number;
+  thinkMs?: number;
 }
 
 /** The middle value (the mean of the two middle ones for an even count), or undefined for none. */
@@ -78,6 +85,8 @@ export function summarize(runs: readonly BenchRun[]): BenchSummary {
     promptTokens: medianOf(done.map((r) => r.timings?.promptTokens)),
     answerTokens: medianOf(done.map((r) => r.timings?.answerTokens)),
     tokensPerSecond: medianOf(done.map((r) => tokensPerSecond(r.timings))),
+    thinkTokens: medianOf(done.map((r) => r.think?.tokens)),
+    thinkMs: medianOf(done.map((r) => r.think?.ms)),
   };
   for (const [key, value] of Object.entries(values)) {
     if (value !== undefined) (summary as unknown as Record<string, number>)[key] = value;
@@ -116,6 +125,9 @@ export const TABLE_HEADER = [
   'Prompt tokens',
   'Answer tokens',
   'Tokens/s',
+  // Added last (PR 9.1), so scripts/latencyReport.ts still reads older sections.
+  'Think tokens',
+  'Think time',
 ] as const;
 
 // Pipes would end a cell early.
@@ -140,6 +152,8 @@ export function formatTable(rows: readonly { sample: string; summary: BenchSumma
         formatCount(s.promptTokens),
         formatCount(s.answerTokens),
         formatRate(s.tokensPerSecond),
+        formatCount(s.thinkTokens),
+        formatMs(s.thinkMs),
       ]),
     ),
   ].join('\n');
@@ -243,8 +257,10 @@ How to read a table: every time is the median of the runs that finished, except 
 "Answered in …" in the popup without the time spent on the GitHub page. **First token** is
 when the first word arrived. **Load** is Ollama loading the model into memory (near zero
 once it is loaded). **Prompt tokens** counts only the tokens Ollama had to read, so a
-cached prompt counts fewer. **Tokens/s** is how fast the answer was written. A failed run
-is listed under its table and counted in **Runs**, never dropped.
+cached prompt counts fewer. **Tokens/s** is how fast the answer was written. **Think tokens**
+and **Think time** are the part of the answer a reasoning model spent inside \`<think>\`,
+estimated from its share of the reply (PR 9.1). A failed run is listed under its table and
+counted in **Runs**, never dropped.
 `;
 
 /** docs/latency.md with `section` added at the end (and the intro first, when there is no file yet). */

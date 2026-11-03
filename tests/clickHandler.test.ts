@@ -15,6 +15,7 @@ import {
   POPUP_ID,
   type Popup,
   type PopupAnchor,
+  type TraceDetails,
 } from '../src/popup/popup';
 
 function fixture(name: string): string {
@@ -48,12 +49,14 @@ type PopupHooks = Parameters<ClickHandlerDeps['openPopup']>[1];
  */
 function fakePopup(anchor: PopupAnchor, hooks: PopupHooks) {
   const calls: string[] = [];
+  const traces: TraceDetails[] = [];
   let state: Popup['state'] = 'loading';
   const finished = () => state === 'closed' || state === 'stopped';
   const popup: Popup & {
     anchor: PopupAnchor;
     hooks: PopupHooks;
     calls: string[];
+    traces: TraceDetails[];
     pressStop(): void;
     pressRegenerate(): void;
   } = {
@@ -67,8 +70,10 @@ function fakePopup(anchor: PopupAnchor, hooks: PopupHooks) {
     },
     showLoading: () => calls.push('loading'),
     showPrompt: (report) => calls.push(`prompt:${report.tokens}`),
-    showTimings: (timings) => {
-      if (timings) calls.push(`timings:${timings.totalMs}`);
+    traces,
+    showTrace: (trace) => {
+      traces.push(trace);
+      if (trace.timings) calls.push(`timings:${trace.timings.totalMs}`);
     },
     showPartial: (markdown) => {
       if (state !== 'loading' && state !== 'streaming') return;
@@ -112,6 +117,8 @@ type Answer = (onChunk: (text: string) => void, fresh: boolean) => Promise<Expla
 function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => boolean) {
   const contexts: string[] = [];
   const timings: ExplainTiming[] = [];
+  // The click's tasks and reply (PR 9.1), kept apart so the timing checks stay short.
+  const traced: Pick<ExplainTiming, 'tasks' | 'reply'>[] = [];
   const popups: ReturnType<typeof fakePopup>[] = [];
   const stops: Array<ReturnType<typeof vi.fn>> = [];
   const deps: ClickHandlerDeps = {
@@ -130,7 +137,10 @@ function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => b
       popups.push(popup);
       return popup;
     },
-    onTiming: (timing) => timings.push(timing),
+    onTiming: ({ tasks, reply, ...timing }) => {
+      timings.push(timing);
+      traced.push({ tasks, reply });
+    },
   };
   const handler = createClickHandler(deps);
   document.addEventListener('click', handler);
@@ -140,6 +150,7 @@ function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => b
     popups,
     stops,
     timings,
+    traced,
     cleanup: () => document.removeEventListener('click', handler),
   };
 }
@@ -232,6 +243,86 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(env.timings).toEqual([
       { elapsedMs: 1234, status: 'done', model: 'qwen2.5-coder:7b', timings },
     ]);
+  });
+
+  it("records the click's tasks, adds the service worker's, and shows them in Details (PR 9.1)", async () => {
+    const timings = { totalMs: 900, answerTokens: 20, answerMs: 800 };
+    const worker = {
+      totalMs: 950,
+      tasks: [
+        {
+          key: 'settings',
+          label: 'Read settings',
+          source: 'worker' as const,
+          startMs: 0,
+          durationMs: 2,
+        },
+        {
+          key: 'model',
+          label: 'Wait for the model',
+          source: 'worker' as const,
+          startMs: 10,
+          durationMs: 930,
+          firstChunkMs: 100,
+        },
+      ],
+    };
+    // A clock that moves 1 s each time it is read, so the page's tasks take
+    // longer than the fake service worker's.
+    let time = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => (time += 1000));
+    onTestFinished(() => clock.mockRestore());
+    env = setup();
+    // Like content.ts: the page's own tasks, then the request is sent.
+    vi.mocked(env.deps.explain).mockImplementationOnce((_context, onChunk, { trace }) => {
+      trace!.time('pr-description', 'Read the PR description', Promise.resolve());
+      trace!.markSent();
+      const result = Promise.resolve().then(() => {
+        onChunk('<think>hmm</think>');
+        onChunk('## What it does\nMarks it.');
+        return { ...DONE, timings, trace: worker };
+      });
+      return { result, stop: vi.fn() };
+    });
+    click(code('R44'));
+    await flush();
+    const [shown] = env.popups[0]!.traces;
+    expect(shown!.timings).toBe(timings);
+    expect(shown!.reply).toBe('<think>hmm</think>## What it does\nMarks it.');
+    expect(shown!.tasks.map((t) => t.key)).toEqual([
+      'find-code',
+      'pr-description',
+      'settings',
+      'model',
+      'show',
+    ]);
+    expect(shown!.tasks[0]).toMatchObject({ source: 'page', label: 'Find the code' });
+    expect(shown!.tasks.find((t) => t.key === 'model')).toMatchObject({ firstChunkMs: 100 });
+    // The console gets the same tasks and the reply.
+    expect(env.traced[0]).toEqual({ tasks: shown!.tasks, reply: shown!.reply });
+  });
+
+  it('shows the short trace of a cached answer, with no model task', async () => {
+    const worker = {
+      totalMs: 5,
+      tasks: [
+        {
+          key: 'cache',
+          label: 'Check the cache',
+          source: 'worker' as const,
+          startMs: 1,
+          durationMs: 3,
+        },
+      ],
+    };
+    env = setup(() =>
+      Promise.resolve({ ...DONE, cached: { elapsedMs: 9800, savedAt: 1 }, trace: worker }),
+    );
+    click(code('R44'));
+    await flush();
+    const keys = env.popups[0]!.traces[0]!.tasks.map((t) => t.key);
+    expect(keys.sort()).toEqual(['cache', 'find-code', 'show']);
+    expect(env.popups[0]!.traces[0]!.timings).toBeUndefined();
   });
 
   it('shows the error message and fix when the model fails', async () => {
@@ -368,6 +459,7 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(env.deps.explain).toHaveBeenCalledWith(expect.any(String), expect.any(Function), {
       fresh: false,
       code: expect.objectContaining({ filePath: 'docs/roadmap.md', startLine: 44, endLine: 44 }),
+      trace: expect.any(Object),
     });
     await flush();
     expect(env.popups[0]!.calls).toEqual([
@@ -388,7 +480,10 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
       text: '| 2.4 | Friendly LLM error messages | Small | ✅ Done ([#10](https://github.com/larry94555/PR-explainer/pull/10)) |',
     });
     click(code('L44'));
-    expect(vi.mocked(env.deps.explain).mock.calls[1]![2]).toEqual({ fresh: false });
+    expect(vi.mocked(env.deps.explain).mock.calls[1]![2]).toEqual({
+      fresh: false,
+      trace: expect.any(Object),
+    });
   });
 
   it('Regenerate asks again without the cache and shows the new answer', async () => {
@@ -406,7 +501,12 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(vi.mocked(env.deps.explain).mock.calls[1]![2]).toEqual({
       fresh: true,
       code: vi.mocked(env.deps.explain).mock.calls[0]![2].code,
+      trace: expect.any(Object),
     });
+    // Regenerate starts a new trace (PR 9.1).
+    expect(vi.mocked(env.deps.explain).mock.calls[1]![2].trace).not.toBe(
+      vi.mocked(env.deps.explain).mock.calls[0]![2].trace,
+    );
     expect(env.contexts[1]).toBe(env.contexts[0]);
     expect(env.stops[0]).toHaveBeenCalledOnce();
 

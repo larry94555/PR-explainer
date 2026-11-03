@@ -73,6 +73,19 @@ describe('tokensPerSecond', () => {
 });
 
 describe('summarize', () => {
+  it('gives the median thinking tokens and time, and leaves them out when no run thought (PR 9.1)', () => {
+    const summary = summarize([
+      ok(9000, { think: { tokens: 200, ms: 6000 } }),
+      ok(8000, { think: { tokens: 0, ms: 0 } }),
+      ok(7000, { think: { tokens: 100, ms: 3000 } }),
+      failed(),
+    ]);
+    expect(summary).toMatchObject({ thinkTokens: 100, thinkMs: 3000 });
+    const none = summarize([ok(5000), ok(6000)]);
+    expect(none).not.toHaveProperty('thinkTokens');
+    expect(none).not.toHaveProperty('thinkMs');
+  });
+
   it('gives medians of each column and the slowest total', () => {
     const summary = summarize([
       ok(12000, {
@@ -152,15 +165,17 @@ describe('formatting', () => {
           promptTokens: 1234,
           answerTokens: 250,
           tokensPerSecond: 31.25,
+          thinkTokens: 180,
+          thinkMs: 5760,
         },
       },
       { sample: 'Broken | sample', summary: { runs: 3, failed: 3 } },
     ]);
     expect(table.split('\n')).toEqual([
-      '| Sample | Runs | Median | Slowest | First token | Load | Prompt tokens | Answer tokens | Tokens/s |',
-      '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
-      '| Go line | 2 of 3 (1 failed) | 9.1 s | 14.0 s | 800 ms | 5 ms | 1,234 | 250 | 31.3 |',
-      '| Broken \\| sample | 0 of 3 (3 failed) | – | – | – | – | – | – | – |',
+      '| Sample | Runs | Median | Slowest | First token | Load | Prompt tokens | Answer tokens | Tokens/s | Think tokens | Think time |',
+      '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+      '| Go line | 2 of 3 (1 failed) | 9.1 s | 14.0 s | 800 ms | 5 ms | 1,234 | 250 | 31.3 | 180 | 5.8 s |',
+      '| Broken \\| sample | 0 of 3 (3 failed) | – | – | – | – | – | – | – | – | – |',
     ]);
   });
 });

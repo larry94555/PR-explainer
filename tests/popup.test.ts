@@ -1,4 +1,5 @@
 import type { Explanation } from '../src/explain/parseExplanation';
+import type { TraceTask } from '../src/trace/types';
 import {
   computePosition,
   currentPopup,
@@ -271,7 +272,7 @@ describe('popup', () => {
     });
   });
 
-  describe('latency Details (PR 8.1)', () => {
+  describe('Details waterfall (PR 9.1)', () => {
     const TIMINGS = {
       totalMs: 13_900,
       loadMs: 4_100,
@@ -280,69 +281,132 @@ describe('popup', () => {
       answerTokens: 240,
       answerMs: 8_000,
     };
+    const task = (
+      key: string,
+      startMs: number,
+      durationMs: number,
+      extra: Partial<TraceTask> = {},
+    ): TraceTask => ({ key, label: key, source: 'page', startMs, durationMs, ...extra });
+    const TASKS: TraceTask[] = [
+      { ...task('find-code', 0, 4), label: 'Find the code' },
+      { ...task('pr-description', 4, 100), label: 'Read the PR description' },
+      { ...task('file-at-head', 4, 300), label: 'Fetch the file at head' },
+      {
+        ...task('model', 400, 13_500, { source: 'worker', firstChunkMs: 5_500 }),
+        label: 'Wait for the model',
+      },
+      { ...task('show', 13_900, 300), label: 'Show answer' },
+    ];
+    // Half of the reply is thinking.
+    const REPLY = `<think>${'t'.repeat(35)}</think>${'a'.repeat(50)}`;
     const detailsButton = () => shadow().querySelector<HTMLButtonElement>('button.details')!;
-    const table = () => shadow().querySelector<HTMLElement>('dl.latency')!;
-    const rows = () =>
-      Array.from(table().querySelectorAll('dt'), (dt) => [
-        dt.textContent,
-        dt.nextElementSibling!.textContent,
-      ]);
+    const panel = () => shadow().querySelector<HTMLElement>('.latency')!;
+    const rows = () => Array.from(panel().querySelectorAll<HTMLElement>('li.task'));
 
-    it('is hidden until the timings of an answer are shown', () => {
+    it('is hidden until an answer and its tasks are shown', () => {
       const popup = openPopup(ANCHOR, { now: () => 0 });
       expect(detailsButton().hidden).toBe(true);
-      popup.showTimings(TIMINGS);
+      popup.showTrace({ tasks: TASKS, timings: TIMINGS });
       expect(detailsButton().hidden).toBe(true);
       popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+      popup.showTrace({ tasks: [] });
       expect(detailsButton().hidden).toBe(true);
-      popup.showTimings(TIMINGS);
+      popup.showTrace({ tasks: TASKS, timings: TIMINGS, reply: REPLY });
       expect(detailsButton().hidden).toBe(false);
       expect(detailsButton().textContent).toBe('Details');
-      expect(table().hidden).toBe(true);
+      expect(panel().hidden).toBe(true);
     });
 
-    it('opens and closes the table of where the time went', () => {
-      let time = 0;
-      const popup = openPopup(ANCHOR, { now: () => time });
-      time = 14_200;
+    it('opens a row per task, with the model split into Load, Read prompt, Think and Write answer', () => {
+      const popup = openPopup(ANCHOR, { now: () => 0 });
       popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
-      popup.showTimings(TIMINGS);
+      popup.showTrace({ tasks: TASKS, timings: TIMINGS, reply: REPLY });
       expect(detailsButton().getAttribute('aria-expanded')).toBe('false');
-      expect(detailsButton().getAttribute('aria-controls')).toBe(table().id);
+      expect(detailsButton().getAttribute('aria-controls')).toBe(panel().id);
 
       detailsButton().click();
-      expect(table().hidden).toBe(false);
+      expect(panel().hidden).toBe(false);
       expect(detailsButton().getAttribute('aria-expanded')).toBe('true');
-      expect(rows()).toEqual([
-        ['Load', '4.1 s'],
-        ['Prompt', '812 tokens · 1.3 s'],
-        ['Answer', '240 tokens · 8.0 s · 30.0 tokens/s'],
-        ['Outside Ollama', '300 ms'],
-        ['Total', '14.2 s'],
+      expect(
+        rows().map((r) => [
+          r.querySelector('.task-label')!.textContent,
+          r.querySelector('.task-time')!.textContent,
+        ]),
+      ).toEqual([
+        ['Find the code', '4 ms · 0%'],
+        ['Read the PR description', '100 ms · 1%'],
+        ['Fetch the file at head', '300 ms · 2%'],
+        ['Load', '4.1 s · 29%'],
+        ['Read prompt', '1.3 s · 9%'],
+        ['Think', '~4.0 s · 28%'],
+        ['Write answer', '~4.0 s · 28%'],
+        ['Show answer', '300 ms · 2%'],
       ]);
+      expect(panel().querySelector('.trace-total')!.textContent).toBe(
+        'Total 14.2 s · first word at 5.9 s (the line on the bars) · ' +
+          '~ estimated from the share of the reply inside <think>',
+      );
 
       detailsButton().click();
-      expect(table().hidden).toBe(true);
+      expect(panel().hidden).toBe(true);
       expect(detailsButton().getAttribute('aria-expanded')).toBe('false');
     });
 
-    it('is not shown when the server gave no timings, as for a cached answer', () => {
+    it('draws each bar where the task started and as long as it took, overlapping for tasks at the same time', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+      popup.showTrace({ tasks: TASKS, timings: TIMINGS, reply: REPLY });
+      const bar = (key: string) =>
+        panel().querySelector<HTMLElement>(`li[data-task="${key}"] .bar`)!.style;
+      const pct = (ms: number) => `${(ms / 14_200) * 100}%`;
+      expect(bar('pr-description').left).toBe(pct(4));
+      expect(bar('file-at-head').left).toBe(pct(4));
+      expect(bar('load').left).toBe(pct(400));
+      expect(bar('think').left).toBe(pct(5_800));
+      const marks = panel().querySelectorAll<HTMLElement>('.first-token');
+      expect(marks).toHaveLength(rows().length);
+      expect(marks[0]!.style.left).toBe(pct(5_900));
+    });
+
+    it('gives screen readers one sentence per row and hides the drawing', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+      popup.showTrace({ tasks: TASKS, timings: TIMINGS, reply: REPLY });
+      expect(panel().querySelector('ul')!.getAttribute('aria-label')).toBe('Where the time went');
+      const think = panel().querySelector<HTMLElement>('li[data-task="think"]')!;
+      expect(think.querySelector('.sr-only')!.textContent).toBe(
+        'Think (estimated), 4.0 s, 28% of the total, started at 5.8 s, about 120 tokens',
+      );
+      for (const part of ['.task-label', '.track', '.task-time']) {
+        expect(think.querySelector(part)!.getAttribute('aria-hidden')).toBe('true');
+      }
+    });
+
+    it('shows a cached answer with only its own short trace and no model rows', () => {
       const popup = openPopup(ANCHOR);
       popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b', { elapsedMs: 9_000 });
-      popup.showTimings(undefined);
-      popup.showTimings({});
-      expect(detailsButton().hidden).toBe(true);
+      popup.showTrace({
+        tasks: [
+          task('find-code', 0, 2),
+          task('cache', 3, 3, { source: 'worker' }),
+          task('show', 6, 2),
+        ],
+      });
+      expect(detailsButton().hidden).toBe(false);
+      expect(rows().map((r) => r.dataset.task)).toEqual(['find-code', 'cache', 'show']);
+      expect(panel().querySelector('.first-token')).toBeNull();
+      expect(panel().querySelector('.trace-total')!.textContent).toBe('Total 8 ms');
     });
 
     it('goes away when Regenerate asks again', () => {
       const popup = openPopup(ANCHOR);
       popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
-      popup.showTimings(TIMINGS);
+      popup.showTrace({ tasks: TASKS, timings: TIMINGS });
       detailsButton().click();
       shadow().querySelector<HTMLButtonElement>('button.regenerate')!.click();
       expect(detailsButton().hidden).toBe(true);
-      expect(table().hidden).toBe(true);
-      expect(table().children).toHaveLength(0);
+      expect(panel().hidden).toBe(true);
+      expect(panel().children).toHaveLength(0);
     });
   });
 

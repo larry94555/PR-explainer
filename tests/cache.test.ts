@@ -195,7 +195,12 @@ describe('explain handler with the cache', () => {
       ...first,
       timings: undefined,
       cached: { elapsedMs: 9800, savedAt: 10_800 },
+      // A cached answer's trace has no model task (PR 9.1).
+      trace: expect.objectContaining({ totalMs: 0 }),
     });
+    const keys = second.trace!.tasks.map((t) => t.key);
+    expect(keys).toContain('cache');
+    expect(keys).not.toContain('model');
   });
 
   it('misses for a different model', async () => {

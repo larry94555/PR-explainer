@@ -28,18 +28,22 @@ import type { CodeSpan } from './fileContext';
 import type { LlmTimings } from './llm/types';
 import type { ExplainStream } from './messaging/client';
 import type { Popup, PopupAnchor, PopupOptions } from './popup/popup';
+import { createClickTrace, type ClickTrace } from './trace/clickTrace';
+import type { TraceTask } from './trace/types';
 
 export interface ClickHandlerDeps {
   /**
    * Sends the formatted context to the service worker, calling `onChunk`
    * with each piece of the reply as it arrives. `code` says where the code
    * is in the new file, so its enclosing block can be read from the full
-   * file (PR 6.3); it is left out for removed lines.
+   * file (PR 6.3); it is left out for removed lines. The page's tasks for
+   * the request (reading the PR description, fetching the file, sending)
+   * are recorded in `trace` (PR 9.1).
    */
   explain(
     context: string,
     onChunk: (text: string) => void,
-    options: { fresh: boolean; code?: CodeSpan },
+    options: { fresh: boolean; code?: CodeSpan; trace?: ClickTrace },
   ): ExplainStream;
   /**
    * False while the user has turned click-to-explain off with the toolbar
@@ -101,6 +105,10 @@ export interface ExplainTiming {
   cached?: boolean;
   /** Where the server's time went, for an answer from the model (PR 8.1). */
   timings?: LlmTimings;
+  /** Every task of the click, timed from the click (PR 9.1). */
+  tasks?: TraceTask[];
+  /** The whole reply as it streamed in, to estimate the thinking share. */
+  reply?: string;
 }
 
 // Elements GitHub (or the browser) already gives a meaning to a click on.
@@ -180,9 +188,13 @@ export function explainLineAt(
   >,
   target: EventTarget | null,
 ): boolean {
-  const found = lineRequest(target);
-  if (!found) return false;
-  explainCode(deps, found.request, found.row);
+  // The click's trace starts here, before the code is found (PR 9.1).
+  const trace = createClickTrace();
+  const found = trace.start('find-code', 'Find the code');
+  const line = lineRequest(target);
+  if (!line) return false;
+  found();
+  explainCode(deps, line.request, line.row, undefined, trace);
   return true;
 }
 
@@ -224,32 +236,36 @@ export function explainCode(
   request: ExplainRequest,
   anchor: PopupAnchor,
   onClose?: () => void,
+  trace?: ClickTrace,
 ): void {
   if (deps.addToChat?.(request)) {
     deps.onContext?.(request.text);
     onClose?.();
     return;
   }
-  explainInPopup(deps, request, anchor, onClose);
+  explainInPopup(deps, request, anchor, onClose, trace);
 }
 
 /**
  * Sends `request.text` to the model and streams the answer into a popup next
  * to `anchor`, with Stop, Regenerate and Ask a question wired up. Used for
  * one clicked line and for a selected block (src/selection.ts). `onClose`
- * runs when the popup closes.
+ * runs when the popup closes. `trace` is the click's trace so far (PR 9.1);
+ * a new one starts when it is left out, and on Regenerate.
  */
 export function explainInPopup(
   deps: Pick<ClickHandlerDeps, 'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat'>,
   { text, subject, code }: ExplainRequest,
   anchor: PopupAnchor,
   onClose?: () => void,
+  firstTrace?: ClickTrace,
 ): void {
   deps.onContext?.(text);
   // Opening a popup closes the previous one, which stops its request. A
   // stopped or closed popup also ignores updates, so a late answer changes
   // nothing.
   let firstChunkMs: number | undefined;
+  let trace = firstTrace ?? createClickTrace();
   const report = (timing: Omit<ExplainTiming, 'elapsedMs' | 'firstChunkMs'>) =>
     deps.onTiming?.({ elapsedMs: popup.elapsedMs, ...timing, firstChunkMs });
   // The explanation the popup shows, for Ask a question.
@@ -270,6 +286,7 @@ export function explainInPopup(
     // The popup is back in the loading state when this runs.
     onRegenerate: () => {
       stream.stop();
+      trace = createClickTrace();
       stream = ask(true);
     },
     // The popup has closed when this runs, and shows the button only once an
@@ -290,6 +307,7 @@ export function explainInPopup(
     explanation = undefined;
     regenerated = fresh;
     let reply = '';
+    const requestTrace = trace;
     const current = () => latest === request && waiting();
     const request: ExplainStream = deps.explain(
       text,
@@ -299,23 +317,34 @@ export function explainInPopup(
         reply += chunk;
         popup.showPartial(reply);
       },
-      { fresh, ...(code && { code }) },
+      { fresh, ...(code && { code }), trace: requestTrace },
     );
     latest = request;
     request.result.then(
       (result) => {
         if (!current()) return;
+        requestTrace.addWorker(result.trace);
         if (result.status === 'done') {
           explanation = result.explanation;
           popup.showExplanation(result.explanation, result.model, result.cached);
-          popup.showTimings(result.timings);
-          if (result.prompt) popup.showPrompt(result.prompt);
         } else popup.showError(result.message, result.fix);
+        requestTrace.finish();
+        const tasks = requestTrace.tasks();
+        if (result.status === 'done') {
+          popup.showTrace({
+            tasks,
+            reply,
+            ...(result.timings && { timings: result.timings }),
+          });
+          if (result.prompt) popup.showPrompt(result.prompt);
+        }
         report({
           status: result.status,
           model: result.status === 'done' ? result.model : undefined,
           ...(result.status === 'done' && result.cached ? { cached: true } : {}),
           ...(result.status === 'done' && result.timings ? { timings: result.timings } : {}),
+          tasks,
+          ...(reply && { reply }),
         });
       },
       (error: unknown) => {

@@ -31,6 +31,12 @@
 // With Context size on automatic, the window is sized to the prompt and the
 // answer (PR 8.5, src/llm/numCtx.ts) instead of always the largest allowed,
 // and the window the model is already loaded with is kept when it fits.
+//
+// Every result carries the service worker's tasks for the request (PR 9.1):
+// reading the settings, looking up the context size and the loaded window
+// (only when those ran), building the prompt, the cache, waiting for the
+// model, and parsing the answer. The content script lines them up with its
+// own tasks for the popup's Details.
 
 import { FALLBACK_CONTEXT_TOKENS, promptBudget, type ContextSizer } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
@@ -42,6 +48,7 @@ import type { FileContext, PrInfo } from './explainPrompt';
 import { buildFittedExplainPrompt, type PromptReport } from './fitPrompt';
 import { parseExplanation, type Explanation } from './parseExplanation';
 import { PromptTooLargeError } from './tokenBudget';
+import type { TraceTask, WorkerTrace } from '../trace/types';
 
 export interface ExplainPayload {
   /** The context block from formatContext (src/lineContext.ts). */
@@ -111,8 +118,10 @@ export type ExplainResult =
       prompt?: PromptReport;
       /** Where the server's time went (PR 8.1). Left out for a cached answer. */
       timings?: LlmTimings;
+      /** The service worker's tasks (PR 9.1). */
+      trace?: WorkerTrace;
     }
-  | { status: 'failed'; message: string; fix: string };
+  | { status: 'failed'; message: string; fix: string; trace?: WorkerTrace };
 
 /** The message and fix for code too long for the model's context window. */
 export function tooLargeError(
@@ -177,6 +186,52 @@ async function loadedWindow(
   }
 }
 
+/**
+ * Records the service worker's tasks for one request, timed with `now` from
+ * when the recorder was made.
+ */
+export function createTaskRecorder(now: () => number) {
+  const origin = now();
+  const tasks: TraceTask[] = [];
+  const add = (key: string, label: string, start: number, extra: Partial<TraceTask> = {}) => {
+    tasks.push({
+      key,
+      label,
+      source: 'worker',
+      startMs: start - origin,
+      durationMs: Math.max(0, now() - start),
+      ...extra,
+    });
+  };
+  return {
+    now,
+    /** Records a task that started at `start` (from `now`) and ends now. */
+    add,
+    /**
+     * Runs `work` as a task. A task that throws is recorded as failed. When
+     * `keep` returns false the task is not recorded (it did nothing worth
+     * showing, such as a lookup answered from memory).
+     */
+    async time<T>(
+      key: string,
+      label: string,
+      work: () => T | Promise<T>,
+      keep: () => boolean = () => true,
+    ): Promise<T> {
+      const start = now();
+      try {
+        const value = await work();
+        if (keep()) add(key, label, start);
+        return value;
+      } catch (error) {
+        add(key, label, start, { status: 'failed' });
+        throw error;
+      }
+    },
+    trace: (): WorkerTrace => ({ tasks: [...tasks], totalMs: Math.max(0, now() - origin) }),
+  };
+}
+
 export function createExplainHandler(deps: ExplainDeps) {
   return async (
     payload: ExplainPayload,
@@ -185,11 +240,23 @@ export function createExplainHandler(deps: ExplainDeps) {
     if (typeof payload?.context !== 'string' || !payload.context.trim()) {
       throw new Error('explain needs a non-empty context');
     }
-    const settings = await deps.getSettings();
     const now = deps.now ?? Date.now;
+    const tasks = createTaskRecorder(now);
+    const settings = await tasks.time('settings', 'Read settings', () => deps.getSettings());
     const { cache } = deps;
-    const contextTokens = await (deps.contextTokens ?? settingsContextTokens)(settings, signal);
+    // Recorded only when the server was asked, not when the size was known.
+    let lookedUp = false;
+    const contextTokens = await tasks.time(
+      'context-size',
+      'Look up context size',
+      () =>
+        (deps.contextTokens ?? settingsContextTokens)(settings, signal, () => {
+          lookedUp = true;
+        }),
+      () => lookedUp,
+    );
     const budget = promptBudget(contextTokens, settings.maxResponseTokens);
+    const fitStart = now();
     let fitted;
     try {
       fitted = buildFittedExplainPrompt(
@@ -200,9 +267,11 @@ export function createExplainHandler(deps: ExplainDeps) {
       );
     } catch (error) {
       if (!(error instanceof PromptTooLargeError)) throw error;
+      tasks.add('fit-prompt', 'Build the prompt', fitStart, { status: 'failed' });
       return {
         status: 'failed',
         ...tooLargeError(error, contextTokens, settings.maxResponseTokens),
+        trace: tasks.trace(),
       };
     }
     const { messages } = fitted;
@@ -240,8 +309,11 @@ export function createExplainHandler(deps: ExplainDeps) {
             messages,
           })
         : null;
+    tasks.add('fit-prompt', 'Build the prompt', fitStart);
     if (cache && key && payload.fresh !== true) {
-      const hit = await cache.get(key).catch(() => null);
+      const hit = await tasks.time('cache', 'Check the cache', () =>
+        cache.get(key).catch(() => null),
+      );
       if (hit) {
         const prompt = report(windowFor());
         return {
@@ -250,6 +322,7 @@ export function createExplainHandler(deps: ExplainDeps) {
           model: hit.model,
           cached: { elapsedMs: hit.elapsedMs, savedAt: hit.savedAt },
           ...(prompt && { prompt }),
+          trace: tasks.trace(),
         };
       }
     }
@@ -257,9 +330,25 @@ export function createExplainHandler(deps: ExplainDeps) {
     const numCtx =
       settings.contextTokens > 0
         ? contextTokens
-        : windowFor(await loadedWindow(client, settings.model, signal));
+        : windowFor(
+            settings.model
+              ? await tasks.time('loaded-window', 'Check loaded window', () =>
+                  loadedWindow(client, settings.model, signal),
+                )
+              : undefined,
+          );
     const prompt = report(numCtx);
     const startedAt = now();
+    let firstChunkAt: number | undefined;
+    let modelDone = false;
+    const modelTask = (status?: 'failed') => {
+      if (modelDone) return;
+      modelDone = true;
+      tasks.add('model', 'Wait for the model', startedAt, {
+        ...(firstChunkAt !== undefined && { firstChunkMs: firstChunkAt - startedAt }),
+        ...(status && { status }),
+      });
+    };
     try {
       const stream = client.chatStream(messages, {
         model: settings.model,
@@ -272,18 +361,23 @@ export function createExplainHandler(deps: ExplainDeps) {
       let content = '';
       let next = await stream.next();
       while (!next.done) {
+        if (next.value) firstChunkAt ??= now();
         content += next.value;
         onChunk?.(next.value);
         next = await stream.next();
       }
+      modelTask();
       const { model, timings, doneReason } = next.value;
       // "length" means the answer hit maxResponseTokens and stopped early.
-      const explanation = parseExplanation(content, { cutOff: doneReason === 'length' });
+      const explanation = await tasks.time('parse', 'Parse the answer', () =>
+        parseExplanation(content, { cutOff: doneReason === 'length' }),
+      );
       if (cache && key) {
         // A failed save only means the next click asks the model again.
-        await cache
-          .set(key, { explanation, model, elapsedMs: now() - startedAt, savedAt: now() })
-          .catch(() => {});
+        const elapsedMs = now() - startedAt;
+        await tasks.time('cache-save', 'Save to the cache', () =>
+          cache.set(key, { explanation, model, elapsedMs, savedAt: now() }).catch(() => {}),
+        );
       }
       return {
         status: 'done',
@@ -291,14 +385,16 @@ export function createExplainHandler(deps: ExplainDeps) {
         model,
         ...(prompt && { prompt }),
         ...(timings && { timings }),
+        trace: tasks.trace(),
       };
     } catch (error) {
+      modelTask('failed');
       const { message, fix } = describeLlmError(error, {
         url: settings.llmUrl,
         model: settings.model,
         platform: deps.platform,
       });
-      return { status: 'failed', message, fix };
+      return { status: 'failed', message, fix, trace: tasks.trace() };
     }
   };
 }

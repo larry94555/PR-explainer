@@ -57,6 +57,7 @@ describe('explain handler', () => {
       status: 'done',
       explanation: { what: 'A.', why: 'B.', concerns: 'C.' },
       model: 'qwen2.5-coder:7b',
+      trace: expect.any(Object),
     });
     expect(createClient).toHaveBeenCalledWith(SETTINGS);
     expect(chunks).toEqual(pieces);
@@ -212,6 +213,87 @@ describe('explain handler', () => {
     expect(client.chatStream).not.toHaveBeenCalled();
   });
 
+  describe('tasks for the click trace (PR 9.1)', () => {
+    /** A clock that moves 10 ms each time it is read, so every task has a length. */
+    const ticking = () => {
+      let time = 0;
+      return () => (time += 10);
+    };
+    const keys = (result: { trace?: { tasks: { key: string }[] } }) =>
+      result.trace!.tasks.map((t) => t.key);
+
+    it('returns its tasks in order, timed from the request, with the first piece of the reply marked', async () => {
+      const { client } = setup(streamOf(['## What it does\nA.', ' More.']));
+      const handler = createExplainHandler({
+        getSettings: async () => SETTINGS,
+        createClient: () => client,
+        platform: 'other',
+        now: ticking(),
+      });
+      const result = await handler({ context: SAMPLE_CONTEXT });
+      expect(keys(result)).toEqual(['settings', 'fit-prompt', 'loaded-window', 'model', 'parse']);
+      const tasks = result.trace!.tasks;
+      expect(tasks.every((t) => t.source === 'worker')).toBe(true);
+      expect(tasks.every((t) => t.durationMs > 0 && !t.status)).toBe(true);
+      // Each starts after the one before it ended.
+      for (let i = 1; i < tasks.length; i++) {
+        expect(tasks[i]!.startMs).toBeGreaterThanOrEqual(
+          tasks[i - 1]!.startMs + tasks[i - 1]!.durationMs,
+        );
+      }
+      const model = tasks.find((t) => t.key === 'model')!;
+      expect(model.label).toBe('Wait for the model');
+      expect(model.firstChunkMs).toBeGreaterThan(0);
+      expect(model.firstChunkMs).toBeLessThan(model.durationMs);
+      const last = tasks.at(-1)!;
+      expect(result.trace!.totalMs).toBeGreaterThanOrEqual(last.startMs + last.durationMs);
+    });
+
+    it('includes the context-size lookup only when it asked the server', async () => {
+      const { client } = setup(streamOf(['## What it does\nA.']));
+      let known = false;
+      const handler = createExplainHandler({
+        getSettings: async () => SETTINGS,
+        createClient: () => client,
+        platform: 'other',
+        contextTokens: async (_settings, _signal, onLookup) => {
+          if (!known) onLookup?.();
+          known = true;
+          return 4096;
+        },
+      });
+      expect(keys(await handler({ context: SAMPLE_CONTEXT }))).toContain('context-size');
+      expect(keys(await handler({ context: SAMPLE_CONTEXT }))).not.toContain('context-size');
+    });
+
+    it('leaves out the loaded-window check when Context size is set', async () => {
+      const { handler } = setup(streamOf(['## What it does\nA.']), {
+        ...SETTINGS,
+        contextTokens: 8192,
+      });
+      expect(keys(await handler({ context: SAMPLE_CONTEXT }))).toEqual([
+        'settings',
+        'fit-prompt',
+        'model',
+        'parse',
+      ]);
+    });
+
+    it('marks the model task failed when the model fails', async () => {
+      const { handler } = setup(streamOf([], new LlmError('connection', 'fetch failed')));
+      const result = await handler({ context: SAMPLE_CONTEXT });
+      expect(result.status).toBe('failed');
+      expect(result.trace!.tasks.at(-1)).toMatchObject({ key: 'model', status: 'failed' });
+    });
+
+    it('marks building the prompt failed when the code is too long', async () => {
+      const { handler } = setup(streamOf([]), { ...SETTINGS, contextTokens: 600 });
+      const result = await handler({ context: 'x '.repeat(5000) });
+      expect(result.status).toBe('failed');
+      expect(result.trace!.tasks.at(-1)).toMatchObject({ key: 'fit-prompt', status: 'failed' });
+    });
+  });
+
   describe('context budget (PR 6.2)', () => {
     const DONE = ['## What it does\nA.'];
     const longContext = [
@@ -241,7 +323,11 @@ describe('explain handler', () => {
         contextTokens,
       });
       const result = await handler({ context: SAMPLE_CONTEXT });
-      expect(contextTokens).toHaveBeenCalledWith({ ...SETTINGS, showPrompt: true }, undefined);
+      expect(contextTokens).toHaveBeenCalledWith(
+        { ...SETTINGS, showPrompt: true },
+        undefined,
+        expect.any(Function),
+      );
       expect(vi.mocked(client.chatStream).mock.calls[0]![1].contextTokens).toBe(2048);
       expect(result.status === 'done' && result.prompt).toMatchObject({
         budget: 8192 - SETTINGS.maxResponseTokens - 32,
