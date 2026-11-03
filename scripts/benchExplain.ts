@@ -21,7 +21,7 @@ export { DEFAULT_SETTINGS };
 export function createBench(llmUrl: string, platform: Platform, overrides: Partial<Settings> = {}) {
   const client = new OllamaClient({ baseUrl: llmUrl });
   const createClient = () => client;
-  const { contextTokens: contextSizer, canThink } = createModelLookup(createClient);
+  const { contextTokens: contextSizer, thinking } = createModelLookup(createClient);
   const settingsFor = (model: string): Settings => ({
     ...DEFAULT_SETTINGS,
     ...overrides,
@@ -52,7 +52,7 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
         createClient,
         platform,
         contextTokens: contextSizer,
-        canThink,
+        thinking,
       });
       const startedAt = performance.now();
       let firstTokenMs: number | undefined;

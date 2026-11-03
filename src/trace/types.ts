@@ -75,8 +75,8 @@ export interface RoundTrip {
   bytesReceived: number;
   /** For /api/chat: the messages sent. */
   messages?: { role: string; content: string }[];
-  /** For /api/chat: the `think` sent (PR 9.5), when one was. */
-  think?: boolean;
+  /** For /api/chat: the `think` sent (PR 9.5), on, off or a level, when one was. */
+  think?: boolean | string;
   /** For /api/chat: the reply's text as the model wrote it, thinking included. */
   reply?: string;
   /** For /api/chat: thinking Ollama returned in its own field. */

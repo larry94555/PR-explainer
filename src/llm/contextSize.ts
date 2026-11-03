@@ -17,7 +17,13 @@
 
 import type { RoundTripLog } from '../net/roundTrips';
 import type { Settings } from '../settings';
-import { canThink, type LlmClient, type ModelContext } from './types';
+import {
+  thinkingSupport,
+  type LlmClient,
+  type ModelContext,
+  type ThinkingSupport,
+  type ThinkValue,
+} from './types';
 
 /**
  * The most an automatic size uses. Bigger windows cost memory and time on a
@@ -45,8 +51,9 @@ export type ContextSizer = (
 ) => Promise<number>;
 
 /**
- * Whether the model in `settings` can think (PR 9.5): true or false when the
- * server says, undefined when it does not (an older Ollama) or could not be
+ * Whether the model in `settings` can think, and which `think` values it
+ * accepts (PR 9.5, see thinkingSupport): null when it cannot think,
+ * undefined when the server does not say (an older Ollama) or could not be
  * asked. Takes the same arguments as ContextSizer.
  */
 export type ThinkingCheck = (
@@ -54,11 +61,11 @@ export type ThinkingCheck = (
   signal?: AbortSignal,
   onLookup?: () => void,
   roundTrips?: RoundTripLog,
-) => Promise<boolean | undefined>;
+) => Promise<ThinkingSupport | null | undefined>;
 
 export interface ModelLookup {
   contextTokens: ContextSizer;
-  canThink: ThinkingCheck;
+  thinking: ThinkingCheck;
 }
 
 /** The context sizer and thinking check, sharing one /api/show lookup per server and model. */
@@ -101,10 +108,10 @@ export function createModelLookup(
         return FALLBACK_CONTEXT_TOKENS;
       }
     },
-    canThink: async (settings, signal, onLookup, roundTrips) => {
+    thinking: async (settings, signal, onLookup, roundTrips) => {
       if (!settings.model) return undefined;
       try {
-        return canThink(await details(settings, signal, onLookup, roundTrips));
+        return thinkingSupport(await details(settings, signal, onLookup, roundTrips));
       } catch {
         // Not knowing only means `think` is not sent; the request goes ahead.
         return undefined;
@@ -119,18 +126,39 @@ export function createContextSizer(
   return createModelLookup(createClient).contextTokens;
 }
 
+/** Named thinking levels, least first, as Ollama names them. */
+const THINK_LEVELS = ['low', 'medium', 'high', 'max'];
+
 /**
- * The `think` option for a request (PR 9.5): for a model that can think,
+ * The `think` option for a request (PR 9.5), for a model that can think:
  * false (answer directly) unless the Let the model think setting is on, in
- * which case true, so the thinking comes back in its own field. Left out for
- * any other model, or when it is not known, so an older Ollama or a model
- * without thinking gets the request it always did.
+ * which case true, so the thinking comes back in its own field.
+ *
+ * When the server says which values the model accepts, only those are sent.
+ * A model that cannot turn thinking off (such as gpt-oss, which takes only
+ * "low", "medium" or "high") is sent its lowest level instead of false, and
+ * nothing (its own default) instead of true when it does not accept true.
+ * When the server does not say, true and false are sent, which most
+ * reasoning models accept.
+ *
+ * Left out for any other model, or when it is not known, so an older Ollama
+ * or a model without thinking gets the request it always did.
  */
 export function thinkOption(
-  modelCanThink: boolean | undefined,
+  support: ThinkingSupport | null | undefined,
   letModelThink: boolean,
-): boolean | undefined {
-  return modelCanThink === true ? letModelThink : undefined;
+): ThinkValue | undefined {
+  if (!support) return undefined;
+  const { values } = support;
+  if (!values) return letModelThink;
+  if (letModelThink) return values.includes(true) ? true : undefined;
+  if (values.includes(false)) return false;
+  const levels = values.filter((v): v is string => typeof v === 'string');
+  const rank = (level: string) => {
+    const at = THINK_LEVELS.indexOf(level);
+    return at === -1 ? THINK_LEVELS.length : at;
+  };
+  return levels.sort((a, b) => rank(a) - rank(b))[0];
 }
 
 /** The tokens a prompt may use in a `contextTokens` window with room for the reply. */

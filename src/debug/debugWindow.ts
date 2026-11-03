@@ -99,6 +99,13 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** The debug window's Thinking fact for the `think` sent (PR 9.5). */
+export function thinkingFact(think: boolean | string): string {
+  if (think === true) return 'on ("think": true)';
+  if (think === false) return 'off ("think": false)';
+  return `${think} ("think": "${think}")`;
+}
+
 /**
  * The reply's thinking and its answer. Thinking Ollama returned in its own
  * field wins; otherwise a `<think>` section at the start of the reply (still
@@ -529,10 +536,7 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
         ['Received', `${formatBytes(trip.bytesReceived)}${row.running ? ' so far' : ''}`],
         // Whether a reasoning model was asked to think (PR 9.5).
         ...(trip.think !== undefined
-          ? ([['Thinking', trip.think ? 'on ("think": true)' : 'off ("think": false)']] as [
-              string,
-              string,
-            ][])
+          ? ([['Thinking', thinkingFact(trip.think)]] as [string, string][])
           : []),
         ...(trip.error ? ([['Error', trip.error]] as [string, string][]) : []),
       ]),

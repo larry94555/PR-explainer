@@ -195,10 +195,11 @@ export interface ExplainDeps {
    */
   contextTokens?: ContextSizer;
   /**
-   * Whether the model can think (PR 9.5), from the same lookup as
+   * Whether the model can think and which `think` values it accepts
+   * (PR 9.5), from the same lookup as
    * `contextTokens`. Without it, `think` is never sent.
    */
-  canThink?: ThinkingCheck;
+  thinking?: ThinkingCheck;
   /** The round trips of warm-ups still loading the model (src/llm/warmup.ts). */
   warmupRoundTrips?: () => RoundTripLog[];
   /** Gets each round trip as it starts, runs and ends, for the debug log (PR 9.3, 9.4). */
@@ -400,12 +401,12 @@ export function createExplainHandler(deps: ExplainDeps) {
     // Usually known from the context size lookup, so this costs no round trip.
     let thinkLookedUp = false;
     const think = thinkOption(
-      deps.canThink
+      deps.thinking
         ? await tasks.time(
             'can-think',
             'Check if the model thinks',
             () =>
-              deps.canThink!(
+              deps.thinking!(
                 settings,
                 signal,
                 () => {

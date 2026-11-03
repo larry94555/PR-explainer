@@ -518,6 +518,7 @@ describe('explain handler', () => {
       capabilities: string[] | undefined,
       settings: Settings = REASONING,
       end: Partial<ChatStreamEnd> = {},
+      thinkValues?: (boolean | string)[],
     ) {
       const client: LlmClient = {
         listModels: vi.fn(),
@@ -528,6 +529,7 @@ describe('explain handler', () => {
         modelContext: vi.fn(async () => ({
           maxTokens: 131072,
           ...(capabilities && { capabilities }),
+          ...(thinkValues && { thinkValues }),
         })),
         chat: vi.fn(),
         chatStream: vi.fn(async function* () {
@@ -535,13 +537,13 @@ describe('explain handler', () => {
           return { model: settings.model, doneReason: 'stop', ...end };
         }),
       };
-      const { contextTokens, canThink } = createModelLookup(() => client);
+      const { contextTokens, thinking } = createModelLookup(() => client);
       const handler = createExplainHandler({
         getSettings: async () => settings,
         createClient: () => client,
         platform: 'windows',
         contextTokens,
-        canThink,
+        thinking,
       });
       const options = () =>
         (vi.mocked(client.chatStream).mock.calls[0] as [unknown, ChatOptions])[1];
@@ -581,6 +583,22 @@ describe('explain handler', () => {
         await handler({ context: SAMPLE_CONTEXT });
         expect(options()).not.toHaveProperty('think');
       }
+    });
+
+    it('sends only the think values the model takes (PR 9.5 review)', async () => {
+      // A model that says it takes true and false.
+      const toggle = thinkingSetup(['thinking'], REASONING, {}, [true, false]);
+      await toggle.handler({ context: SAMPLE_CONTEXT });
+      expect(toggle.options().think).toBe(false);
+      // A model such as gpt-oss that only takes levels: its lowest level when
+      // thinking is off, and its own default when it is on.
+      const levels = ['low', 'medium', 'high'];
+      const off = thinkingSetup(['thinking'], REASONING, {}, levels);
+      await off.handler({ context: SAMPLE_CONTEXT });
+      expect(off.options().think).toBe('low');
+      const on = thinkingSetup(['thinking'], { ...REASONING, letModelThink: true }, {}, levels);
+      await on.handler({ context: SAMPLE_CONTEXT });
+      expect(on.options()).not.toHaveProperty('think');
     });
 
     it('checks the model once, as its own task, when Context size is set', async () => {

@@ -35,6 +35,7 @@ import {
   type ModelContext,
   type ModelInfo,
   type RunningModel,
+  type ThinkValue,
 } from './types';
 import { createLlmFetch, type FetchLike } from '../net/llmFetch';
 import type { RoundTripLog } from '../net/roundTrips';
@@ -137,9 +138,19 @@ export class OllamaClient implements LlmClient {
     const numCtx = typeof parameters === 'string' && /^\s*num_ctx\s+(\d+)\s*$/m.exec(parameters);
     if (numCtx && isPositiveInteger(Number(numCtx[1]))) result.configuredTokens = Number(numCtx[1]);
     // capabilities lists what the model can do, such as ["completion", "thinking"] (PR 9.5).
-    const { capabilities } = body as { capabilities?: unknown };
+    const { capabilities, thinking } = body as { capabilities?: unknown; thinking?: unknown };
     if (Array.isArray(capabilities)) {
       result.capabilities = capabilities.filter((c): c is string => typeof c === 'string');
+    }
+    // A newer Ollama also says which `think` values the model accepts, as
+    // {"values": [false, true], "default": true}, or levels such as
+    // ["low", "medium", "high"] for a model that cannot turn thinking off.
+    const values = (thinking as { values?: unknown } | null | undefined)?.values;
+    if (Array.isArray(values)) {
+      const valid = values.filter(
+        (v): v is ThinkValue => typeof v === 'boolean' || (typeof v === 'string' && v !== ''),
+      );
+      if (valid.length) result.thinkValues = valid;
     }
     return result;
   }

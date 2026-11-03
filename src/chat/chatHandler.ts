@@ -45,8 +45,8 @@ export interface ChatDeps {
    * explanations use, so switching between them does not reload the model.
    */
   contextTokens?: ContextSizer;
-  /** Whether the model can think (PR 9.5). Without it, `think` is never sent. */
-  canThink?: ThinkingCheck;
+  /** Whether the model can think, and how (PR 9.5). Without it, `think` is never sent. */
+  thinking?: ThinkingCheck;
   /** Gets each round trip as it starts, runs and ends, for the debug log (PR 9.3, 9.4). */
   onRoundTrip?: RoundTripSink;
 }
@@ -82,7 +82,7 @@ export function createChatHandler(deps: ChatDeps) {
     const roundTrips = createRoundTripLog('chat', Date.now, { onUpdate: deps.onRoundTrip });
     const contextTokens = await deps.contextTokens?.(settings, signal, undefined, roundTrips);
     const think = thinkOption(
-      await deps.canThink?.(settings, signal, undefined, roundTrips),
+      await deps.thinking?.(settings, signal, undefined, roundTrips),
       settings.letModelThink,
     );
     try {

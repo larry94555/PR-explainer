@@ -106,7 +106,7 @@ describe('round trip log (PR 9.2)', () => {
 
   it('keeps the think sent with a chat request (PR 9.5)', async () => {
     const log = createRoundTripLog('click');
-    for (const think of [false, true, undefined]) {
+    for (const think of [false, true, 'low', undefined]) {
       const body = JSON.stringify({
         model: 'm',
         messages: [],
@@ -119,7 +119,7 @@ describe('round trip log (PR 9.2)', () => {
       );
       await response.text();
     }
-    expect(log.list().map((t) => t.think)).toEqual([false, true, undefined]);
+    expect(log.list().map((t) => t.think)).toEqual([false, true, 'low', undefined]);
   });
 
   it('keeps no messages or reply for other endpoints', async () => {

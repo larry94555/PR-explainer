@@ -116,11 +116,11 @@ function messagesOf(body: RequestInit['body']): RoundTrip['messages'] {
 }
 
 /** The `think` field of a /api/chat body (PR 9.5), or undefined when it has none. */
-function thinkOf(body: RequestInit['body']): boolean | undefined {
+function thinkOf(body: RequestInit['body']): boolean | string | undefined {
   if (typeof body !== 'string') return undefined;
   try {
     const { think } = JSON.parse(body) as { think?: unknown };
-    return typeof think === 'boolean' ? think : undefined;
+    return typeof think === 'boolean' || typeof think === 'string' ? think : undefined;
   } catch {
     return undefined;
   }

@@ -25,13 +25,14 @@ export interface ChatOptions {
    */
   keepAliveMinutes?: number;
   /**
-   * Whether a reasoning model thinks before answering (PR 9.5), sent as
-   * Ollama's `think`. false makes it answer directly; true makes it return
-   * the thinking in its own field (ChatReply.thinking, ChatStreamEnd.thinking)
-   * instead of inside the answer. Left out for a model that cannot think:
-   * Ollama refuses `think: true` for one, and an older Ollama ignores it.
+   * Whether and how much a reasoning model thinks before answering (PR 9.5),
+   * sent as Ollama's `think`: false makes it answer directly; true, or a
+   * level such as "low", makes it return the thinking in its own field
+   * (ChatReply.thinking, ChatStreamEnd.thinking) instead of inside the
+   * answer. Left out for a model that cannot think: Ollama refuses a think
+   * for one, and an older Ollama ignores it.
    */
-  think?: boolean;
+  think?: ThinkValue;
   /** Cancels the request. The promise then rejects with kind "aborted". */
   signal?: AbortSignal;
 }
@@ -113,14 +114,35 @@ export interface ModelContext {
    * (PR 9.5). Left out when the server does not say (an older Ollama).
    */
   capabilities?: string[];
+  /**
+   * The `think` values the model accepts, from /api/show's `thinking`
+   * descriptor (PR 9.5), such as [false, true] or ["low", "medium", "high"]
+   * for a model that cannot turn thinking off. Left out when the server does
+   * not say (an older Ollama), in which case most reasoning models accept
+   * true and false.
+   */
+  thinkValues?: ThinkValue[];
 }
 
+/** Ollama's `think`: on or off, or a level such as "low" (PR 9.5). */
+export type ThinkValue = boolean | string;
+
 /**
- * Whether `model` is a reasoning model (PR 9.5): true or false when the
- * server lists its capabilities, undefined when it does not say.
+ * What the server says about a model's thinking (PR 9.5): an object when it
+ * is a reasoning model (with the `think` values it accepts, when known),
+ * null when it is not, and undefined when the server does not list
+ * capabilities.
  */
-export function canThink(model: Pick<ModelContext, 'capabilities'>): boolean | undefined {
-  return model.capabilities ? model.capabilities.includes('thinking') : undefined;
+export interface ThinkingSupport {
+  values?: ThinkValue[];
+}
+
+export function thinkingSupport(
+  model: Pick<ModelContext, 'capabilities' | 'thinkValues'>,
+): ThinkingSupport | null | undefined {
+  if (!model.capabilities) return undefined;
+  if (!model.capabilities.includes('thinking')) return null;
+  return model.thinkValues ? { values: model.thinkValues } : {};
 }
 
 /** Whether `listed` (a name from /api/ps) is `model`; "llama3" is listed as "llama3:latest". */

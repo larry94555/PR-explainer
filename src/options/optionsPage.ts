@@ -28,7 +28,8 @@ import {
   speedTestModels,
   type SpeedResult,
 } from '../llm/speedTest';
-import { canThink, isSameModel, type LlmClient } from '../llm/types';
+import { thinkOption } from '../llm/contextSize';
+import { isSameModel, thinkingSupport, type LlmClient, type ThinkingSupport } from '../llm/types';
 import {
   DEFAULT_SETTINGS,
   SettingsValidationError,
@@ -311,7 +312,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
 
   // Whether each model can think, by server and model, so ticking the box
   // does not ask again. Only answers the server gave are kept.
-  const thinkingKnown = new Map<string, boolean | undefined>();
+  const thinkingKnown = new Map<string, ThinkingSupport | null | undefined>();
   let thinkingCount = 0;
   async function checkThinking(): Promise<void> {
     const thisCheck = ++thinkingCount;
@@ -322,11 +323,11 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       return;
     }
     const key = `${values.llmUrl} ${model}`;
-    let thinks: boolean | undefined;
+    let thinks: ThinkingSupport | null | undefined;
     if (thinkingKnown.has(key)) thinks = thinkingKnown.get(key);
     else {
       try {
-        thinks = canThink(await deps.createClient(values).modelContext(model));
+        thinks = thinkingSupport(await deps.createClient(values).modelContext(model));
         thinkingKnown.set(key, thinks);
       } catch {
         // Test connection and the model list already explain a server that is down.
@@ -549,20 +550,26 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
 
 /**
  * The line under the model (PR 9.5): whether `model` is a reasoning model
- * (`thinks`, undefined when Ollama does not say) and whether it will think.
+ * (`thinks`, null when it is not and undefined when Ollama does not say) and
+ * whether it will think, from the `think` that requests will send.
  */
 export function thinkingText(
   model: string,
-  thinks: boolean | undefined,
+  thinks: ThinkingSupport | null | undefined,
   letThink: boolean,
 ): string {
   if (thinks === undefined) {
     return `Ollama does not say whether ${model} is a reasoning model. Update Ollama to 0.9 or later so thinking can be turned off.`;
   }
   if (!thinks) return `${model} is not a reasoning model, so it answers without thinking.`;
-  return letThink
-    ? `${model} is a reasoning model. Thinking is on, so answers take longer.`
-    : `${model} is a reasoning model. Thinking is off, so it answers sooner.`;
+  const think = thinkOption(thinks, letThink);
+  if (letThink) return `${model} is a reasoning model. Thinking is on, so answers take longer.`;
+  if (think === false)
+    return `${model} is a reasoning model. Thinking is off, so it answers sooner.`;
+  // Such as gpt-oss, which only takes "low", "medium" or "high" (PR 9.5).
+  return typeof think === 'string'
+    ? `${model} is a reasoning model that cannot turn thinking off, so it thinks as little as it can ("${think}").`
+    : `${model} is a reasoning model that cannot turn thinking off.`;
 }
 
 function cell(doc: Document, text: string, className?: string): HTMLTableCellElement {

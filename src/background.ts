@@ -66,7 +66,7 @@ void setupDebugMenu({
 
 // The model's context window, and whether it can think (PR 9.5), from one
 // lookup per model (src/llm/contextSize.ts).
-const { contextTokens, canThink } = createModelLookup(createLlmClient);
+const { contextTokens, thinking } = createModelLookup(createLlmClient);
 
 // Loads the model when a PR's diffs open, before the first click (PR 8.3).
 // It loads it with the window the first click will ask for (PR 8.5).
@@ -88,7 +88,7 @@ const explain = createExplainHandler({
   // same line again answers at once (src/explain/explainCache.ts).
   cache: createExplainCache(chrome.storage.session),
   contextTokens,
-  canThink,
+  thinking,
   // A click while the model is still loading lists the warm-up's round trips (PR 9.2).
   warmupRoundTrips: () => warmup.inFlight(),
   // Read when each request starts, so turning the setting on or off applies to the next one.
@@ -129,7 +129,7 @@ listenForChatPorts(
     createClient: createLlmClient,
     platform: detectPlatform(navigator.userAgent),
     contextTokens,
-    canThink,
+    thinking,
     // Read when each request starts, so turning the setting on or off applies to the next one.
     get onRoundTrip() {
       return roundTripSink();

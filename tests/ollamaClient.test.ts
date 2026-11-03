@@ -556,6 +556,32 @@ describe('thinking (PR 9.5)', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("reads the think values from /api/show's thinking descriptor, when it has one", async () => {
+    const show = (thinking: unknown) =>
+      new OllamaClient({
+        baseUrl: BASE,
+        fetch: fakeFetch(() => jsonResponse({ capabilities: ['thinking'], thinking })),
+      }).modelContext('m');
+    // A model that can turn thinking off.
+    expect(await show({ values: [false, true], default: true })).toEqual({
+      capabilities: ['thinking'],
+      thinkValues: [false, true],
+    });
+    // A model such as gpt-oss that only takes levels.
+    expect(
+      (await show({ values: ['low', 'medium', 'high'], default: 'medium' })).thinkValues,
+    ).toEqual(['low', 'medium', 'high']);
+    // Values that are not true, false or a name are dropped; none left is unknown.
+    expect((await show({ values: ['low', '', 3, null] })).thinkValues).toEqual(['low']);
+    expect(await show({ values: [7] })).not.toHaveProperty('thinkValues');
+    // An older Ollama sends no descriptor.
+    expect(await show(undefined)).not.toHaveProperty('thinkValues');
+  });
+
+  it('sends a level as think', () => {
+    expect(buildChatBody(messages, { model: 'm', think: 'low' })).toMatchObject({ think: 'low' });
+  });
+
   it('sends think only when it is given', () => {
     expect(buildChatBody(messages, { model: 'm', think: false })).toMatchObject({ think: false });
     expect(buildChatBody(messages, { model: 'm', think: true })).toMatchObject({ think: true });

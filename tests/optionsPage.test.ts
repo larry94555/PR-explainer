@@ -116,6 +116,7 @@ describe('options page', () => {
     const capabilities: Record<string, string[] | undefined> = {
       'deepseek-r1:7b': ['completion', 'thinking'],
       'qwen2.5-coder:7b': ['completion', 'insert'],
+      'gpt-oss:20b': ['completion', 'thinking'],
       'old:1b': undefined,
     };
     const client = () =>
@@ -123,7 +124,10 @@ describe('options page', () => {
         listModels: vi.fn(async () => Object.keys(capabilities).map((name) => ({ name }))),
         modelContext: vi.fn(async (model: string) => {
           const found = capabilities[model];
-          return found ? { capabilities: found } : {};
+          if (!found) return {};
+          return model.startsWith('gpt-oss')
+            ? { capabilities: found, thinkValues: ['low', 'medium', 'high'] }
+            : { capabilities: found };
         }),
       });
     const pick = async (model: string) => {
@@ -145,6 +149,14 @@ describe('options page', () => {
       await vi.waitFor(() => expect(text('thinking-status')).toContain('Thinking is on'));
       // Ticking the box does not ask the server again.
       expect(llm.modelContext).toHaveBeenCalledTimes(2);
+    });
+
+    it('says when a reasoning model cannot turn thinking off', async () => {
+      await initOptionsPage(document, fakeDeps(client()));
+      await pick('gpt-oss:20b');
+      expect(text('thinking-status')).toBe(
+        'gpt-oss:20b is a reasoning model that cannot turn thinking off, so it thinks as little as it can ("low").',
+      );
     });
 
     it('says when a model is not a reasoning model, or Ollama does not say', async () => {

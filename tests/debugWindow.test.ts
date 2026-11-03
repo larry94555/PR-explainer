@@ -290,6 +290,7 @@ describe('debug window (PR 9.4)', () => {
       entries: [
         entry('c1', T0, { think: false, reply: '**What it does** Retries.' }),
         entry('c2', T0 + 1_000, { think: true, thinking: 'Short.', reply: 'Retries.' }),
+        entry('c3', T0 + 2_000, { think: 'low', thinking: 'Brief.', reply: 'Retries.' }),
       ],
       running: [],
     });
@@ -301,7 +302,8 @@ describe('debug window (PR 9.4)', () => {
       );
     };
     // Newest first.
-    const [on, off] = w.all('.row-button') as HTMLButtonElement[];
+    const [low, on, off] = w.all('.row-button') as HTMLButtonElement[];
+    expect(factsOf(low!)).toContain('Thinking: low ("think": "low")');
     expect(factsOf(off!)).toContain('Thinking: off ("think": false)');
     expect(factsOf(on!)).toContain('Thinking: on ("think": true)');
     const offDetail = document.getElementById(off!.getAttribute('aria-controls')!)!;
