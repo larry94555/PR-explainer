@@ -1,9 +1,11 @@
 // The settings page: the Ollama URL, a model dropdown filled from the server,
 // temperature, max response length, context size, how long to keep the model
-// loaded (PR 8.3), Explain on hover (PR 8.7), the Debug section (Show prompt,
-// PR 6.2, and Debug window, PR 9.3), Save, and Test connection. The Speed section (PR 8.6) says whether the picked model runs on
-// the GPU, and its Speed test times each coding model and lets the user pick
-// the fastest (src/llm/speedTest.ts).
+// loaded (PR 8.3), Explain on hover (PR 8.7), Let the model think (PR 9.5),
+// the Debug section (Show prompt, PR 6.2, and Debug window, PR 9.3), Save, and
+// Test connection. Under the model, a line says whether it is a reasoning
+// model and whether its thinking is on (PR 9.5). The Speed section (PR 8.6)
+// says whether the picked model runs on the GPU, and its Speed test times each
+// coding model and lets the user pick the fastest (src/llm/speedTest.ts).
 //
 // All page logic lives here and takes its dependencies as parameters, so the
 // tests can run it against options.html in jsdom with fakes. main.ts wires in
@@ -26,7 +28,8 @@ import {
   speedTestModels,
   type SpeedResult,
 } from '../llm/speedTest';
-import { isSameModel, type LlmClient } from '../llm/types';
+import { thinkOption } from '../llm/contextSize';
+import { isSameModel, thinkingSupport, type LlmClient, type ThinkingSupport } from '../llm/types';
 import {
   DEFAULT_SETTINGS,
   SettingsValidationError,
@@ -58,6 +61,8 @@ export interface OptionsPage {
   testConnection(): Promise<void>;
   /** Shows whether the picked model runs on the GPU (PR 8.6). */
   checkGpu(): Promise<void>;
+  /** Shows whether the picked model is a reasoning model and its thinking is on (PR 9.5). */
+  checkThinking(): Promise<void>;
   /** Runs the Speed test (PR 8.6). Resolves when it finishes or is stopped. */
   speedTest(): Promise<void>;
   /** Stops a running Speed test. */
@@ -82,6 +87,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const contextInput = el<HTMLInputElement>(doc, 'contextTokens');
   const keepAliveInput = el<HTMLInputElement>(doc, 'keepAliveMinutes');
   const hoverInput = el<HTMLInputElement>(doc, 'explainOnHover');
+  const thinkInput = el<HTMLInputElement>(doc, 'letModelThink');
+  const thinkingLine = el(doc, 'thinking-status');
   const showPromptInput = el<HTMLInputElement>(doc, 'showPrompt');
   const debugWindowInput = el<HTMLInputElement>(doc, 'debugWindow');
   const refreshButton = el<HTMLButtonElement>(doc, 'refresh-models');
@@ -108,6 +115,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     contextInput.value = settings.contextTokens > 0 ? String(settings.contextTokens) : '';
     keepAliveInput.value = String(settings.keepAliveMinutes);
     hoverInput.checked = settings.explainOnHover;
+    thinkInput.checked = settings.letModelThink;
     showPromptInput.checked = settings.showPrompt;
     debugWindowInput.checked = settings.debugWindow;
   }
@@ -126,6 +134,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       contextTokens: contextTokens === '' ? 0 : Number(contextTokens),
       keepAliveMinutes: keepAlive === '' ? NaN : Number(keepAlive),
       explainOnHover: hoverInput.checked,
+      letModelThink: thinkInput.checked,
       showPrompt: showPromptInput.checked,
       debugWindow: debugWindowInput.checked,
     };
@@ -202,7 +211,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
         models.length === 0
           ? 'No models installed. Run `ollama pull qwen2.5-coder:7b`, then click Refresh.'
           : `${models.length} model${models.length === 1 ? '' : 's'} found.`;
-      await checkGpu();
+      await Promise.all([checkGpu(), checkThinking()]);
     } catch (error) {
       if (thisRefresh !== refreshCount) return;
       showLlmError(modelsStatus, 'Could not load models.', error, { url: values.llmUrl });
@@ -301,6 +310,35 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     gpuLine.replaceChildren(text, ...(fix ? [fixLine] : []));
   }
 
+  // Whether each model can think, by server and model, so ticking the box
+  // does not ask again. Only answers the server gave are kept.
+  const thinkingKnown = new Map<string, ThinkingSupport | null | undefined>();
+  let thinkingCount = 0;
+  async function checkThinking(): Promise<void> {
+    const thisCheck = ++thinkingCount;
+    const values = validForm(['llmUrl']);
+    const model = modelSelect.value;
+    if (!values || !model) {
+      thinkingLine.replaceChildren();
+      return;
+    }
+    const key = `${values.llmUrl} ${model}`;
+    let thinks: ThinkingSupport | null | undefined;
+    if (thinkingKnown.has(key)) thinks = thinkingKnown.get(key);
+    else {
+      try {
+        thinks = thinkingSupport(await deps.createClient(values).modelContext(model));
+        thinkingKnown.set(key, thinks);
+      } catch {
+        // Test connection and the model list already explain a server that is down.
+        if (thisCheck === thinkingCount) thinkingLine.replaceChildren();
+        return;
+      }
+    }
+    if (thisCheck !== thinkingCount) return;
+    thinkingLine.textContent = thinkingText(model, thinks, thinkInput.checked);
+  }
+
   let speedRun: AbortController | null = null;
   let lastResults: SpeedResult[] = [];
 
@@ -379,7 +417,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
         // The first click loads it instead.
       }
     }
-    await checkGpu();
+    await Promise.all([checkGpu(), checkThinking()]);
   }
 
   function summary(results: readonly SpeedResult[], stopped: boolean): string {
@@ -479,7 +517,9 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   modelSelect.addEventListener('change', () => {
     showResults(lastResults);
     void checkGpu();
+    void checkThinking();
   });
+  thinkInput.addEventListener('change', () => void checkThinking());
   speedButton.addEventListener('click', () => void speedTest());
   stopButton.addEventListener('click', stopSpeedTest);
   form.addEventListener('submit', (event) => {
@@ -497,7 +537,39 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   fillForm(settings);
   await refreshModels();
 
-  return { refreshModels, save, testConnection, checkGpu, speedTest, stopSpeedTest };
+  return {
+    refreshModels,
+    save,
+    testConnection,
+    checkGpu,
+    checkThinking,
+    speedTest,
+    stopSpeedTest,
+  };
+}
+
+/**
+ * The line under the model (PR 9.5): whether `model` is a reasoning model
+ * (`thinks`, null when it is not and undefined when Ollama does not say) and
+ * whether it will think, from the `think` that requests will send.
+ */
+export function thinkingText(
+  model: string,
+  thinks: ThinkingSupport | null | undefined,
+  letThink: boolean,
+): string {
+  if (thinks === undefined) {
+    return `Ollama does not say whether ${model} is a reasoning model. Update Ollama to 0.9 or later so thinking can be turned off.`;
+  }
+  if (!thinks) return `${model} is not a reasoning model, so it answers without thinking.`;
+  const think = thinkOption(thinks, letThink);
+  if (letThink) return `${model} is a reasoning model. Thinking is on, so answers take longer.`;
+  if (think === false)
+    return `${model} is a reasoning model. Thinking is off, so it answers sooner.`;
+  // Such as gpt-oss, which only takes "low", "medium" or "high" (PR 9.5).
+  return typeof think === 'string'
+    ? `${model} is a reasoning model that cannot turn thinking off, so it thinks as little as it can ("${think}").`
+    : `${model} is a reasoning model that cannot turn thinking off.`;
 }
 
 function cell(doc: Document, text: string, className?: string): HTMLTableCellElement {

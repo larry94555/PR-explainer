@@ -65,6 +65,12 @@ describe('explainCacheKey', () => {
     for (const other of others) expect(await explainCacheKey(other)).not.toBe(key);
   });
 
+  it('changes when Let the model think is on, and stays as before when it is off (PR 9.5)', async () => {
+    const key = await explainCacheKey(parts);
+    expect(await explainCacheKey({ ...parts, letModelThink: false })).toBe(key);
+    expect(await explainCacheKey({ ...parts, letModelThink: true })).not.toBe(key);
+  });
+
   it('does not mix up parts that run together', async () => {
     expect(await explainCacheKey({ ...parts, pr: 'a', model: 'bc' })).not.toBe(
       await explainCacheKey({ ...parts, pr: 'ab', model: 'c' }),

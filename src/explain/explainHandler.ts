@@ -43,8 +43,21 @@
 // the messages sent and the reply. A request made for Explain on hover is
 // marked so, and a warm-up still loading the model when the request came is
 // listed too, marked as the warm-up's. They are returned, never stored.
+//
+// A reasoning model is asked not to think (PR 9.5, `think: false`) unless the
+// Let the model think setting is on. Whether the model can think comes from
+// the same /api/show lookup as the context size, and is checked only when
+// the model will run. Thinking the server returns in its own field is never
+// part of the explanation; it comes back as `thinking`, for the Think row in
+// Details.
 
-import { FALLBACK_CONTEXT_TOKENS, promptBudget, type ContextSizer } from '../llm/contextSize';
+import {
+  FALLBACK_CONTEXT_TOKENS,
+  promptBudget,
+  thinkOption,
+  type ContextSizer,
+  type ThinkingCheck,
+} from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
 import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
 import { chooseNumCtx } from '../llm/numCtx';
@@ -129,6 +142,11 @@ export type ExplainResult =
       prompt?: PromptReport;
       /** Where the server's time went (PR 8.1). Left out for a cached answer. */
       timings?: LlmTimings;
+      /**
+       * Thinking the model returned in its own field (PR 9.5), never shown as
+       * the answer. Used to split Think from Write answer in Details.
+       */
+      thinking?: string;
       /** The service worker's tasks (PR 9.1). */
       trace?: WorkerTrace;
     }
@@ -176,6 +194,12 @@ export interface ExplainDeps {
    * the setting is used, or FALLBACK_CONTEXT_TOKENS when it is automatic.
    */
   contextTokens?: ContextSizer;
+  /**
+   * Whether the model can think and which `think` values it accepts
+   * (PR 9.5), from the same lookup as
+   * `contextTokens`. Without it, `think` is never sent.
+   */
+  thinking?: ThinkingCheck;
   /** The round trips of warm-ups still loading the model (src/llm/warmup.ts). */
   warmupRoundTrips?: () => RoundTripLog[];
   /** Gets each round trip as it starts, runs and ends, for the debug log (PR 9.3, 9.4). */
@@ -343,6 +367,7 @@ export function createExplainHandler(deps: ExplainDeps) {
             temperature: settings.temperature,
             maxResponseTokens: settings.maxResponseTokens,
             messages,
+            letModelThink: settings.letModelThink,
           })
         : null;
     tasks.add('fit-prompt', 'Build the prompt', fitStart);
@@ -373,6 +398,27 @@ export function createExplainHandler(deps: ExplainDeps) {
                 )
               : undefined,
           );
+    // Usually known from the context size lookup, so this costs no round trip.
+    let thinkLookedUp = false;
+    const think = thinkOption(
+      deps.thinking
+        ? await tasks.time(
+            'can-think',
+            'Check if the model thinks',
+            () =>
+              deps.thinking!(
+                settings,
+                signal,
+                () => {
+                  thinkLookedUp = true;
+                },
+                roundTrips,
+              ),
+            () => thinkLookedUp,
+          )
+        : undefined,
+      settings.letModelThink,
+    );
     const prompt = report(numCtx);
     const startedAt = now();
     let firstChunkAt: number | undefined;
@@ -392,6 +438,7 @@ export function createExplainHandler(deps: ExplainDeps) {
         maxResponseTokens: settings.maxResponseTokens,
         contextTokens: numCtx,
         keepAliveMinutes: settings.keepAliveMinutes,
+        ...(think !== undefined && { think }),
         signal,
       });
       let content = '';
@@ -403,7 +450,7 @@ export function createExplainHandler(deps: ExplainDeps) {
         next = await stream.next();
       }
       modelTask();
-      const { model, timings, doneReason } = next.value;
+      const { model, timings, doneReason, thinking } = next.value;
       // "length" means the answer hit maxResponseTokens and stopped early.
       const explanation = await tasks.time('parse', 'Parse the answer', () =>
         parseExplanation(content, { cutOff: doneReason === 'length' }),
@@ -421,6 +468,7 @@ export function createExplainHandler(deps: ExplainDeps) {
         model,
         ...(prompt && { prompt }),
         ...(timings && { timings }),
+        ...(thinking && { thinking }),
         trace: trace(),
       };
     } catch (error) {

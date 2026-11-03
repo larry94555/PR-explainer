@@ -51,6 +51,13 @@ describe('thinkShare', () => {
     expect(thinkShare('<think>ab</think>xx<THINK>cd</THINK>')).toBeCloseTo(34 / 36);
   });
 
+  it('counts thinking returned in its own field (PR 9.5)', () => {
+    expect(thinkShare('x'.repeat(30), 'y'.repeat(70))).toBeCloseTo(0.7);
+    expect(thinkShare('', 'all thinking')).toBe(1);
+    // Both kinds together, as a mixed reply would have them.
+    expect(thinkShare('<think>ab</think>xx', 'yyyy')).toBeCloseTo((4 + 17) / (19 + 4));
+  });
+
   it('is all thinking when the reply is cut off inside <think>', () => {
     expect(thinkShare('<think>still working out what the code')).toBe(1);
     expect(thinkShare('ab<think>cd')).toBeCloseTo(9 / 11);
@@ -134,6 +141,12 @@ describe('buildWaterfall', () => {
       detail: '240 tokens · 30.0 tokens/s',
     });
     expect(rows.some((r) => r.estimated)).toBe(false);
+  });
+
+  it('splits Think from Write answer by thinking in its own field (PR 9.5)', () => {
+    const { rows } = buildWaterfall(TASKS, COLD, 'x'.repeat(75), 'y'.repeat(25));
+    expect(rows.find((r) => r.key === 'think')).toMatchObject({ durationMs: 2_000 });
+    expect(rows.find((r) => r.key === 'write')).toMatchObject({ durationMs: 6_000 });
   });
 
   it('gives Write answer nothing when the reply was cut off inside <think>', () => {

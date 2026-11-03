@@ -252,7 +252,9 @@ describe('buildFittedExplainPrompt with the full file context (PR 6.3)', () => {
       checked++;
     }
     expect(checked).toBeGreaterThan(500);
-  });
+    // Tries every budget, which takes about 4 s alone and more on a busy CI
+    // runner, so the default 5 s limit is too tight.
+  }, 20_000);
 });
 
 function words(n: number): string {

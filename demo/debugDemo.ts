@@ -31,8 +31,8 @@ const USER =
   '     }\n' +
   '   }\n' +
   ' }';
+// A reasoning model is asked not to think (PR 9.5), so the reply is only the answer.
 const REPLY =
-  '<think>The line waits before the next try, doubling each time. Keep it short.</think>\n' +
   '**What it does** Waits 200 ms, then 400 ms, before trying the request again.\n\n' +
   '**Why it is needed** Ollama can fail the first request while it loads the model.\n\n' +
   '**Concerns** A real failure (a wrong URL) now takes 600 ms longer to report.';
@@ -97,7 +97,7 @@ const ENTRIES: DebugEntry[] = [
     trip({
       method: 'POST',
       endpoint: 'localhost:11434/api/show',
-      purpose: 'context size',
+      purpose: 'model details',
       cause: 'warmup',
       durationMs: 14,
       bytesSent: 28,
@@ -189,6 +189,7 @@ const ENTRIES: DebugEntry[] = [
     trip({
       endpoint: 'localhost:11434/api/chat',
       purpose: 'explanation',
+      think: false,
       durationMs: 2_480,
       bytesSent: 1_380,
       bytesReceived: 9_870,
@@ -215,6 +216,7 @@ const ENTRIES: DebugEntry[] = [
       endpoint: 'localhost:11434/api/chat',
       purpose: 'explanation',
       cause: 'hover',
+      think: false,
       durationMs: 2_150,
       bytesSent: 1_290,
       bytesReceived: 8_800,
@@ -242,13 +244,14 @@ const ENTRIES: DebugEntry[] = [
       endpoint: 'localhost:11434/api/chat',
       purpose: 'chat answer',
       cause: 'chat',
+      think: false,
       durationMs: 3_020,
       bytesSent: 2_100,
       bytesReceived: 7_400,
       messages: [
         { role: 'system', content: SYSTEM },
         { role: 'user', content: USER },
-        { role: 'assistant', content: REPLY.replace(/<think>[\s\S]*<\/think>\n/, '') },
+        { role: 'assistant', content: REPLY },
         { role: 'user', content: 'Why 200 ms and not 1 s?' },
       ],
       reply:
@@ -292,6 +295,7 @@ function liveClick(send: (m: DebugLogPortMessage) => void) {
     id: 'click-2:2',
     endpoint: 'localhost:11434/api/chat',
     purpose: 'explanation',
+    think: false,
     status: 'running',
     bytesSent: 1_350,
     messages: [

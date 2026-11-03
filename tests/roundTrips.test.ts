@@ -47,7 +47,7 @@ describe('round trip log (PR 9.2)', () => {
         target: 'ollama',
         method: 'POST',
         endpoint: 'localhost:11434/api/show',
-        purpose: 'context size',
+        purpose: 'model details',
         cause: 'click',
         startMs: 5,
         durationMs: 20,
@@ -102,6 +102,24 @@ describe('round trip log (PR 9.2)', () => {
       thinking: 'Hmm.',
       status: 'done',
     });
+  });
+
+  it('keeps the think sent with a chat request (PR 9.5)', async () => {
+    const log = createRoundTripLog('click');
+    for (const think of [false, true, 'low', undefined]) {
+      const body = JSON.stringify({
+        model: 'm',
+        messages: [],
+        ...(think !== undefined && { think }),
+      });
+      const response = await log.record(
+        URL_CHAT,
+        { method: 'POST', body },
+        async () => new Response('{"done":true}\n'),
+      );
+      await response.text();
+    }
+    expect(log.list().map((t) => t.think)).toEqual([false, true, 'low', undefined]);
   });
 
   it('keeps no messages or reply for other endpoints', async () => {
@@ -188,7 +206,7 @@ describe('round trip log (PR 9.2)', () => {
   });
 
   it('names why each endpoint is asked', () => {
-    expect(purposeOf('/api/show', 'click')).toBe('context size');
+    expect(purposeOf('/api/show', 'click')).toBe('model details');
     expect(purposeOf('/api/ps', 'click')).toBe('loaded window');
     expect(purposeOf('/api/ps', 'warmup')).toBe('is the model loaded');
     expect(purposeOf('/api/chat', 'click')).toBe('explanation');

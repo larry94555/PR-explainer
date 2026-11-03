@@ -271,7 +271,18 @@ const explainDeps: ClickHandlerDeps = {
       : undefined,
   // Every build logs how long each explanation took, to track the local
   // model's latency.
-  onTiming: ({ elapsedMs, status, model, firstChunkMs, cached, timings, tasks, reply, debug }) => {
+  onTiming: ({
+    elapsedMs,
+    status,
+    model,
+    firstChunkMs,
+    cached,
+    timings,
+    tasks,
+    reply,
+    thinking,
+    debug,
+  }) => {
     // The click's GitHub round trips and trace join the debug log (PR 9.3).
     // Sent only when the Debug window setting is on (PR 9.4).
     if (debug && tasks?.length && debugSetting.current()) {
@@ -285,7 +296,7 @@ const explainDeps: ClickHandlerDeps = {
     }
     const verb = { done: 'explained', failed: 'failed', stopped: 'stopped' }[status];
     // Every task, as the popup's Details shows it (PR 9.1).
-    const waterfall = tasks?.length ? buildWaterfall(tasks, timings, reply) : undefined;
+    const waterfall = tasks?.length ? buildWaterfall(tasks, timings, reply, thinking) : undefined;
     const details = [
       model,
       firstChunkMs === undefined ? '' : `first text after ${(firstChunkMs / 1000).toFixed(1)} s`,

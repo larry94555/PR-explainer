@@ -160,7 +160,7 @@ describe('debug window (PR 9.4)', () => {
           { cause: 'warmup' },
         ),
         entry('c1', T0 + 5_000, {
-          purpose: 'context size',
+          purpose: 'model details',
           endpoint: 'localhost:11434/api/show',
           durationMs: 20,
         }),
@@ -281,6 +281,36 @@ describe('debug window (PR 9.4)', () => {
     expect(w.all('.task .bar')[1]!.style.left).toBe(`${(60 / 1260) * 100}%`);
     button.click();
     expect(detail.hidden).toBe(true);
+  });
+
+  it('says whether the model was asked to think, and shows a reply with no thinking (PR 9.5)', () => {
+    const w = setup();
+    w.port().send({
+      type: 'snapshot',
+      entries: [
+        entry('c1', T0, { think: false, reply: '**What it does** Retries.' }),
+        entry('c2', T0 + 1_000, { think: true, thinking: 'Short.', reply: 'Retries.' }),
+        entry('c3', T0 + 2_000, { think: 'low', thinking: 'Brief.', reply: 'Retries.' }),
+      ],
+      running: [],
+    });
+    const factsOf = (button: HTMLButtonElement) => {
+      button.click();
+      const detail = document.getElementById(button.getAttribute('aria-controls')!)!;
+      return [...detail.querySelectorAll('dl.facts dt')].map(
+        (dt) => `${dt.textContent}: ${dt.nextElementSibling!.textContent}`,
+      );
+    };
+    // Newest first.
+    const [low, on, off] = w.all('.row-button') as HTMLButtonElement[];
+    expect(factsOf(low!)).toContain('Thinking: low ("think": "low")');
+    expect(factsOf(off!)).toContain('Thinking: off ("think": false)');
+    expect(factsOf(on!)).toContain('Thinking: on ("think": true)');
+    const offDetail = document.getElementById(off!.getAttribute('aria-controls')!)!;
+    expect(offDetail.querySelector('.thinking')).toBeNull();
+    expect(offDetail.querySelector('.answer .content')!.textContent).toBe(
+      '**What it does** Retries.',
+    );
   });
 
   it('shows a GitHub round trip that failed, with its error', () => {
@@ -423,7 +453,9 @@ describe('debug window (PR 9.4)', () => {
     const data = JSON.parse(vi.mocked(w.deps.copy).mock.calls[0]![0]);
     expect(data.groups).toHaveLength(WINDOW_LIMIT + 1);
     expect(data.groups.some((g: { group: string }) => g.group === 'c0')).toBe(false);
-  });
+    // Renders the window for each of 250 entries in jsdom: about 4 s alone and
+    // more on a busy CI runner, so the default 5 s limit is too tight.
+  }, 20_000);
 
   it('works with the keyboard and a screen reader', () => {
     const w = setup();

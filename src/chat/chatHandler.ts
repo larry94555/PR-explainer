@@ -8,8 +8,12 @@
 // with the user's settings, and returns the answer. Like the explain handler,
 // an LLM failure comes back as a result with a message and a fix (from
 // describeLlmError), not a thrown error, so the panel can show the fix.
+//
+// Like explanations, a reasoning model is asked not to think unless the Let
+// the model think setting is on (PR 9.5). Thinking it returns in its own
+// field is never part of the answer.
 
-import type { ContextSizer } from '../llm/contextSize';
+import { thinkOption, type ContextSizer, type ThinkingCheck } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
 import type { ChatMessage, LlmClient } from '../llm/types';
 import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
@@ -41,6 +45,8 @@ export interface ChatDeps {
    * explanations use, so switching between them does not reload the model.
    */
   contextTokens?: ContextSizer;
+  /** Whether the model can think, and how (PR 9.5). Without it, `think` is never sent. */
+  thinking?: ThinkingCheck;
   /** Gets each round trip as it starts, runs and ends, for the debug log (PR 9.3, 9.4). */
   onRoundTrip?: RoundTripSink;
 }
@@ -75,6 +81,10 @@ export function createChatHandler(deps: ChatDeps) {
     // Each question's round trips are one group in the debug log (PR 9.3).
     const roundTrips = createRoundTripLog('chat', Date.now, { onUpdate: deps.onRoundTrip });
     const contextTokens = await deps.contextTokens?.(settings, signal, undefined, roundTrips);
+    const think = thinkOption(
+      await deps.thinking?.(settings, signal, undefined, roundTrips),
+      settings.letModelThink,
+    );
     try {
       const stream = deps.createClient(settings, { roundTrips }).chatStream(payload.messages, {
         model: settings.model,
@@ -82,6 +92,7 @@ export function createChatHandler(deps: ChatDeps) {
         maxResponseTokens: chatResponseTokens(settings),
         ...(contextTokens !== undefined && { contextTokens }),
         keepAliveMinutes: settings.keepAliveMinutes,
+        ...(think !== undefined && { think }),
         signal,
       });
       let answer = '';

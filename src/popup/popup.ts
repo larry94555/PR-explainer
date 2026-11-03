@@ -168,6 +168,8 @@ export interface TraceDetails {
   roundTrips?: readonly RoundTrip[];
   /** The whole reply, to estimate how much of it was thinking. */
   reply?: string;
+  /** Thinking the model returned in its own field (PR 9.5), never shown as the answer. */
+  thinking?: string;
 }
 
 /** The summary line of the Prompt sent section. */
@@ -557,10 +559,10 @@ export function openPopup(
       error.append(messageEl, fixEl);
       setBody('failed', error);
     },
-    showTrace({ tasks, timings, reply, roundTrips }) {
+    showTrace({ tasks, timings, reply, thinking, roundTrips }) {
       // A failed answer shows its trace too: that is when it matters most.
       if ((state !== 'done' && state !== 'failed') || tasks.length === 0) return;
-      const waterfall = buildWaterfall(tasks, timings, reply);
+      const waterfall = buildWaterfall(tasks, timings, reply, thinking);
       const total = waterfall.totalMs || 1;
       const percent = (ms: number) => `${Math.min(100, (Math.max(0, ms) / total) * 100)}%`;
       const list = doc.createElement('ul');
@@ -613,7 +615,7 @@ export function openPopup(
         );
       }
       if (waterfall.rows.some((r) => r.key === 'think')) {
-        parts.push('~ estimated from the share of the reply inside <think>');
+        parts.push('~ estimated from the share of what the model wrote that was thinking');
       }
       if (waterfall.scaled) {
         parts.push(
