@@ -143,7 +143,9 @@ describe('chat handler', () => {
       getSettings: async () => SETTINGS,
       createClient: (settings, options) => createLlmClient(settings, { fetch, ...options }),
       platform: 'other',
-      onRoundTrip: (trip, log) => ended.push({ trip, cause: log.cause, group: log.group }),
+      onRoundTrip: (trip, log) => {
+        if (trip.status !== 'running') ended.push({ trip, cause: log.cause, group: log.group });
+      },
     });
     const result = await handler({ messages: MESSAGES });
     expect(result).toMatchObject({ status: 'done', answer: 'Use fake timers.' });

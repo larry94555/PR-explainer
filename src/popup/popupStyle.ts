@@ -49,7 +49,7 @@ export const POPUP_STYLE = `
     cursor: pointer;
   }
   .close:hover, .close:focus-visible { background: var(--pe-hover-bg); color: var(--pe-fg); }
-  .stop, .regenerate, .details {
+  .stop, .regenerate, .details, .debug {
     border: 1px solid var(--pe-border);
     background: var(--pe-bg);
     color: var(--pe-fg);
@@ -64,6 +64,7 @@ export const POPUP_STYLE = `
   /* Stop only makes sense while the model is working. */
   .popup:not([data-state='loading']):not([data-state='streaming']) .stop { display: none; }
   .details[hidden] { display: none; }
+  .debug:hover, .debug:focus-visible { background: var(--pe-hover-bg); }
   .details:hover, .details:focus-visible, .details[aria-expanded='true'] { background: var(--pe-hover-bg); }
   /* Where the time went (PR 9.1): a waterfall under the header, one row per task. */
   .latency {

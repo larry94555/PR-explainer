@@ -26,6 +26,7 @@ import { createPrMetadataLoader, type PrMetadata } from './prMetadata';
 import { parsePrUrl } from './prUrl';
 import { installSelection } from './selection';
 import { createGithubFetch, createGithubRoundTrips } from './net/githubFetch';
+import { trackDebugSetting } from './debug/debugSetting';
 
 // Every request the content script makes goes through this, and it only
 // reaches GitHub (PR 7.4). Each one is recorded as a round trip, so a click
@@ -225,11 +226,26 @@ const prefetcher = createPrefetcher({
   onEvent: (event) => console.info(`[PR Explainer] ${describePrefetch(event)}`),
 });
 
+// The Debug window setting (PR 9.3), for the popup's Debug button.
+const debugSetting = trackDebugSetting(chrome.storage.sync, chrome.storage.onChanged);
+
 const explainDeps: ClickHandlerDeps = {
   isEnabled: () => enabled.current() === true,
   // A click joins a running prefetch of the same line instead of asking again.
   explain: prefetcher.explain,
-  openPopup: (anchor, options) => openPopup(anchor, options),
+  // With the Debug window setting on, the popup's Debug button opens the
+  // debug window (PR 9.4).
+  openPopup: (anchor, options) =>
+    openPopup(anchor, {
+      ...options,
+      ...(debugSetting.current() && {
+        onDebug: () => {
+          sendRequest('openDebugWindow', undefined).catch((error: unknown) => {
+            console.warn('[PR Explainer] could not open the debug window', error);
+          });
+        },
+      }),
+    }),
   // The popup's Ask a question button: chat about the explained code, with
   // answers streamed from the service worker (src/chat/chatFlow.ts).
   openChat: ({ subject, regenerated, ...seed }) => {
@@ -257,8 +273,8 @@ const explainDeps: ClickHandlerDeps = {
   // model's latency.
   onTiming: ({ elapsedMs, status, model, firstChunkMs, cached, timings, tasks, reply, debug }) => {
     // The click's GitHub round trips and trace join the debug log (PR 9.3).
-    // The service worker keeps them only when the Debug window setting is on.
-    if (debug && tasks?.length) {
+    // Sent only when the Debug window setting is on (PR 9.4).
+    if (debug && tasks?.length && debugSetting.current()) {
       sendRequest('debugLogAdd', {
         ...debug,
         roundTrips: debug.roundTrips.filter((trip) => trip.target === 'github'),

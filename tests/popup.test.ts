@@ -697,6 +697,30 @@ describe('popup', () => {
       expect(askButton()).toBeNull();
     });
   });
+
+  // PR 9.4: with the Debug window setting on, the content script passes onDebug.
+  describe('Debug button', () => {
+    const debugButton = () => shadow().querySelector<HTMLButtonElement>('.header .debug');
+
+    it('is shown in the header, while loading and after, and opens the debug window', () => {
+      const onDebug = vi.fn();
+      const popup = openPopup(ANCHOR, { onDebug });
+      expect(debugButton()!.textContent).toBe('Debug');
+      expect(debugButton()!.type).toBe('button');
+      expect(debugButton()!.title).toMatch(/debug window/);
+      debugButton()!.click();
+      popup.showExplanation(SAMPLE, 'm');
+      debugButton()!.click();
+      expect(onDebug).toHaveBeenCalledTimes(2);
+      // The popup stays open beside the window.
+      expect(popup.state).toBe('done');
+    });
+
+    it('is left out with the setting off (no onDebug)', () => {
+      openPopup(ANCHOR, { onAsk: vi.fn() }).showExplanation(SAMPLE, 'm');
+      expect(debugButton()).toBeNull();
+    });
+  });
 });
 
 describe('computePosition', () => {

@@ -52,7 +52,7 @@ export interface WarmupDeps {
   contextTokens?: ContextSizer;
   /** Where to say what happened. Defaults to console.info. */
   log?: (message: string) => void;
-  /** Gets each round trip as it ends, for the debug log (PR 9.3). */
+  /** Gets each round trip as it starts, runs and ends, for the debug log (PR 9.3, 9.4). */
   onRoundTrip?: RoundTripSink;
 }
 
@@ -129,7 +129,7 @@ export function createWarmup(deps: WarmupDeps): Warmup {
     const key = `${settings.llmUrl} ${settings.model}`;
     let loading = running.get(key);
     if (!loading) {
-      const roundTrips = createRoundTripLog('warmup', Date.now, { onEnd: deps.onRoundTrip });
+      const roundTrips = createRoundTripLog('warmup', Date.now, { onUpdate: deps.onRoundTrip });
       logs.add(roundTrips);
       loading = load(settings, roundTrips).finally(() => {
         running.delete(key);

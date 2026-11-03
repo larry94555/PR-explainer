@@ -8,6 +8,11 @@ import {
   pageEntries,
   workerEntry,
 } from './debug/debugLog';
+import {
+  createDebugWindowOpener,
+  followDebugSetting,
+  setupDebugMenu,
+} from './debug/debugWindowOpener';
 import { CACHE_STORAGE_KEY, createExplainCache } from './explain/explainCache';
 import { createExplainHandler } from './explain/explainHandler';
 import { buildExplainPrompt } from './explain/explainPrompt';
@@ -30,8 +35,34 @@ const debugLog = createDebugLog({
   storage: chrome.storage.session,
   isOn: async () => (await getSettings()).debugWindow,
 });
-const onRoundTrip: RoundTripSink = (trip, log) => void debugLog.add([workerEntry(trip, log)]);
+// A round trip still running goes to the debug window only (PR 9.4); it is
+// kept in the log once it ends.
+const recordRoundTrip: RoundTripSink = (trip, log) => {
+  const entry = workerEntry(trip, log);
+  if (trip.status === 'running') void debugLog.progress(entry);
+  else void debugLog.add([entry]);
+};
 clearWhenTurnedOff(chrome.storage.onChanged, debugLog);
+// With the setting off (the default), requests get no sink at all, so
+// nothing about their prompt or reply is copied, parsed or sent (PR 9.4).
+// Until the setting is read, the sink is given and the log itself checks.
+const debugSetting = followDebugSetting(chrome.storage.sync, chrome.storage.onChanged);
+const roundTripSink = (): RoundTripSink | undefined =>
+  debugSetting.current() === false ? undefined : recordRoundTrip;
+
+// The debug window (PR 9.4): the popup's Debug button and the toolbar
+// button's right-click menu open it, one at a time.
+const debugWindow = createDebugWindowOpener({
+  windows: chrome.windows,
+  storage: chrome.storage.session,
+  url: chrome.runtime.getURL('debug.html'),
+});
+void setupDebugMenu({
+  menus: chrome.contextMenus,
+  onChanged: chrome.storage.onChanged,
+  isOn: async () => (await getSettings()).debugWindow,
+  open: () => debugWindow.open(),
+});
 
 // The model's context window, looked up once per model (src/llm/contextSize.ts).
 const contextTokens = createContextSizer(createLlmClient);
@@ -42,7 +73,10 @@ const warmup = createWarmup({
   getSettings,
   createClient: createLlmClient,
   contextTokens,
-  onRoundTrip,
+  // Read when each request starts, so turning the setting on or off applies to the next one.
+  get onRoundTrip() {
+    return roundTripSink();
+  },
 });
 
 const explain = createExplainHandler({
@@ -55,7 +89,10 @@ const explain = createExplainHandler({
   contextTokens,
   // A click while the model is still loading lists the warm-up's round trips (PR 9.2).
   warmupRoundTrips: () => warmup.inFlight(),
-  onRoundTrip,
+  // Read when each request starts, so turning the setting on or off applies to the next one.
+  get onRoundTrip() {
+    return roundTripSink();
+  },
 });
 chrome.tabs.onRemoved.addListener((tabId) => warmup.forgetTab(tabId));
 
@@ -75,6 +112,7 @@ new MessageRouter()
     await debugLog.clear();
     return { cleared: true as const };
   })
+  .on('openDebugWindow', async () => ({ window: await debugWindow.open() }))
   .listen();
 // The debug window follows the log live over its own port.
 listenForDebugLogPorts(chrome.runtime, debugLog);
@@ -89,7 +127,10 @@ listenForChatPorts(
     createClient: createLlmClient,
     platform: detectPlatform(navigator.userAgent),
     contextTokens,
-    onRoundTrip,
+    // Read when each request starts, so turning the setting on or off applies to the next one.
+    get onRoundTrip() {
+      return roundTripSink();
+    },
   }),
 );
 

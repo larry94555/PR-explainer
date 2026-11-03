@@ -178,7 +178,7 @@ export interface ExplainDeps {
   contextTokens?: ContextSizer;
   /** The round trips of warm-ups still loading the model (src/llm/warmup.ts). */
   warmupRoundTrips?: () => RoundTripLog[];
-  /** Gets each round trip as it ends, for the debug log (PR 9.3). */
+  /** Gets each round trip as it starts, runs and ends, for the debug log (PR 9.3, 9.4). */
   onRoundTrip?: RoundTripSink;
 }
 
@@ -262,7 +262,7 @@ export function createExplainHandler(deps: ExplainDeps) {
     const tasks = createTaskRecorder(now);
     const roundTrips = createRoundTripLog(payload.cause === 'hover' ? 'hover' : 'click', now, {
       ...(typeof payload.debugId === 'string' && { group: payload.debugId.slice(0, 100) }),
-      onEnd: deps.onRoundTrip,
+      onUpdate: deps.onRoundTrip,
     });
     // A warm-up still running is what this request may wait behind.
     const warmups = deps.warmupRoundTrips?.() ?? [];

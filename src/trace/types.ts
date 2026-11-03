@@ -6,6 +6,8 @@
 // Types only, so the content script and the service worker can both use it
 // without sharing any code (see src/content.ts and PR 7.4).
 
+import type { LlmTimings } from '../llm/types';
+
 /** Who ran a task: the GitHub page, the service worker, or the model. */
 export type TaskSource = 'page' | 'worker' | 'model';
 
@@ -77,4 +79,12 @@ export interface RoundTrip {
   reply?: string;
   /** For /api/chat: thinking Ollama returned in its own field. */
   thinking?: string;
+  /** For /api/chat: where Ollama says its time went, from the reply's last line (PR 9.4). */
+  timings?: LlmTimings;
+  /**
+   * Names one of the service worker's round trips while it runs and once it
+   * ends, so the debug window can replace a running row with the finished
+   * one (PR 9.4).
+   */
+  id?: string;
 }

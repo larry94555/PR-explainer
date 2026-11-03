@@ -74,8 +74,9 @@ describe('manifest.json', () => {
     expect(matchesContentScript(url)).toBe(false);
   });
 
-  it('requests only the storage permission, github.com, and this computer for the LLM', () => {
-    expect(manifest.permissions).toEqual(['storage']);
+  it('requests only storage, the toolbar menu, github.com, and this computer for the LLM', () => {
+    // contextMenus: Open debug window on the toolbar button's menu (PR 9.4).
+    expect(manifest.permissions).toEqual(['storage', 'contextMenus']);
     // Loopback only, matching the hosts settings.ts accepts for the LLM URL.
     // A match pattern with no port covers every port, so any local port works.
     expect(manifest.host_permissions).toEqual([

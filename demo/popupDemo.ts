@@ -389,6 +389,8 @@ function explainRow(row: Element): void {
   const popup = openPopup(row, {
     ...(['done', 'failed', 'prompt', 'file'].includes(chosen()) && { now: () => fakeTime }),
     onClose: () => (status.textContent = 'Last event: closed'),
+    // As with the Debug window setting on (PR 9.4); `npm run demo:debug` shows the window.
+    onDebug: () => (status.textContent = 'Last event: Debug (opens the debug window)'),
     onAsk: () => {
       const session = new ChatSession({
         context: LINES.map(([marker, code]) => marker + code).join('\n'),

@@ -62,4 +62,21 @@ export interface DebugLogPayload {
  */
 export type DebugLogPortName = 'pr-explainer:debugLog';
 
-export type DebugLogPortMessage = { type: 'entry'; entry: DebugEntry } | { type: 'cleared' };
+/**
+ * A round trip of the service worker's that has not ended yet (PR 9.4): its
+ * reply so far and its time so far. It is never stored; once it ends, the
+ * finished entry (with the same `trip.id`) takes its place.
+ */
+export type DebugRunningEntry = Omit<DebugRoundTripEntry, 'id'>;
+
+/**
+ * `snapshot` is sent once when the window connects: the whole log and the
+ * round trips still running. Then `entry` for each new entry, `running` as a
+ * round trip starts and as its reply grows, and `cleared` when the log is
+ * emptied.
+ */
+export type DebugLogPortMessage =
+  | { type: 'snapshot'; entries: DebugEntry[]; running: DebugRunningEntry[] }
+  | { type: 'entry'; entry: DebugEntry }
+  | { type: 'running'; entry: DebugRunningEntry }
+  | { type: 'cleared' };

@@ -1,0 +1,387 @@
+/* The debug window (PR 9.4). Follows the system's light or dark theme. */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --muted: #59636e;
+  --border: #d1d9e0;
+  --panel: #f6f8fa;
+  --hover: #eff2f5;
+  --focus: #0969da;
+  --github: #8250df;
+  --ollama: #1a7f37;
+  --running: #9a6700;
+  --failed: #cf222e;
+  --bar-page: #8250df;
+  --bar-worker: #0969da;
+  --bar-model: #1a7f37;
+  --thinking-bg: #fff8c5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --fg: #f0f6fc;
+    --muted: #9198a1;
+    --border: #3d444d;
+    --panel: #151b23;
+    --hover: #212830;
+    --focus: #4493f8;
+    --github: #ab7df8;
+    --ollama: #3fb950;
+    --running: #d29922;
+    --failed: #f85149;
+    --bar-page: #ab7df8;
+    --bar-worker: #4493f8;
+    --bar-model: #3fb950;
+    --thinking-bg: #2e2a1a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    13px/1.45 system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.controls button {
+  font: inherit;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.controls button:hover {
+  background: var(--hover);
+}
+
+.controls button[aria-pressed='true'] {
+  border-color: var(--running);
+  color: var(--running);
+}
+
+.filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.summary {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.status {
+  margin: 0;
+  padding: 0 16px;
+  min-height: 0;
+  color: var(--muted);
+}
+
+.status:not(:empty) {
+  padding: 6px 16px;
+}
+
+.empty {
+  margin: 32px 16px;
+  color: var(--muted);
+}
+
+.groups {
+  padding: 8px 16px 32px;
+}
+
+.group {
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.group-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.group-title .where {
+  font-family: ui-monospace, Consolas, monospace;
+  font-weight: 400;
+}
+
+.group-title .meta {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row + .row {
+  border-top: 1px solid var(--border);
+}
+
+.row-button {
+  display: grid;
+  grid-template-columns: 92px 58px minmax(0, 1fr) minmax(0, 0.8fr) 64px 72px;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-button:hover {
+  background: var(--hover);
+}
+
+.row-button[aria-expanded='true'] {
+  background: var(--hover);
+}
+
+.time,
+.endpoint,
+.duration {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+.time {
+  color: var(--muted);
+}
+
+.endpoint,
+.purpose {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.target {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.target[data-target='github'] {
+  color: var(--github);
+}
+
+.target[data-target='ollama'] {
+  color: var(--ollama);
+}
+
+.duration {
+  text-align: right;
+}
+
+.trip-status {
+  color: var(--muted);
+}
+
+.row[data-status='running'] .trip-status,
+.row[data-status='running'] .duration {
+  color: var(--running);
+  font-weight: 600;
+}
+
+.row[data-status='failed'] .trip-status,
+.row[data-status='refused'] .trip-status {
+  color: var(--failed);
+  font-weight: 600;
+}
+
+.detail {
+  padding: 8px 12px 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.detail h3 {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.messages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.message,
+.thinking,
+.answer {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.thinking {
+  background: var(--thinking-bg);
+  margin-bottom: 6px;
+}
+
+.role {
+  display: block;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.content {
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    12px/1.45 ui-monospace,
+    Consolas,
+    monospace;
+}
+
+.waterfall {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.task {
+  display: grid;
+  grid-template-columns: minmax(0, 190px) 1fr 64px;
+  gap: 8px;
+  align-items: center;
+}
+
+.task-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track {
+  position: relative;
+  height: 10px;
+  background: var(--panel);
+  border-radius: 3px;
+}
+
+.bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: var(--bar-worker);
+}
+
+.task[data-source='page'] .bar {
+  background: var(--bar-page);
+}
+
+.task[data-source='model'] .bar {
+  background: var(--bar-model);
+}
+
+.task-time {
+  text-align: right;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+@media (max-width: 560px) {
+  .row-button {
+    grid-template-columns: 58px minmax(0, 1fr) 64px;
+  }
+  .row-button .time,
+  .row-button .purpose,
+  .row-button .trip-status {
+    display: none;
+  }
+}
