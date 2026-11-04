@@ -12,7 +12,9 @@
 // GitHub's own controls
 // (the comment "+" button, links, menus, form fields), clicks that finish a
 // text selection, and modified clicks (Shift, Ctrl, Alt, Cmd) are left alone
-// so GitHub keeps working as before. Drags and Shift-clicks across several
+// so GitHub keeps working as before. Since PR 11.1 the request starts when
+// the mouse button goes down on a line (createClickHandler), and the click
+// opens the popup on it. Drags and Shift-clicks across several
 // lines are handled by src/selection.ts, which explains the block as a whole. Nothing happens at all while the toolbar
 // button has click-to-explain turned off.
 //
@@ -66,6 +68,11 @@ export interface ClickHandlerDeps {
    * button (PR 3.6). Clicks are then left alone. Leaving it out means on.
    */
   isEnabled?(): boolean;
+  /**
+   * True while the chat is open, so a press sends nothing: the click that
+   * follows goes to the chat (PR 11.1). Leaving it out means never.
+   */
+  isChatOpen?(): boolean;
   /** Opens a popup next to the clicked row, closing any other popup. */
   openPopup(
     anchor: PopupAnchor,
@@ -184,17 +191,203 @@ export function describeRequestError(error: unknown): { message: string; fix: st
   };
 }
 
-export function createClickHandler(deps: ClickHandlerDeps): (event: MouseEvent) => void {
-  return (event) => {
-    if (deps.isEnabled?.() === false) return;
-    if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) {
+/** How far (in pixels) the pointer may move while pressed before it counts as a drag (PR 11.1). */
+export const PRESS_SLOP_PX = 4;
+
+/**
+ * How long a released press waits for its click before it is cancelled
+ * (PR 11.1). The click normally follows the release at once; this only
+ * covers a click that never comes, such as one GitHub's own code swallowed.
+ */
+export const PRESS_CLICK_WAIT_MS = 1000;
+
+/**
+ * The click listener, plus the pointer listeners that start a line's request
+ * as the mouse button goes down (PR 11.1). Add them all with
+ * listenForClicks.
+ */
+export interface ClickHandler {
+  (event: MouseEvent): void;
+  onPointerDown(event: PointerEvent): void;
+  onPointerMove(event: PointerEvent): void;
+  onPointerUp(event: PointerEvent): void;
+  /** For `pointercancel`, a page change, or turning off: stops a pressed line's request. */
+  cancelPress(): void;
+}
+
+/** True for the main button with no modifier keys: the only press or click explained. */
+function isPlainPress(event: MouseEvent): boolean {
+  return event.button === 0 && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey;
+}
+
+/** A line whose request started when the mouse went down, waiting for its click (PR 11.1). */
+interface Pressed {
+  row: Element;
+  request: ExplainRequest;
+  trace: ClickTrace;
+  /** Ends the trace's Pressed task, at the click. */
+  endPressed: () => void;
+  stream: ExplainStream;
+  sink: {
+    /** The reply so far, kept until the click's popup takes over the stream. */
+    chunks: string[];
+    /** The popup's chunk callback, once the click has opened it. */
+    onChunk?: (text: string) => void;
+  };
+  x: number;
+  y: number;
+  /** Cancels the press if the click never comes after the release. */
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * Explains a clicked line. With a press handler (PR 11.1), the request
+ * starts on `pointerdown` on a line's code: the same request a click sends
+ * (lineRequest), so it uses the cache and joins a running prefetch. The
+ * popup still opens on `click`, which takes over the request already
+ * running instead of sending another. A press that moves more than
+ * PRESS_SLOP_PX before release (the start of a drag selection, PR 4.4), or
+ * is released somewhere else, is cancelled and shows nothing. Nothing is
+ * sent on a press while the chat is open, as the click goes to the chat.
+ */
+export function createClickHandler(deps: ClickHandlerDeps): ClickHandler {
+  let pressed: Pressed | undefined;
+
+  const cancelPress = () => {
+    const press = pressed;
+    if (!press) return;
+    pressed = undefined;
+    clearTimeout(press.timer);
+    press.stream.stop();
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
+    cancelPress();
+    if (deps.isEnabled?.() === false || deps.isChatOpen?.() === true) return;
+    if (!isPlainPress(event) || event.isPrimary === false) return;
+    const target = event.target;
+    if (isInteractive(target)) return;
+    // The trace starts at the press, so Details shows how early it started.
+    const trace = createClickTrace();
+    const endPressed = trace.start('press', 'Pressed');
+    const found = trace.start('find-code', 'Find the code');
+    const line = lineRequest(target);
+    if (!line) return;
+    found();
+    const { row, request } = line;
+    const sink: Pressed['sink'] = { chunks: [] };
+    const stream = deps.explain(
+      request.text,
+      (chunk) => (sink.onChunk ? sink.onChunk(chunk) : sink.chunks.push(chunk)),
+      { fresh: false, ...(request.code && { code: request.code }), trace },
+    );
+    // Seen to by the popup once the click opens it; until then a failure
+    // must not be reported as unhandled.
+    stream.result.catch(() => {});
+    const press: Pressed = {
+      row,
+      request,
+      trace,
+      endPressed,
+      stream,
+      sink,
+      x: event.clientX,
+      y: event.clientY,
+    };
+    pressed = press;
+  };
+
+  const onPointerMove = (event: PointerEvent) => {
+    if (!pressed || pressed.timer !== undefined) return;
+    const dx = event.clientX - pressed.x;
+    const dy = event.clientY - pressed.y;
+    // A drag selects lines (src/selection.ts) or text, not this one line.
+    if (dx * dx + dy * dy > PRESS_SLOP_PX * PRESS_SLOP_PX) cancelPress();
+  };
+
+  const onPointerUp = (event: PointerEvent) => {
+    const press = pressed;
+    if (!press) return;
+    if (locateRow(event.target) !== press.row) {
+      cancelPress();
+      return;
+    }
+    press.timer = setTimeout(() => {
+      if (pressed === press) cancelPress();
+    }, PRESS_CLICK_WAIT_MS);
+  };
+
+  /** The pressed line's request, if `row` is its line; the press is used up either way. */
+  const takePress = (row: Element | null): Pressed | undefined => {
+    const press = pressed;
+    if (!press) return undefined;
+    pressed = undefined;
+    clearTimeout(press.timer);
+    if (press.row === row) return press;
+    press.stream.stop();
+    return undefined;
+  };
+
+  const onClick = (event: MouseEvent) => {
+    if (deps.isEnabled?.() === false || !isPlainPress(event)) {
+      cancelPress();
       return;
     }
     const target = event.target;
-    if (isInteractive(target)) return;
     const doc = target instanceof Node ? (target.ownerDocument ?? document) : document;
-    if (hasTextSelection(doc)) return;
-    explainLineAt(deps, target);
+    if (isInteractive(target) || hasTextSelection(doc)) {
+      cancelPress();
+      return;
+    }
+    const press = takePress(locateRow(target));
+    if (!press) {
+      explainLineAt(deps, target);
+      return;
+    }
+    press.endPressed();
+    press.trace.mark('click', 'Clicked');
+    let adopted = false;
+    // The popup's first request is the one the press started; Regenerate
+    // asks again as usual.
+    const explain: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
+      if (adopted || options.fresh || context !== press.request.text) {
+        return deps.explain(context, onChunk, options);
+      }
+      adopted = true;
+      // After the popup has the stream, so it takes the reply so far.
+      queueMicrotask(() => {
+        for (const chunk of press.sink.chunks.splice(0)) onChunk(chunk);
+        press.sink.onChunk = onChunk;
+      });
+      return press.stream;
+    };
+    explainCode({ ...deps, explain }, press.request, press.row, undefined, press.trace);
+    // The chat took the code after all (it opened during the press).
+    if (!adopted) press.stream.stop();
+  };
+
+  return Object.assign(onClick, { onPointerDown, onPointerMove, onPointerUp, cancelPress });
+}
+
+/**
+ * Adds a click handler's listeners to `doc`: the click, and the pointer
+ * events that start a line's request on the press (PR 11.1). Returns a
+ * function that removes them and cancels a pending press.
+ */
+export function listenForClicks(handler: ClickHandler, doc: Document = document): () => void {
+  const { onPointerDown, onPointerMove, onPointerUp, cancelPress } = handler;
+  doc.addEventListener('click', handler);
+  doc.addEventListener('pointerdown', onPointerDown);
+  doc.addEventListener('pointermove', onPointerMove, { passive: true });
+  doc.addEventListener('pointerup', onPointerUp);
+  doc.addEventListener('pointercancel', cancelPress);
+  return () => {
+    doc.removeEventListener('click', handler);
+    doc.removeEventListener('pointerdown', onPointerDown);
+    doc.removeEventListener('pointermove', onPointerMove);
+    doc.removeEventListener('pointerup', onPointerUp);
+    doc.removeEventListener('pointercancel', cancelPress);
+    cancelPress();
   };
 }
 

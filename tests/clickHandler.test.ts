@@ -4,9 +4,12 @@ import {
   createClickHandler,
   describeRequestError,
   isInteractive,
+  listenForClicks,
+  PRESS_CLICK_WAIT_MS,
   type ClickHandlerDeps,
   type ExplainTiming,
 } from '../src/clickHandler';
+import { createPrefetcher, hoveredLine } from '../src/prefetch';
 import type { ExplainResult } from '../src/explain/explainHandler';
 import { RequestError } from '../src/messaging/client';
 import {
@@ -160,21 +163,34 @@ function setup(answer: Answer = () => Promise.resolve(DONE), isEnabled?: () => b
     },
   };
   const handler = createClickHandler(deps);
-  document.addEventListener('click', handler);
-  return {
-    deps,
-    contexts,
-    popups,
-    stops,
-    timings,
-    traced,
-    debugs,
-    cleanup: () => document.removeEventListener('click', handler),
-  };
+  const remove = listenForClicks(handler);
+  return { deps, contexts, popups, stops, timings, traced, debugs, cleanup: remove };
 }
 
 function click(target: Element, init: MouseEventInit = {}): void {
   target.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, ...init }));
+}
+
+/** A pointer event from the mouse, as Chrome sends it (PR 11.1). */
+function pointer(type: string, target: Element, init: PointerEventInit = {}): void {
+  target.dispatchEvent(
+    new PointerEvent(type, {
+      bubbles: true,
+      button: 0,
+      pointerType: 'mouse',
+      isPrimary: true,
+      clientX: 100,
+      clientY: 200,
+      ...init,
+    }),
+  );
+}
+
+/** Mouse down and up on `target` and the click that follows, like a real click. */
+function pressAndClick(target: Element, init: MouseEventInit = {}): void {
+  pointer('pointerdown', target, init);
+  pointer('pointerup', target, init);
+  click(target, init);
 }
 
 /** Lets pending promise callbacks run. */
@@ -762,6 +778,209 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     await flush();
     expect(env.popups[0]!.calls).toEqual([]);
     expect(env.timings).toEqual([]);
+  });
+
+  describe('starting the request when the mouse goes down (PR 11.1)', () => {
+    it('sends the request on the press, and the click opens the popup on that same request', async () => {
+      const answer = deferred<ExplainResult>();
+      let send!: (text: string) => void;
+      env = setup((onChunk) => {
+        send = onChunk;
+        return answer.promise;
+      });
+      const line = code('R44');
+      pointer('pointerdown', line);
+      expect(env.deps.explain).toHaveBeenCalledTimes(1);
+      expect(env.contexts[0]).toContain('@@ -41,7 +41,7 @@');
+      expect(env.popups).toHaveLength(0);
+      // The model writes while the button is still down.
+      send('## What it does\nMarks');
+      pointer('pointerup', line);
+      click(line);
+      expect(env.popups).toHaveLength(1);
+      expect(env.popups[0]!.anchor).toBe(line.closest('tr'));
+      await flush();
+      expect(env.popups[0]!.calls).toEqual(['partial:## What it does\nMarks']);
+      send(' 2.4 as done.');
+      answer.resolve(DONE);
+      await flush();
+      // One request, not two.
+      expect(env.deps.explain).toHaveBeenCalledTimes(1);
+      expect(env.stops[0]).not.toHaveBeenCalled();
+      expect(env.popups[0]!.calls).toEqual([
+        'partial:## What it does\nMarks',
+        'partial:## What it does\nMarks 2.4 as done.',
+        `done:${DONE.model}:${DONE.explanation.what}`,
+      ]);
+    });
+
+    it('shows an answer that came in full before the click', async () => {
+      env = setup((onChunk) => {
+        onChunk('## What it does');
+        return Promise.resolve(DONE);
+      });
+      pointer('pointerdown', code('R44'));
+      await flush();
+      pointer('pointerup', code('R44'));
+      click(code('R44'));
+      await flush();
+      expect(env.deps.explain).toHaveBeenCalledTimes(1);
+      expect(env.popups[0]!.calls).toEqual([
+        'partial:## What it does',
+        `done:${DONE.model}:${DONE.explanation.what}`,
+      ]);
+    });
+
+    it('opens a cached line from the cache', async () => {
+      const cached = { ...DONE, cached: { elapsedMs: 3, savedAt: 1 } };
+      env = setup(() => Promise.resolve(cached));
+      pressAndClick(code('R44'));
+      await flush();
+      expect(env.deps.explain).toHaveBeenCalledOnce();
+      expect(env.deps.explain).toHaveBeenCalledWith(expect.any(String), expect.any(Function), {
+        fresh: false,
+        code: expect.objectContaining({ startLine: 44 }),
+        trace: expect.anything(),
+      });
+      expect(env.popups[0]!.calls).toEqual([
+        `done:${DONE.model}:${DONE.explanation.what} (cached 3)`,
+      ]);
+    });
+
+    it('cancels the request on a drag past 4 pixels, but not on a small wobble', () => {
+      env = setup(() => new Promise(() => {}));
+      const line = code('R44');
+      pointer('pointerdown', line);
+      pointer('pointermove', line, { clientX: 103, clientY: 202 });
+      expect(env.stops[0]).not.toHaveBeenCalled();
+      pointer('pointermove', line, { clientX: 100, clientY: 205 });
+      expect(env.stops[0]).toHaveBeenCalledOnce();
+      // The browser sends no click after a drag that selected text.
+      pointer('pointerup', line, { clientX: 100, clientY: 205 });
+      expect(env.popups).toHaveLength(0);
+      expect(env.deps.explain).toHaveBeenCalledOnce();
+    });
+
+    it('cancels the request when the button is released somewhere else', () => {
+      env = setup(() => new Promise(() => {}));
+      pointer('pointerdown', code('R44'));
+      pointer('pointerup', code('R45'), { clientX: 101 });
+      expect(env.stops[0]).toHaveBeenCalledOnce();
+      expect(env.popups).toHaveLength(0);
+    });
+
+    it('cancels the request when the click is left alone, such as one that ends a text selection', () => {
+      env = setup(() => new Promise(() => {}));
+      const line = code('R44');
+      pointer('pointerdown', line);
+      pointer('pointerup', line);
+      const range = document.createRange();
+      range.selectNodeContents(line);
+      document.getSelection()!.addRange(range);
+      click(line);
+      expect(env.stops[0]).toHaveBeenCalledOnce();
+      expect(env.popups).toHaveLength(0);
+    });
+
+    it('cancels the request if no click comes after the release', () => {
+      vi.useFakeTimers();
+      onTestFinished(() => void vi.useRealTimers());
+      env = setup(() => new Promise(() => {}));
+      pointer('pointerdown', code('R44'));
+      pointer('pointerup', code('R44'));
+      vi.advanceTimersByTime(PRESS_CLICK_WAIT_MS - 1);
+      expect(env.stops[0]).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(env.stops[0]).toHaveBeenCalledOnce();
+    });
+
+    it('a new press on another line cancels the first', () => {
+      env = setup(() => new Promise(() => {}));
+      pointer('pointerdown', code('R44'));
+      pointer('pointercancel', code('R44'));
+      expect(env.stops[0]).toHaveBeenCalledOnce();
+      pointer('pointerdown', code('R45'));
+      pointer('pointerdown', code('R44'));
+      expect(env.stops[1]).toHaveBeenCalledOnce();
+      expect(env.deps.explain).toHaveBeenCalledTimes(3);
+    });
+
+    it('sends nothing for the right button, modifier keys, controls, a press while turned off, or while the chat is open', () => {
+      let enabled = false;
+      env = setup(undefined, () => enabled);
+      pointer('pointerdown', code('R44'));
+      enabled = true;
+      pointer('pointerdown', code('R44'), { button: 2 });
+      for (const key of ['shiftKey', 'ctrlKey', 'altKey', 'metaKey']) {
+        pointer('pointerdown', code('R44'), { [key]: true });
+      }
+      pointer('pointerdown', headerRow());
+      env.deps.isChatOpen = () => true;
+      pointer('pointerdown', code('R44'));
+      expect(env.deps.explain).not.toHaveBeenCalled();
+    });
+
+    it('a click on another line than the pressed one cancels the press and explains the clicked line', () => {
+      env = setup(() => new Promise(() => {}));
+      pointer('pointerdown', code('R44'));
+      // No pointerup: a click with no matching release, as from a script.
+      click(code('R45'));
+      expect(env.stops[0]).toHaveBeenCalledOnce();
+      expect(env.deps.explain).toHaveBeenCalledTimes(2);
+      expect(env.popups[0]!.anchor).toBe(code('R45').closest('tr'));
+    });
+
+    it('Regenerate after a pressed click asks again without the cache', async () => {
+      env = setup((_onChunk, fresh) => Promise.resolve(fresh ? { ...DONE, model: 'fresh' } : DONE));
+      pressAndClick(code('R44'));
+      await flush();
+      env.popups[0]!.pressRegenerate();
+      await flush();
+      expect(env.deps.explain).toHaveBeenCalledTimes(2);
+      expect(env.popups[0]!.calls.at(-1)).toBe(`done:fresh:${DONE.explanation.what}`);
+    });
+
+    it('records Pressed before Clicked in the trace, so Details shows how much earlier it started', async () => {
+      let time = 0;
+      const clock = vi.spyOn(performance, 'now').mockImplementation(() => time);
+      onTestFinished(() => clock.mockRestore());
+      env = setup();
+      const line = code('R44');
+      pointer('pointerdown', line);
+      time = 150;
+      pointer('pointerup', line);
+      click(line);
+      await flush();
+      const tasks = env.traced[0]!.tasks!;
+      const row = (key: string) => tasks.find((t) => t.key === key);
+      expect(row('press')).toMatchObject({ label: 'Pressed', startMs: 0, durationMs: 150 });
+      expect(row('find-code')).toMatchObject({ startMs: 0 });
+      expect(row('click')).toMatchObject({ label: 'Clicked', startMs: 150, durationMs: 0 });
+      expect(tasks.map((t) => t.key).indexOf('press')).toBeLessThan(
+        tasks.map((t) => t.key).indexOf('click'),
+      );
+    });
+
+    it('joins a running hover prefetch of the same line instead of stopping it', () => {
+      vi.useFakeTimers();
+      onTestFinished(() => void vi.useRealTimers());
+      env = setup(() => new Promise(() => {}));
+      const worker = env.deps.explain;
+      const prefetcher = createPrefetcher({ explain: worker, isOn: () => true, delayMs: 300 });
+      env.deps.explain = prefetcher.explain;
+      const line = code('R44');
+      document.addEventListener('mouseover', prefetcher.onMouseOver);
+      onTestFinished(() => document.removeEventListener('mouseover', prefetcher.onMouseOver));
+      line.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      vi.advanceTimersByTime(300);
+      expect(prefetcher.running()).toBe(hoveredLine(line)!.key);
+      pointer('pointerdown', line);
+      // The press sends the same text, for the service worker to join to the prefetch.
+      expect(worker).toHaveBeenCalledTimes(2);
+      expect(env.contexts[1]).toBe(env.contexts[0]);
+      expect(env.stops[0]).not.toHaveBeenCalled();
+      expect(prefetcher.running()).toBe(hoveredLine(line)!.key);
+    });
   });
 });
 

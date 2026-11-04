@@ -26,6 +26,8 @@ export interface ClickTrace {
   start(key: string, label: string): (status?: TraceTask['status']) => void;
   /** Records `work` as a task: failed when it rejects, otherwise done. Returns `work`. */
   time<T>(key: string, label: string, work: Promise<T>): Promise<T>;
+  /** Records a moment, such as the click after a press (PR 11.1), as a task of no length. */
+  mark(key: string, label: string): void;
   /** Records a task that did not need to run, such as a fetch for removed lines. */
   skip(key: string, label: string): void;
   /** Notes that the request was sent to the service worker now. */
@@ -103,6 +105,9 @@ export function createClickTrace(
         () => end('failed'),
       );
       return work;
+    },
+    mark(key, label) {
+      add({ key, label, startMs: now(), durationMs: 0 });
     },
     skip(key, label) {
       add({ key, label, startMs: now(), durationMs: 0, status: 'skipped' });
