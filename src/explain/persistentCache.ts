@@ -60,8 +60,13 @@ export interface PersistentCache {
    * removed from disk; `off` means Keep answers for is 0, so the session
    * cache alone decides; `missing` means there is no copy on disk (or
    * IndexedDB failed), and the session cache's answer stands.
+   *
+   * `lastUsed` is when the session cache last used it. With no copy on disk
+   * (already pruned, or IndexedDB failing) the answer is judged by it against
+   * the same setting and clock, so a pruned answer is not shown from the
+   * session cache after the worker restarts or the setting is lowered.
    */
-  touch(key: string): Promise<'fresh' | 'expired' | 'missing' | 'off'>;
+  touch(key: string, lastUsed: number): Promise<'fresh' | 'expired' | 'missing' | 'off'>;
   /** Saves an answer, unless Keep answers for is 0. Failures are ignored. */
   set(key: string, value: CachedExplanation, pr: string): Promise<void>;
   /**
@@ -235,11 +240,21 @@ export function createPersistentCache({
    * recently used end, so answers you keep coming back to stay longest. An
    * answer past Keep answers for, or a broken record, is removed.
    */
-  const use = (key: string): Promise<Lookup> =>
+  const use = (key: string, lastUsed?: number): Promise<Lookup> =>
     serial(async (): Promise<Lookup> => {
+      let days: number;
       try {
-        const days = await keepDays();
-        if (days <= 0) return { status: 'off' };
+        days = await keepDays();
+      } catch {
+        return { status: 'missing' };
+      }
+      if (days <= 0) return { status: 'off' };
+      // No copy on disk to go by: the session cache's last use decides.
+      const notOnDisk = (): Lookup =>
+        lastUsed !== undefined && expired(lastUsed, days)
+          ? { status: 'expired' }
+          : { status: 'missing' };
+      try {
         const database = await db();
         const tx = database.transaction(STORE, 'readwrite');
         const wrote = committed(tx);
@@ -252,7 +267,7 @@ export function createPersistentCache({
             total = null;
           }
           await wrote;
-          return { status: 'missing' };
+          return notOnDisk();
         }
         if (expired(record.usedAt, days)) {
           store.delete(key);
@@ -264,7 +279,7 @@ export function createPersistentCache({
         await wrote;
         return { status: 'fresh', record };
       } catch {
-        return { status: 'missing' };
+        return notOnDisk();
       }
     });
 
@@ -275,7 +290,7 @@ export function createPersistentCache({
         ? { value: pick(found.record.value), pr: found.record.pr }
         : null;
     },
-    touch: async (key) => (await use(key)).status,
+    touch: async (key, lastUsed) => (await use(key, lastUsed)).status,
     set: (key, value, pr) =>
       serial(async () => {
         try {
@@ -368,14 +383,19 @@ export function createPersistentCache({
 export function createLayeredCache(session: ExplainCache, disk: PersistentCache): ExplainCache {
   return {
     get: async (key) => {
-      const hit = await session.get(key).catch(() => null);
-      if (hit) {
-        // The disk keeps the last-used time Keep answers for counts from, so
-        // a session hit is a use there too, and an answer past the limit is
-        // not shown just because Chrome stayed open (review on #68).
-        if ((await disk.touch(key)) !== 'expired') return hit;
-        await session.remove(key).catch(() => {});
-        return null;
+      // Keep answers for applies to the session cache too (review on #68):
+      // a session hit is checked against the disk's last use, or the session
+      // cache's own when the disk has no copy, and counts as a use on disk.
+      // So an answer past the limit is not shown just because Chrome stayed
+      // open, or because the worker restarted and pruned it from disk.
+      const lastUsed = await session.lastUsed(key).catch(() => null);
+      if (lastUsed !== null) {
+        if ((await disk.touch(key, lastUsed)) === 'expired') {
+          await session.remove(key).catch(() => {});
+          return null;
+        }
+        const hit = await session.get(key).catch(() => null);
+        if (hit) return hit;
       }
       const saved = await disk.get(key);
       if (!saved) return null;
@@ -386,6 +406,7 @@ export function createLayeredCache(session: ExplainCache, disk: PersistentCache)
     set: async (key, value, pr = '') => {
       await Promise.all([session.set(key, value, pr), disk.set(key, value, pr)]);
     },
+    lastUsed: (key) => session.lastUsed(key),
     remove: async (key) => {
       await Promise.all([session.remove(key), disk.remove(key)]);
     },

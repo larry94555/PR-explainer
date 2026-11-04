@@ -484,6 +484,7 @@ describe('explain handler', () => {
             get: async (key) => (store.get(key) as never) ?? null,
             set: async (key, value) => void store.set(key, value),
             list: async () => [],
+            lastUsed: async (key) => (store.has(key) ? 0 : null),
             remove: async (key) => void store.delete(key),
             clear: async () => store.clear(),
           },

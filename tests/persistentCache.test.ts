@@ -45,6 +45,7 @@ function setup({ days = 7, maxBytes = DEFAULT_MAX_BYTES } = {}) {
     indexedDB,
     settings,
     advance: (ms: number) => void (time += ms),
+    now: () => time,
     /** The cache as the service worker builds it, with a new session (Chrome started). */
     start: () => {
       const session = memorySession();
@@ -171,6 +172,52 @@ describe('saved answers (PR 10.9)', () => {
     expect(await cache.get('k2')).toEqual(answer('recent'));
   });
 
+  it('an answer already pruned from disk is a miss from a session cache that survived (review on #68)', async () => {
+    const env = setup({ days: 7 });
+    const { cache, session } = env.start();
+    await cache.set('k', answer('old'), 'p');
+    await cache.set('fresh', answer('fresh'), 'p');
+    env.advance(6 * DAY_MS);
+    expect(await cache.get('fresh')).toEqual(answer('fresh'));
+    env.advance(2 * DAY_MS);
+
+    // Chrome stops the service worker and starts it again: chrome.storage.session
+    // survives, and the new worker prunes the disk before the first click.
+    const disk = createPersistentCache({
+      indexedDB: env.indexedDB,
+      keepDays: async () => env.settings.days,
+      now: () => env.now(),
+    });
+    const restarted = createLayeredCache(
+      createExplainCache(session, { now: () => env.now() }),
+      disk,
+    );
+    expect(await disk.prune()).toBe(1);
+    expect(await restarted.get('k')).toBeNull();
+    expect(session.data['explainCache.entry.k']).toBeUndefined();
+    // An answer used 2 days ago is still answered.
+    expect(await restarted.get('fresh')).toEqual(answer('fresh'));
+  });
+
+  it('lowering Keep answers for while Chrome stays open applies to the session cache too', async () => {
+    const env = setup({ days: 7 });
+    const { cache, disk } = env.start();
+    await cache.set('k', answer('x'), 'p');
+    env.advance(3 * DAY_MS);
+    env.settings.days = 2;
+    // The service worker prunes when the setting changes.
+    expect(await disk.prune()).toBe(1);
+    expect(await cache.get('k')).toBeNull();
+
+    // Even when the disk copy had already gone some other way.
+    env.settings.days = 7;
+    await cache.set('k2', answer('y'), 'p');
+    await disk.remove('k2');
+    env.advance(3 * DAY_MS);
+    env.settings.days = 2;
+    expect(await cache.get('k2')).toBeNull();
+  });
+
   it('with Keep answers for at 0, the session cache still answers for as long as Chrome is open', async () => {
     const env = setup({ days: 0 });
     const { cache } = env.start();
@@ -179,14 +226,16 @@ describe('saved answers (PR 10.9)', () => {
     expect(await cache.get('k')).toEqual(answer('x'));
   });
 
-  it('a session hit stands when IndexedDB fails', async () => {
+  it('a session hit within the limit stands when IndexedDB fails', async () => {
     const broken = {
       open: () => {
         throw new Error('IndexedDB is off');
       },
     } as unknown as IDBFactory;
     const disk = createPersistentCache({ indexedDB: broken, keepDays: async () => 7 });
-    expect(await disk.touch('k')).toBe('missing');
+    // Judged by the session cache's last use instead.
+    expect(await disk.touch('k', Date.now())).toBe('missing');
+    expect(await disk.touch('k', Date.now() - 8 * DAY_MS)).toBe('expired');
     await expect(disk.remove('k')).resolves.toBeUndefined();
   });
 
