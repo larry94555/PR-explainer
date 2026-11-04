@@ -1,0 +1,406 @@
+// The background queue (PR 10.3): one place in the service worker that
+// decides which explanation runs next, how many run at once, and what gives
+// way to a click. Every explain request from a PR tab goes through it, so two
+// tabs share one queue instead of each keeping the model busy.
+//
+// A job is one request (for now one line, built as a click would build it;
+// PR 10.5 adds whole hunks) with a priority. Jobs run highest priority first,
+// then in the order their lines appear in the PR (`order`), then in the order
+// they came. At most `concurrency` jobs run at once (1 by default), and no
+// background job starts while a click runs.
+//
+// - A click always runs at once. It stops the background jobs that are
+//   running (so Ollama is free for it) and puts them back at the front of
+//   their priority. A click that joins a job already running does the same,
+//   without stopping that job. A hovered line does the same to the lower jobs when
+//   there is no room, since the pointer resting on it says a click is near
+//   (as before, PR 8.7); the other priorities wait for room, so scrolling
+//   never throws away work in progress.
+// - A job for a request already queued or running is merged with it: it
+//   gets the same answer from one request, and the job keeps the higher of
+//   the two priorities. A click that joins a running job gets what the model
+//   has written so far, then the rest. Regenerate never joins (the caller
+//   gives it an id of its own).
+// - A job whose answer is in the cache finishes at once (the handler answers
+//   it from the cache without the model) and is logged as skipped.
+// - A background job that fails is tried once more after the others of its
+//   priority, then given up on. A click is never tried again by itself.
+// - A job whose callers have all gone (the popup closed, the tab moved on) is
+//   dropped, and stopped if it is running. Jobs can also be re-prioritised
+//   and dropped by PR. Closing a tab lets go of only that tab's callers, so a
+//   job another tab also waits for keeps running.
+//
+// It knows nothing about Chrome or Ollama: `run` does the work (the explain
+// handler in src/background.ts), so the tests drive it with a fake.
+
+import type { ExplainPayload } from './explainHandler';
+
+/** Highest first. Only clicks start straight away. */
+export const PRIORITIES = ['click', 'hovered', 'on-screen', 'near-screen', 'rest'] as const;
+export type JobPriority = (typeof PRIORITIES)[number];
+
+export const DEFAULT_CONCURRENCY = 1;
+
+/** How many times a background job is run before it is given up on. */
+export const MAX_ATTEMPTS = 2;
+
+export const isJobPriority = (value: unknown): value is JobPriority =>
+  (PRIORITIES as readonly unknown[]).includes(value);
+
+const rank = (priority: JobPriority) => PRIORITIES.indexOf(priority);
+
+export interface JobSpec<P> {
+  /** Names the request: two jobs with the same id are merged. */
+  id: string;
+  /** A short name for the debug window, such as "src/a.ts:added:12". */
+  label: string;
+  priority: JobPriority;
+  /** The tab that asked, so its jobs can be dropped when it closes. */
+  tab?: number;
+  /** The PR, such as "owner/repo#17". */
+  pr?: string;
+  /** Where the line is in the PR, for the order within a priority. Lower first. */
+  order?: number;
+  payload: P;
+}
+
+export type QueueEventType =
+  | 'queued'
+  | 'started'
+  | 'finished'
+  | 'skipped'
+  | 'failed'
+  | 'retry'
+  | 'cancelled'
+  | 'joined'
+  | 'dropped';
+
+export interface QueueEvent {
+  type: QueueEventType;
+  label: string;
+  priority: JobPriority;
+  tab?: number;
+  /** For finished, skipped, failed, retry and cancelled: how long the run took. */
+  elapsedMs?: number;
+  /** Jobs running and waiting once this event has happened. */
+  running: number;
+  waiting: number;
+}
+
+export interface QueueDeps<P, R> {
+  run(payload: P, options: { signal: AbortSignal; onChunk(text: string): void }): Promise<R>;
+  /** True when a result is a failure (a background job is then tried once more). */
+  failed?(result: R): boolean;
+  /** True when a result came from the cache, so the job is logged as skipped. */
+  cached?(result: R): boolean;
+  concurrency?: number;
+  /** Clock in milliseconds. Defaults to Date.now. */
+  now?(): number;
+  onEvent?(event: QueueEvent): void;
+}
+
+export interface AddOptions {
+  /** Pieces of the answer as they are written. Only clicks get them. */
+  onChunk?(text: string): void;
+  /** Aborting it means this caller has gone. */
+  signal?: AbortSignal;
+}
+
+export interface PrefetchQueue<P, R> {
+  /** Queues a job (or joins the one with the same id) and resolves with its answer. */
+  add(spec: JobSpec<P>, options?: AddOptions): Promise<R>;
+  /** Gives the waiting background jobs `match` picks a new priority. Returns how many. */
+  prioritise(match: (spec: JobSpec<P>) => boolean, priority: JobPriority): number;
+  /** Drops the jobs `match` picks (stopping running ones). Returns how many. */
+  drop(match: (spec: JobSpec<P>) => boolean): number;
+  /**
+   * Lets go of everything a closed tab asked for: its callers leave their
+   * jobs, and a job is dropped only when nobody else is waiting for it (a
+   * job shared with another tab keeps running for that tab). Returns how
+   * many jobs were dropped.
+   */
+  dropTab(tab: number): number;
+  /** The labels of the running and waiting jobs, in the order they would run. */
+  state(): { running: string[]; waiting: string[] };
+}
+
+interface Caller<R> {
+  click: boolean;
+  /** The tab that asked, so closing it lets go of only its own callers. */
+  tab?: number;
+  onChunk?(text: string): void;
+  resolve(result: R): void;
+  reject(error: unknown): void;
+}
+
+interface Job<P, R> {
+  spec: JobSpec<P>;
+  seq: number;
+  /** Below 0 for a job put back by a click: the most recent first. */
+  front: number;
+  attempts: number;
+  callers: Set<Caller<R>>;
+  run?: { controller: AbortController; chunks: string[]; startedAt: number };
+}
+
+function abortError(): Error {
+  return Object.assign(new Error('Stopped: nobody is waiting for this answer'), {
+    name: 'AbortError',
+  });
+}
+
+export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<P, R> {
+  const concurrency = Math.max(1, deps.concurrency ?? DEFAULT_CONCURRENCY);
+  const now = deps.now ?? Date.now;
+  const jobs = new Map<string, Job<P, R>>();
+  let seq = 0;
+  let front = 0;
+
+  const running = () => [...jobs.values()].filter((job) => job.run);
+  const waiting = () =>
+    [...jobs.values()]
+      .filter((job) => !job.run)
+      .sort(
+        (a, b) =>
+          rank(a.spec.priority) - rank(b.spec.priority) ||
+          a.front - b.front ||
+          (a.spec.order ?? Infinity) - (b.spec.order ?? Infinity) ||
+          a.seq - b.seq,
+      );
+
+  const emit = (type: QueueEventType, job: Job<P, R>, elapsedMs?: number) => {
+    if (!deps.onEvent) return;
+    const runningCount = running().length;
+    deps.onEvent({
+      type,
+      label: job.spec.label,
+      priority: job.spec.priority,
+      ...(job.spec.tab !== undefined && { tab: job.spec.tab }),
+      ...(elapsedMs !== undefined && { elapsedMs }),
+      running: runningCount,
+      waiting: jobs.size - runningCount,
+    });
+  };
+
+  /** Stops a running job and puts it back at the front of its priority. */
+  const putBack = (job: Job<P, R>) => {
+    const { run } = job;
+    if (!run) return;
+    job.run = undefined;
+    run.controller.abort();
+    job.front = --front;
+    emit('cancelled', job, now() - run.startedAt);
+  };
+
+  const settle = (job: Job<P, R>, outcome: { result: R } | { error: unknown }) => {
+    jobs.delete(job.spec.id);
+    for (const caller of job.callers) {
+      if ('result' in outcome) caller.resolve(outcome.result);
+      else caller.reject(outcome.error);
+    }
+    job.callers.clear();
+  };
+
+  const start = (job: Job<P, R>) => {
+    const controller = new AbortController();
+    const run = { controller, chunks: [] as string[], startedAt: now() };
+    job.run = run;
+    job.attempts += 1;
+    emit('started', job);
+    const ended = (outcome: { result: R } | { error: unknown }) => {
+      // Stopped by a click or dropped: this run's answer is not wanted.
+      if (job.run !== run) return;
+      job.run = undefined;
+      const elapsedMs = now() - run.startedAt;
+      const failed = 'error' in outcome || deps.failed?.(outcome.result) === true;
+      if (failed && job.spec.priority !== 'click' && job.attempts < MAX_ATTEMPTS) {
+        // After the others of its priority.
+        job.seq = ++seq;
+        job.front = 0;
+        emit('retry', job, elapsedMs);
+      } else {
+        const type = failed
+          ? 'failed'
+          : 'result' in outcome && deps.cached?.(outcome.result)
+            ? 'skipped'
+            : 'finished';
+        settle(job, outcome);
+        emit(type, job, elapsedMs);
+      }
+      pump();
+    };
+    let reply: Promise<R>;
+    try {
+      reply = deps.run(job.spec.payload, {
+        signal: controller.signal,
+        onChunk: (text) => {
+          if (job.run !== run) return;
+          run.chunks.push(text);
+          for (const caller of job.callers) if (caller.click) caller.onChunk?.(text);
+        },
+      });
+    } catch (error) {
+      reply = Promise.reject(error);
+    }
+    reply.then(
+      (result) => ended({ result }),
+      (error: unknown) => ended({ error }),
+    );
+  };
+
+  /** Starts a click at once, stopping the background jobs in its way. */
+  const startClick = (job: Job<P, R>) => {
+    for (const other of running()) {
+      if (other !== job && other.spec.priority !== 'click') putBack(other);
+    }
+    if (!job.run) start(job);
+  };
+
+  /** A running background job of lower priority than `job`, the lowest first. */
+  const lowerRunning = (job: Job<P, R>) =>
+    running()
+      .filter((other) => rank(other.spec.priority) > rank(job.spec.priority))
+      .sort((a, b) => rank(b.spec.priority) - rank(a.spec.priority))[0];
+
+  const clickRunning = () => running().some((job) => job.spec.priority === 'click');
+
+  /** Starts waiting jobs while there is room. */
+  function pump(): void {
+    for (const job of waiting()) {
+      if (job.spec.priority === 'click') startClick(job);
+      // While a click runs, the background waits, so the click has Ollama to itself.
+      else if (clickRunning()) continue;
+      else if (running().length < concurrency) start(job);
+      else if (job.spec.priority === 'hovered') {
+        const lower = lowerRunning(job);
+        if (lower) {
+          putBack(lower);
+          start(job);
+        }
+      }
+    }
+  }
+
+  const remove = (job: Job<P, R>) => {
+    const { run } = job;
+    job.run = undefined;
+    run?.controller.abort();
+    settle(job, { error: abortError() });
+    emit('dropped', job, run && now() - run.startedAt);
+  };
+
+  /**
+   * Takes `caller` off `job` (rejecting it), and drops the job when nobody
+   * else waits for it. True when the job was dropped.
+   */
+  const leave = (job: Job<P, R>, caller: Caller<R>): boolean => {
+    if (!job.callers.delete(caller)) return false;
+    caller.reject(abortError());
+    if (job.callers.size > 0 || jobs.get(job.spec.id) !== job) return false;
+    remove(job);
+    return true;
+  };
+
+  const add = (spec: JobSpec<P>, options: AddOptions = {}): Promise<R> =>
+    new Promise<R>((resolve, reject) => {
+      if (options.signal?.aborted) {
+        reject(abortError());
+        return;
+      }
+      const click = spec.priority === 'click';
+      const caller: Caller<R> = {
+        click,
+        ...(spec.tab !== undefined && { tab: spec.tab }),
+        onChunk: options.onChunk,
+        resolve,
+        reject,
+      };
+      let job = jobs.get(spec.id);
+      if (job) {
+        if (rank(spec.priority) < rank(job.spec.priority)) {
+          job.spec = { ...job.spec, priority: spec.priority, label: spec.label };
+        }
+        job.callers.add(caller);
+        emit('joined', job);
+        // What the model has written so far, then the rest as it comes.
+        const soFar = job.run?.chunks.join('');
+        if (click && soFar) options.onChunk?.(soFar);
+        // A click joining a running job keeps it going and stops the other
+        // background jobs, as a new click would.
+        if (click && job.run) startClick(job);
+      } else {
+        job = { spec, seq: ++seq, front: 0, attempts: 0, callers: new Set([caller]) };
+        jobs.set(spec.id, job);
+        emit('queued', job);
+      }
+      const joined = job;
+      options.signal?.addEventListener(
+        'abort',
+        () => {
+          if (leave(joined, caller)) pump();
+        },
+        { once: true },
+      );
+      pump();
+    });
+
+  return {
+    add,
+    prioritise(match, priority) {
+      let changed = 0;
+      for (const job of jobs.values()) {
+        if (job.run || job.spec.priority === 'click' || !match(job.spec)) continue;
+        job.spec = { ...job.spec, priority };
+        changed += 1;
+      }
+      if (changed) pump();
+      return changed;
+    },
+    drop(match) {
+      const picked = [...jobs.values()].filter((job) => match(job.spec));
+      for (const job of picked) remove(job);
+      if (picked.length) pump();
+      return picked.length;
+    },
+    dropTab(tab) {
+      let dropped = 0;
+      for (const job of [...jobs.values()]) {
+        for (const caller of [...job.callers]) {
+          if (caller.tab === tab && leave(job, caller)) dropped += 1;
+        }
+      }
+      if (dropped) pump();
+      return dropped;
+    },
+    state: () => ({
+      running: running().map((job) => job.spec.label),
+      waiting: waiting().map((job) => job.spec.label),
+    }),
+  };
+}
+
+/** The queue's priority for why a request was made. */
+export function priorityFor(cause: ExplainPayload['cause']): JobPriority {
+  return cause === 'hover' ? 'hovered' : cause === 'ahead' ? 'on-screen' : 'click';
+}
+
+let freshCount = 0;
+
+/**
+ * The job for an explain request from a tab. The same code in the same PR
+ * is the same job, so a click on a line being explained ahead or on hover
+ * joins it. Regenerate (`fresh`) always gets a job of its own.
+ */
+export function explainJob(payload: ExplainPayload, tab?: number): JobSpec<ExplainPayload> {
+  const priority = priorityFor(payload.cause);
+  return {
+    id:
+      payload.fresh === true ? `fresh:${++freshCount}` : `${payload.pr ?? ''}\n${payload.context}`,
+    label: payload.job?.label ?? (priority === 'click' ? 'clicked code' : 'a line'),
+    priority,
+    ...(tab !== undefined && { tab }),
+    ...(payload.pr !== undefined && { pr: payload.pr }),
+    ...(payload.job?.order !== undefined && { order: payload.job.order }),
+    payload,
+  };
+}

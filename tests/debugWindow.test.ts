@@ -17,6 +17,7 @@ import type {
   DebugTraceEntry,
 } from '../src/debug/types';
 import { DEBUG_LOG_LIMIT } from '../src/debug/debugLog';
+import type { QueueEvent } from '../src/explain/prefetchQueue';
 import { storageKey } from '../src/settings';
 import type { RoundTrip } from '../src/trace/types';
 
@@ -200,6 +201,71 @@ describe('debug window (PR 9.4)', () => {
       entry: { ...runningEntry('ahead-1:3', T0 + 4_000), cause: 'ahead' },
     });
     expect(w.groupTitles()).toEqual([expect.stringMatching(/^Explain ahead.*3 round trips$/)]);
+  });
+
+  it('shows what the background queue did in a "Queue" group, live (PR 10.3)', async () => {
+    const w = setup();
+    const queued = (at: number, event: QueueEvent): DebugEntry => ({
+      id: nextId++,
+      kind: 'queue',
+      group: 'q1',
+      cause: 'queue',
+      at,
+      event,
+    });
+    w.port().send({
+      type: 'snapshot',
+      entries: [
+        queued(T0, {
+          type: 'started',
+          label: 'src/a.ts:added:3',
+          priority: 'on-screen',
+          tab: 7,
+          running: 1,
+          waiting: 1,
+        }),
+        queued(T0 + 1_200, {
+          type: 'cancelled',
+          label: 'src/a.ts:added:3',
+          priority: 'on-screen',
+          tab: 7,
+          elapsedMs: 1_200,
+          running: 0,
+          waiting: 2,
+        }),
+      ],
+      running: [],
+    });
+    expect(w.groupTitles()).toEqual([expect.stringMatching(/^Queue.*1\.2 s · 2 events$/)]);
+    const lines = () => w.all('.queue-event').map((li) => li.textContent);
+    expect(lines()).toEqual([
+      '14:02:07.315startedsrc/a.ts:added:3on-screen · tab 7 · 1 running, 1 waiting',
+      '14:02:08.515cancelled for a click, put backsrc/a.ts:added:3on-screen · tab 7 · 1.2 s · 0 running, 2 waiting',
+    ]);
+    expect(w.all('.queue-event')[1]!.dataset.event).toBe('cancelled');
+    // No round trips, so the GitHub and Ollama filters do not hide it.
+    w.q<HTMLInputElement>('input[name=ollama]').click();
+    w.q<HTMLInputElement>('input[name=github]').click();
+    expect(w.all('.queue-event')).toHaveLength(2);
+
+    w.port().send({
+      type: 'entry',
+      entry: queued(T0 + 1_300, {
+        type: 'started',
+        label: 'clicked code',
+        priority: 'click',
+        running: 1,
+        waiting: 1,
+      }),
+    });
+    expect(lines()).toHaveLength(3);
+    expect(lines()[2]).toContain('clicked code');
+
+    w.button(/Copy as JSON/).click();
+    await vi.waitFor(() => expect(w.deps.copy).toHaveBeenCalled());
+    const data = JSON.parse(vi.mocked(w.deps.copy).mock.calls[0]![0]);
+    expect(data.groups[0].queue).toHaveLength(3);
+    expect(data.groups[0].queue[1]).toMatchObject({ type: 'cancelled', elapsedMs: 1_200 });
   });
 
   it('says how to fill it when the log is empty', () => {

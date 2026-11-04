@@ -201,6 +201,46 @@ describe('explain stream over a port', () => {
     );
   });
 
+  it("passes on the line's name and place for the queue, and the tab that asked (PR 10.3)", async () => {
+    const model = controllableExplain();
+    const port = fakePort(EXPLAIN_PORT, { id: EXTENSION_ID, tab: { id: 42 } } as never);
+    serveExplainPort(port, model.explain);
+    port.emitMessage({
+      type: 'start',
+      context: 'ctx',
+      cause: 'hover',
+      job: { label: 'src/a.ts:added:3', order: 7, extra: 'dropped' },
+    });
+    expect(model.explain).toHaveBeenCalledWith(
+      {
+        context: 'ctx',
+        fresh: false,
+        cause: 'hover',
+        job: { label: 'src/a.ts:added:3', order: 7 },
+      },
+      expect.objectContaining({ tab: 42 }),
+    );
+  });
+
+  it('ignores a malformed job, and cuts a long label', async () => {
+    const model = controllableExplain();
+    const port = fakePort(EXPLAIN_PORT, { id: EXTENSION_ID });
+    serveExplainPort(port, model.explain);
+    port.emitMessage({ type: 'start', context: 'ctx', job: { label: 3, order: 'x' } });
+    expect(model.explain.mock.calls[0]![0]).not.toHaveProperty('job');
+    expect(model.explain.mock.calls[0]![1]).not.toHaveProperty('tab');
+
+    const second = controllableExplain();
+    const other = fakePort(EXPLAIN_PORT, { id: EXTENSION_ID });
+    serveExplainPort(other, second.explain);
+    other.emitMessage({
+      type: 'start',
+      context: 'ctx',
+      job: { label: 'x'.repeat(500), order: NaN },
+    });
+    expect(second.explain.mock.calls[0]![0].job).toEqual({ label: 'x'.repeat(200) });
+  });
+
   it('Stop disconnects the port, which aborts the request in the service worker', async () => {
     const { runtime, workerPorts } = fakeRuntime();
     const model = controllableExplain();

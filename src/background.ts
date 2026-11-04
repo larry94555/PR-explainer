@@ -14,8 +14,13 @@ import {
   setupDebugMenu,
 } from './debug/debugWindowOpener';
 import { createExplainCache } from './explain/explainCache';
-import { createExplainHandler } from './explain/explainHandler';
+import {
+  createExplainHandler,
+  type ExplainPayload,
+  type ExplainResult,
+} from './explain/explainHandler';
 import { buildExplainPrompt } from './explain/explainPrompt';
+import { createPrefetchQueue, explainJob } from './explain/prefetchQueue';
 import { SAMPLE_CONTEXT } from './explain/sampleContext';
 import { createModelLookup } from './llm/contextSize';
 import { createLlmClient } from './llm/createClient';
@@ -106,7 +111,36 @@ const explain = createExplainHandler({
     return roundTripSink();
   },
 });
-chrome.tabs.onRemoved.addListener((tabId) => warmup.forgetTab(tabId));
+
+// Every explanation a PR tab asks for goes through one queue (PR 10.3,
+// src/explain/prefetchQueue.ts): clicks at once, Explain on hover and
+// Explain ahead one at a time behind them, shared by every tab. With the
+// Debug window setting on, what it does is shown in a "Queue" group, a new
+// one when it starts working after being empty for QUEUE_GROUP_IDLE_MS (so
+// Explain ahead's lines, one after another, share a group).
+const QUEUE_GROUP_IDLE_MS = 5_000;
+let queueGroup = crypto.randomUUID();
+let queueIdleSince: number | undefined;
+const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult>({
+  run: (payload, options) => explain(payload, options),
+  failed: (result) => result.status === 'failed',
+  cached: (result) => result.status === 'done' && result.cached !== undefined,
+  onEvent: (event) => {
+    const at = Date.now();
+    if (queueIdleSince !== undefined && at - queueIdleSince > QUEUE_GROUP_IDLE_MS) {
+      queueGroup = crypto.randomUUID();
+    }
+    queueIdleSince = event.running === 0 && event.waiting === 0 ? at : undefined;
+    if (debugSetting.current() !== false) {
+      void debugLog.add([{ kind: 'queue', group: queueGroup, cause: 'queue', at, event }]);
+    }
+  },
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  warmup.forgetTab(tabId);
+  // Only that tab's callers: a job shared with another tab keeps going.
+  explainQueue.dropTab(tabId);
+});
 
 // Listeners must be added on the first run of the worker, before it goes idle,
 // so Chrome can wake it for later messages.
@@ -130,7 +164,11 @@ new MessageRouter()
 listenForDebugLogPorts(chrome.runtime, debugLog);
 // Explanations stream over a port, so the popup can show the reply as it
 // arrives and stop it midway (see src/messaging/streamPort.ts).
-listenForExplainPorts(chrome.runtime, explain);
+// They go through the queue, which joins a click to the same line's
+// background job and stops the others while it runs.
+listenForExplainPorts(chrome.runtime, (payload, { tab, ...options }) =>
+  explainQueue.add(explainJob(payload, tab), options),
+);
 // Chat answers (the chat panel) stream the same way, over their own port.
 listenForChatPorts(
   chrome.runtime,
@@ -193,6 +231,8 @@ if (import.meta.env.MODE === 'development') {
       explainSample: () => explain({ context: SAMPLE_CONTEXT }),
       // Lists the debug log (PR 9.3), oldest first.
       log: () => debugLog.read(),
+      // The background queue's running and waiting jobs (PR 10.3).
+      queue: () => explainQueue.state(),
     },
   });
   console.info(

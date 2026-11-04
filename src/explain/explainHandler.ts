@@ -94,6 +94,16 @@ export interface ExplainPayload {
   cause?: 'click' | 'hover' | 'ahead';
   /** Groups this request's round trips with the click's in the debug log (PR 9.3). */
   debugId?: string;
+  /**
+   * For the background queue (PR 10.3, src/explain/prefetchQueue.ts): a name
+   * for the line, such as "src/a.ts:added:12", and where it is in the PR.
+   */
+  job?: ExplainJobInfo;
+}
+
+export interface ExplainJobInfo {
+  label: string;
+  order?: number;
 }
 
 /** The most file lines accepted, so a bad message cannot make a huge prompt. */

@@ -32,6 +32,7 @@ import type { Popup, PopupAnchor, PopupOptions } from './popup/popup';
 import { createClickTrace, type ClickTrace } from './trace/clickTrace';
 import type { TraceTask } from './trace/types';
 import type { DebugLogPayload } from './debug/types';
+import type { ExplainJobInfo } from './explain/explainHandler';
 
 export interface ClickHandlerDeps {
   /**
@@ -43,7 +44,9 @@ export interface ClickHandlerDeps {
    * are recorded in `trace` (PR 9.1). `cause` is "hover" for Explain on
    * hover (PR 8.7) and "ahead" for Explain ahead (PR 9.10), so their round
    * trips are not counted against a click (PR 9.2). Without a trace,
-   * `debugId` names the request's group in the debug log (PR 9.3).
+   * `debugId` names the request's group in the debug log (PR 9.3). The
+   * service worker's queue (PR 10.3) joins a click to a running hover or
+   * Explain ahead request for the same code.
    */
   explain(
     context: string,
@@ -54,6 +57,8 @@ export interface ClickHandlerDeps {
       trace?: ClickTrace;
       cause?: 'click' | 'hover' | 'ahead';
       debugId?: string;
+      /** The line's name, for the background queue in the debug window (PR 10.3). */
+      job?: ExplainJobInfo;
     },
   ): ExplainStream;
   /**

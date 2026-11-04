@@ -105,7 +105,6 @@ function setup(overrides: Partial<PrefetchDeps> = {}) {
   };
 }
 
-const flush = () => new Promise<void>((done) => queueMicrotask(done)).then(() => Promise.resolve());
 const settle = async () => {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 };
@@ -132,6 +131,8 @@ describe('explain on hover', () => {
       fresh: false,
       // Its round trips are marked as Explain on hover's (PR 9.2).
       cause: 'hover',
+      // Names the line in the service worker's queue (PR 10.3).
+      job: { label: 'a' },
       code: { filePath: 'src/a.ts', startLine: 1, endLine: 1, text: 'a' },
     });
     expect(env.prefetcher.running()).toBe('a');
@@ -211,42 +212,33 @@ describe('explain on hover', () => {
     expect(env.explain).toHaveBeenCalledTimes(7);
   });
 
-  it('lets a click join a running prefetch instead of starting a second request', async () => {
+  it('leaves a running prefetch for a click on the same line to join in the service worker', async () => {
     const env = setup();
     env.hover('a');
     vi.advanceTimersByTime(PREFETCH_DELAY_MS);
-    env.streams[0]!.chunk('**What it does** Ad');
-    env.setTime(2500);
-
     const got: string[] = [];
-    const joined = env.prefetcher.explain('context of a', (c) => got.push(c), { fresh: false });
-    expect(env.explain).toHaveBeenCalledTimes(1);
-    expect(env.events).toContainEqual({ type: 'joined', key: 'a', elapsedMs: 2500 });
-    // The text so far arrives once the caller is listening, then the rest.
-    expect(got).toEqual([]);
-    await flush();
+    const click = env.prefetcher.explain('context of a', (c) => got.push(c), { fresh: false });
+    // The click is sent with the same text, so the queue (PR 10.3) joins it
+    // to the prefetch: one request to the model.
+    expect(env.explain).toHaveBeenCalledTimes(2);
+    expect(env.streams[1]!.text).toBe('context of a');
+    expect(env.streams[0]!.stopped).toBe(false);
+    env.streams[1]!.chunk('**What it does** Ad');
     expect(got).toEqual(['**What it does** Ad']);
-    env.streams[0]!.chunk('ds one.');
-    expect(got).toEqual(['**What it does** Ad', 'ds one.']);
-
-    env.streams[0]!.finish();
-    await expect(joined.result).resolves.toBe(DONE);
+    env.streams[1]!.finish();
+    await expect(click.result).resolves.toBe(DONE);
   });
 
-  it('keeps a joined prefetch running when the pointer moves, and stops it with the popup', async () => {
+  it('stops its own prefetch when the pointer moves on, leaving a joined click to the queue', () => {
     const env = setup();
     env.hover('a');
     vi.advanceTimersByTime(PREFETCH_DELAY_MS);
-    const joined = env.prefetcher.explain('context of a', () => {}, { fresh: false });
+    env.prefetcher.explain('context of a', () => {}, { fresh: false });
     env.hover('b');
-    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
-    expect(env.streams[0]!.stopped).toBe(false);
-    // Still one request: the click's answer comes first.
-    expect(env.explain).toHaveBeenCalledTimes(1);
-
-    joined.stop();
+    // The prefetch's own request goes; the click's request (stream 1) stays,
+    // and the queue keeps the shared job running for it.
     expect(env.streams[0]!.stopped).toBe(true);
-    await expect(joined.result).rejects.toThrow('Stopped by the user');
+    expect(env.streams[1]!.stopped).toBe(false);
   });
 
   it('cancels the prefetch when a click asks about other code', () => {
@@ -445,13 +437,14 @@ describe('explain on hover across page changes', () => {
     expect(env.explain).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps a prefetch a click has joined (its popup closes itself if its code goes)', () => {
+  it('stops the prefetch on a page change but not a click on its line (the queue keeps that)', () => {
     const env = setup();
     env.hover('a');
     vi.advanceTimersByTime(PREFETCH_DELAY_MS);
     env.prefetcher.explain('context of a', () => {}, { fresh: false });
     env.prefetcher.pageChanged();
-    expect(env.streams[0]!.stopped).toBe(false);
+    expect(env.streams[0]!.stopped).toBe(true);
+    expect(env.streams[1]!.stopped).toBe(false);
   });
 });
 
@@ -541,7 +534,7 @@ describe('explain on hover on a real diff', () => {
     expect(hoveredLine(document.body)).toBeNull();
   });
 
-  it('a click on the hovered line joins its prefetch', async () => {
+  it('a click on the hovered line sends the request the prefetch sent, and leaves it running', async () => {
     vi.useFakeTimers();
     const { explain, streams } = fakeExplain();
     const prefetcher = createPrefetcher({ explain, isOn: () => true });
@@ -550,48 +543,15 @@ describe('explain on hover on a real diff', () => {
     vi.advanceTimersByTime(PREFETCH_DELAY_MS);
     document.removeEventListener('mouseover', prefetcher.onMouseOver);
     expect(explain).toHaveBeenCalledTimes(1);
-    streams[0]!.chunk('**What it does** Marks');
 
     explainLineAt({ explain: prefetcher.explain, openPopup }, code('R44'));
-    expect(explain).toHaveBeenCalledTimes(1);
-    await flush();
-    expect(currentPopup()!.state).toBe('streaming');
-    // What the prefetch had written is kept back (PR 9.6): the placeholders stay.
-    const root = currentPopup()!.host.shadowRoot!;
-    expect(root.querySelector('.partial')).toBeNull();
-    expect(root.querySelector('.placeholder')).not.toBeNull();
-    expect(root.textContent).not.toContain('Marks');
-    streams[0]!.finish();
+    expect(explain).toHaveBeenCalledTimes(2);
+    // Same text, so the service worker's queue joins them (PR 10.3).
+    expect(streams[1]!.text).toBe(streams[0]!.text);
+    expect(streams[0]!.stopped).toBe(false);
+    streams[1]!.finish();
     await settle();
     expect(currentPopup()!.state).toBe('done');
-    expect(root.querySelector('.placeholder')).toBeNull();
-    expect(root.textContent).toContain('Adds one.');
-  });
-
-  it('a joined prefetch shows the sections it has finished, then the rest (PR 9.13)', async () => {
-    vi.useFakeTimers();
-    const { explain, streams } = fakeExplain();
-    const prefetcher = createPrefetcher({ explain, isOn: () => true });
-    document.addEventListener('mouseover', prefetcher.onMouseOver);
-    code('R44').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
-    document.removeEventListener('mouseover', prefetcher.onMouseOver);
-    // Written before the click: What it does is already finished.
-    streams[0]!.chunk("## What it does\nAdds one.\n## Why it's needed\nIt is");
-
-    explainLineAt({ explain: prefetcher.explain, openPopup }, code('R44'));
-    await flush();
-    const root = currentPopup()!.host.shadowRoot!;
-    const shown = () =>
-      [...root.querySelectorAll<HTMLElement>('.body > section')].map((s) => s.dataset.section);
-    expect(currentPopup()!.state).toBe('streaming');
-    expect(shown()).toEqual(['what']);
-    expect(root.textContent).not.toContain('It is');
-    streams[0]!.chunk(' needed.\n## Concerns\n');
-    expect(shown()).toEqual(['what', 'why']);
-    streams[0]!.finish();
-    await settle();
-    expect(currentPopup()!.state).toBe('done');
-    expect(shown()).toEqual(['what', 'why', 'concerns']);
+    expect(currentPopup()!.host.shadowRoot!.textContent).toContain('Adds one.');
   });
 });

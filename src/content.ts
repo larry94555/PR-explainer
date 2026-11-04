@@ -207,7 +207,7 @@ const chats = new ChatSessions();
 // The block around the code in the full file goes too (PR 6.3). Each step is
 // a task in the click's trace (PR 9.1); the two reads run at the same time.
 const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
-  const { fresh, code, trace, cause = 'click' } = options;
+  const { fresh, code, trace, cause = 'click', job } = options;
   // A click's trace names its debug log group; Explain ahead passes its own.
   const debugId = trace?.id ?? options.debugId;
   const pr = prName(location.href);
@@ -248,7 +248,16 @@ const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
     trace?.markSent();
     const sent = trace?.start('send', 'Send the request');
     const stream = openExplainStream(
-      { context, pr, fresh, prInfo, fileContext, cause, ...(debugId && { debugId }) },
+      {
+        context,
+        pr,
+        fresh,
+        prInfo,
+        fileContext,
+        cause,
+        ...(debugId && { debugId }),
+        ...(job && { job }),
+      },
       onChunk,
     );
     sent?.();
@@ -257,7 +266,8 @@ const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
 };
 
 // Explain on hover (PR 8.7): with the setting on, resting the pointer on a
-// line starts its explanation, and a click joins it (src/prefetch.ts).
+// line starts its explanation, and a click joins it in the service worker's
+// queue (src/prefetch.ts, PR 10.3).
 const hoverSetting = trackHoverSetting(chrome.storage.sync, chrome.storage.onChanged, (on) => {
   if (!on) prefetcher.cancel();
 });
@@ -266,13 +276,13 @@ function describePrefetch(event: PrefetchEvent): string {
   if (event.type === 'finished') {
     return `prefetch of ${event.key} ${event.status === 'done' ? 'finished' : 'failed'}${seconds}`;
   }
-  if (event.type === 'joined') return `click joined the prefetch of ${event.key}${seconds}`;
   return `prefetch of ${event.key} ${event.type}`;
 }
 // Explain ahead (PR 9.10): with the setting on, once the page has been still
 // for 2 seconds the added lines on screen are explained one at a time, so a
-// click on them is answered from the cache (src/explainAhead.ts). A click or
-// a hover on other code stops it for a moment; a click on the same line joins it.
+// click on them is answered from the cache (src/explainAhead.ts). The service
+// worker's queue (PR 10.3) stops it for a moment for a click or a hover on
+// other code, and joins a click on the same line to it.
 const aheadSetting = trackAheadSetting(chrome.storage.sync, chrome.storage.onChanged, (on) => {
   if (!on) ahead.cancel();
   else if (features.attached) ahead.restart();
@@ -285,8 +295,6 @@ function describeAhead(event: AheadEvent): string {
       event.status === 'failed' ? 'failed' : event.cached ? 'was in the cache' : 'finished';
     return `explain ahead of ${event.key} ${how}${seconds}`;
   }
-  if (event.type === 'joined')
-    return `click joined the explanation ahead of ${event.key}${seconds}`;
   return `explain ahead of ${event.key} ${event.type}`;
 }
 const ahead = createExplainAhead({
@@ -310,8 +318,8 @@ const ahead = createExplainAhead({
 });
 
 const prefetcher = createPrefetcher({
-  // A hover on another line stops the line being explained ahead.
-  explain: ahead.explain,
+  // The service worker's queue puts a hover ahead of the line explained ahead.
+  explain: askWorker,
   isOn: () => hoverSetting.current(),
   isEnabled: () => enabled.current() === true,
   // One request at a time: not while a click's answer is still coming, and

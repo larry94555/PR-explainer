@@ -5,7 +5,9 @@
 // PR 9.3) over the debug log port: first the whole log and the round trips
 // still running, then each new entry as it comes. Round trips are grouped
 // under what caused them (a click, Explain on hover, Explain ahead, the
-// warm-up or a chat question), newest first. Opening a row shows the request (a chat prompt
+// warm-up or a chat question), newest first. The background queue (PR 10.3)
+// has its own "Queue" groups, listing each job it queued, started, finished
+// or cancelled for a click. Opening a row shows the request (a chat prompt
 // message by message, with its role), the reply (thinking apart from the
 // answer), Ollama's own timings, and the click's tasks from PR 9.1. A row
 // still running shows its reply growing and its time ticking.
@@ -26,6 +28,7 @@ import type {
   DebugEntry,
   DebugLogPortMessage,
   DebugLogPortName,
+  DebugQueueEntry,
   DebugRoundTripEntry,
   DebugRunningEntry,
   DebugTraceEntry,
@@ -74,6 +77,20 @@ export const CAUSE_LABELS: Record<DebugCause, string> = {
   ahead: 'Explain ahead',
   warmup: 'Warm-up',
   chat: 'Chat question',
+  queue: 'Queue',
+};
+
+/** How each queue event reads in a Queue group (PR 10.3). */
+export const QUEUE_EVENT_LABELS: Record<DebugQueueEntry['event']['type'], string> = {
+  queued: 'queued',
+  started: 'started',
+  finished: 'finished',
+  skipped: 'in the cache',
+  failed: 'failed',
+  retry: 'failed, will try again',
+  cancelled: 'cancelled for a click, put back',
+  joined: 'joined',
+  dropped: 'dropped',
 };
 
 const TARGET_LABELS: Record<RoundTripTarget, string> = { github: 'GitHub', ollama: 'Ollama' };
@@ -140,6 +157,8 @@ interface Group {
   end: number;
   rows: Row[];
   trace?: DebugTraceEntry;
+  /** A Queue group's events, oldest first (PR 10.3). */
+  events: DebugQueueEntry[];
 }
 
 function rowKey(entry: TripEntry): string {
@@ -186,6 +205,9 @@ interface GroupView {
   where: HTMLSpanElement;
   meta: HTMLSpanElement;
   list: HTMLUListElement;
+  events: HTMLOListElement;
+  /** How many events were drawn, so the list is redrawn only when one is added. */
+  drawnEvents: number;
 }
 
 export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): DebugWindow {
@@ -348,6 +370,7 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
           start: entry.at,
           end: entry.at,
           rows: [],
+          events: [],
         };
         groups.set(entry.group, group);
       }
@@ -361,7 +384,10 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
     };
     for (const entry of entries.values()) {
       const group = groupOf(entry);
-      if (entry.kind === 'trace') {
+      if (entry.kind === 'queue') {
+        group.events.push(entry);
+        group.end = Math.max(group.end, entry.at);
+      } else if (entry.kind === 'trace') {
         group.trace = entry;
         const last = Math.max(0, ...entry.tasks.map((t) => t.startMs + t.durationMs));
         group.end = Math.max(group.end, entry.at + last);
@@ -376,6 +402,7 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
       group.end = Math.max(group.end, tripEnd(entry, true));
     }
     for (const group of groups.values()) {
+      group.events.sort((a, b) => a.id - b.id);
       group.rows.sort((a, b) => b.entry.at - a.entry.at || (b.key > a.key ? 1 : -1));
     }
     return [...groups.values()].sort((a, b) => b.start - a.start);
@@ -400,9 +427,11 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
     const meta = el(doc, 'span', 'meta');
     heading.append(cause, where, meta);
     const list = el(doc, 'ul', 'rows');
-    section.append(heading, list);
+    const events = el(doc, 'ol', 'queue-events');
+    events.hidden = true;
+    section.append(heading, list, events);
     section.dataset.group = group.id;
-    return { section, cause, where, meta, list };
+    return { section, cause, where, meta, list, events, drawnEvents: 0 };
   };
 
   const makeRow = (key: string): RowView => {
@@ -447,12 +476,46 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
     view.where.hidden = !group.where;
     const trips = group.rows.length;
     const live = group.rows.some((row) => row.running);
+    const count = group.events.length;
     view.meta.textContent = [
       formatClock(group.start),
       `${formatMs(group.end - group.start)}${live ? ' so far' : ''}`,
-      `${trips} round trip${trips === 1 ? '' : 's'}`,
+      count > 0 && trips === 0
+        ? `${count} event${count === 1 ? '' : 's'}`
+        : `${trips} round trip${trips === 1 ? '' : 's'}`,
     ].join(' · ');
     view.section.dataset.cause = group.cause;
+    view.events.hidden = count === 0;
+    if (view.drawnEvents !== count) {
+      view.drawnEvents = count;
+      view.events.replaceChildren(...group.events.map(queueEventItem));
+    }
+  };
+
+  /** One line of a Queue group: when, what happened, to which line, and the queue after it. */
+  const queueEventItem = (entry: DebugQueueEntry) => {
+    const { event } = entry;
+    const item = el(doc, 'li', 'queue-event');
+    item.dataset.event = event.type;
+    item.append(
+      el(doc, 'span', 'time', formatClock(entry.at)),
+      el(doc, 'span', 'queue-what', QUEUE_EVENT_LABELS[event.type] ?? event.type),
+      el(doc, 'span', 'queue-label', event.label),
+      el(
+        doc,
+        'span',
+        'queue-meta',
+        [
+          event.priority,
+          event.tab !== undefined ? `tab ${event.tab}` : '',
+          event.elapsedMs !== undefined ? formatMs(event.elapsedMs) : '',
+          `${event.running} running, ${event.waiting} waiting`,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      ),
+    );
+    return item;
   };
 
   const statusText = (trip: RoundTrip, isRunning: boolean) => {
@@ -742,6 +805,12 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
           ...(isRunning && { status: 'running', durationMs: Math.round(now() - entry.at) }),
         })),
         ...(group.trace && { tasks: group.trace.tasks }),
+        ...(group.events.length > 0 && {
+          queue: group.events.map((entry) => ({
+            at: new Date(entry.at).toISOString(),
+            ...entry.event,
+          })),
+        }),
       })),
     };
   };
