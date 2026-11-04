@@ -388,7 +388,8 @@ function describePrefetch(event: PrefetchEvent): string {
 // other code, and joins a click on the same line to it.
 // Whole PR (PR 10.6) works through every changed line of the PR from its
 // diff on GitHub's API, the code on screen first, up to 500 lines per PR and
-// head commit; Requests at once sets how many requests it sends together.
+// head commit in this tab (each tab keeps its own count; lines another tab
+// already explained are cache hits and do not count); Requests at once sets how many requests it sends together.
 const aheadSetting = trackAheadSetting(chrome.storage.sync, chrome.storage.onChanged, (mode) => {
   if (mode === 'off') ahead.cancel();
   else if (features.attached) ahead.restart();

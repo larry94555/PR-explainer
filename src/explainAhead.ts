@@ -41,7 +41,9 @@
 // worker's queue which of these it is, so two tabs share one order. Scrolling
 // starts the wait again, and the order is built again from the code then on
 // screen, so the code you move to comes next. It stops at AHEAD_MAX_PER_PR
-// lines the model answered for one PR and head commit, kept across page
+// lines the model answered for one PR and head commit in this tab (each tab
+// counts its own; a line another tab already explained is a cache hit and
+// does not count), kept across page
 // changes of that PR, and starts over after a new commit. When the PR's diff
 // cannot be read (a private repository), it explains the lines on screen as
 // you scroll, up to the same limit.
@@ -512,17 +514,28 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
   /** Tracks one request to its end. */
   function track(
     request: Running,
-    outcome: (result: ExplainResult | HunkResult) => { done: string[]; cached: number },
+    outcome: (result: ExplainResult | HunkResult) => {
+      done: string[];
+      cached: number;
+      missing?: number;
+    },
   ): void {
     running.push(request);
     deps.onEvent?.({ type: 'started', key: request.key });
-    const finish = (status: 'done' | 'failed', answered = { done: [] as string[], cached: 0 }) => {
+    const finish = (
+      status: 'done' | 'failed',
+      answered: { done: string[]; cached: number; missing?: number } = { done: [], cached: 0 },
+    ) => {
       if (!running.includes(request)) return;
       running = running.filter((other) => other !== request);
       if (status === 'done') {
         for (const key of answered.done) done.add(key);
-        // An answer from the cache did not keep the model busy.
-        asked -= answered.cached;
+        // An answer from the cache did not keep the model busy, and a line a
+        // hunk's answer left out was not answered here (review on #65): it
+        // counts when it is asked again after a scroll. The service worker
+        // asks about it once on its own meanwhile; if that answer is in by
+        // then, asking again is a cache hit and counts nothing.
+        asked -= answered.cached + (answered.missing ?? 0);
       } else {
         // Ollama may be down or the model missing: try again after a scroll.
         queue = [];
@@ -585,6 +598,7 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
         return {
           done: answered.filter((l) => l.status !== 'missing').map((l) => l.label),
           cached: answered.filter((l) => l.status === 'cached').length,
+          missing: answered.filter((l) => l.status === 'missing').length,
         };
       },
     );

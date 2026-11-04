@@ -748,6 +748,52 @@ describe('Whole PR (PR 10.6)', () => {
     expect(options).toEqual({ debugId: 'ahead-1', job: { priority: 'rest', order: 0 } });
   });
 
+  it('counts only the lines a hunk answered toward the limit (review on #65)', async () => {
+    const hunk: DiffHunk = {
+      header: '@@ -1 +1,2 @@',
+      index: 0,
+      lines: [1, 2].map((n) => ({
+        filePath: 'f.ts',
+        lineNumber: n,
+        side: 'added' as const,
+        text: `line ${n}`,
+      })),
+    };
+    const lines = [1, 2].map((n, order) => ({
+      ...prLine('f.ts', n, order),
+      hunk: { id: 'patch:0', read: () => hunk },
+    }));
+    let answer!: (result: HunkResult) => void;
+    const explainHunk = vi.fn<NonNullable<ExplainAheadDeps['explainHunk']>>(() => ({
+      result: new Promise<HunkResult>((resolve) => (answer = resolve)),
+      stop: () => {},
+    }));
+    const env = prSetup({ prLines: async () => lines, explainHunk, maxPerPr: 2 });
+    env.setScreen([]);
+    env.ahead.restart();
+    await env.idle();
+    expect(explainHunk).toHaveBeenCalledTimes(1);
+    // The model's answer left out line 2.
+    answer({
+      status: 'hunk',
+      lines: [
+        { label: 'f.ts:added:1', status: 'done' },
+        { label: 'f.ts:added:2', status: 'missing' },
+      ],
+    });
+    await settle();
+    expect(env.events).not.toContainEqual(expect.objectContaining({ type: 'limit' }));
+    // After a scroll, line 2 is asked again, on its own, within the limit.
+    env.ahead.restart();
+    await env.idle();
+    expect(env.texts()).toEqual(['context of f.ts:2']);
+    await finishCurrent(env);
+    // Now both lines count, and the limit is reached on the next pass.
+    env.ahead.restart();
+    await env.idle();
+    expect(env.explain).toHaveBeenCalledTimes(1);
+  });
+
   it('moves the code you scroll to to the front', async () => {
     const env = prSetup();
     env.ahead.restart();
