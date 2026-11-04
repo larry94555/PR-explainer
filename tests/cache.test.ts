@@ -198,6 +198,56 @@ describe('explain cache', () => {
     expect(indexKeys(storage)).toEqual(['open2', 'open3']);
   });
 
+  it("makes room before saving, so a write never passes Chrome's 10 MB quota on the way", async () => {
+    const QUOTA = 10 * 1024 * 1024;
+    const storage = fakeSession();
+    const { set } = storage;
+    // Like Chrome: a write that would leave more than the quota in storage fails.
+    storage.set = async (items) => {
+      const after = { ...storage.data, ...items };
+      const total = Object.entries(after).reduce(
+        (sum, [k, v]) => sum + new TextEncoder().encode(k + JSON.stringify(v)).length,
+        0,
+      );
+      if (total > QUOTA) throw new Error('QUOTA_BYTES quota exceeded');
+      await set(items);
+    };
+    const cache = createExplainCache(storage, { now: clock() });
+    const MB = 1024 * 1024;
+    // About 8 MB of answers already saved, from another PR.
+    for (let i = 0; i < 8; i++) await cache.set(`old${i}`, entry('o'.repeat(MB - 400)), 'o/r#2');
+    expect(storage.bytes()).toBeGreaterThan(7.9 * MB);
+    const big = entry('n'.repeat(3 * MB));
+    await cache.set('new', big, 'o/r#1');
+    expect(await cache.get('new')).toEqual(big);
+    // The oldest went, and the index lists exactly what is stored.
+    expect(indexKeys(storage)).toEqual(['old3', 'old4', 'old5', 'old6', 'old7', 'new']);
+    expect(Object.keys(storage.data).sort()).toEqual(
+      [CACHE_INDEX_KEY, ...indexKeys(storage).map(entryStorageKey)].sort(),
+    );
+    expect(storage.bytes()).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
+  });
+
+  it('a save that fails after making room leaves the index naming only stored answers', async () => {
+    const storage = fakeSession();
+    const cache = createExplainCache(storage, { maxBytes: await limitFor(2), now: clock() });
+    await cache.set('k1', entry('One.'), 'o/r#1');
+    await cache.set('k2', entry('Two.'), 'o/r#1');
+    const { set } = storage;
+    storage.set = async (items) => {
+      if (entryStorageKey('k3') in items) throw new Error('quota');
+      await set(items);
+    };
+    await expect(cache.set('k3', entry('Three.'), 'o/r#1')).rejects.toThrow('quota');
+    expect(indexKeys(storage)).toEqual(['k2']);
+    expect(Object.keys(storage.data).sort()).toEqual(
+      [CACHE_INDEX_KEY, entryStorageKey('k2')].sort(),
+    );
+    storage.set = set;
+    expect(await cache.get('k2')).not.toBeNull();
+    expect(await cache.get('k3')).toBeNull();
+  });
+
   it('does not keep an answer too big to ever fit', async () => {
     const storage = fakeSession();
     const cache = createExplainCache(storage, { maxBytes: await limitFor(2) });

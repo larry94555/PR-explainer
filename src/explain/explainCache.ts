@@ -289,12 +289,17 @@ export function createExplainCache(
           openPr: pr,
           keep: key,
         });
-        await storage.set({ [storageKey]: saved, [CACHE_INDEX_KEY]: kept });
-        index = kept;
         if (removed.length > 0) {
-          // The index no longer lists them, so a failed removal only leaves unused space.
+          // Make room before saving: Chrome checks its quota on every write,
+          // so saving first could pass 10 MB for a moment and fail although
+          // the answer fits once the old ones are gone. The index stops
+          // listing them first, so it never names a removed answer, and a
+          // failed removal only leaves unused space.
+          await writeIndex(kept.filter((r) => r !== row));
           await storage.remove(removed.map((r) => entryStorageKey(r[0]))).catch(() => {});
         }
+        await storage.set({ [storageKey]: saved, [CACHE_INDEX_KEY]: kept });
+        index = kept;
       }),
     list: () =>
       serial(async () => {
