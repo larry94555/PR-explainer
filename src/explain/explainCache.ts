@@ -88,6 +88,8 @@ export interface ExplainCache {
   set(key: string, value: CachedExplanation, pr?: string): Promise<void>;
   /** Every answer, least recently used first. */
   list(): Promise<ListedExplanation[]>;
+  /** Removes one answer (an answer past Keep answers for, PR 10.9). */
+  remove(key: string): Promise<void>;
   /** Removes every answer (Clear saved answers, PR 10.9). */
   clear(): Promise<void>;
 }
@@ -309,6 +311,14 @@ export function createExplainCache(
         }
         await storage.set({ [storageKey]: saved, [CACHE_INDEX_KEY]: kept });
         index = kept;
+      }),
+    remove: (key) =>
+      serial(async () => {
+        const rows = await load();
+        if (!rows.some((r) => r[0] === key)) return;
+        // The index first, so it never names a removed answer.
+        await writeIndex(rows.filter((r) => r[0] !== key));
+        await storage.remove([entryStorageKey(key)]).catch(() => {});
       }),
     clear: () =>
       serial(async () => {

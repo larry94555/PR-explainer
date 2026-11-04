@@ -125,6 +125,71 @@ describe('saved answers (PR 10.9)', () => {
     expect(await disk.prune()).toBe(0);
   });
 
+  it('a session-cache hit is a use on disk too, for Keep answers for and the size limit (review on #68)', async () => {
+    const one = sizeOf('a', answer('answer a'));
+    const env = setup({ days: 7, maxBytes: one * 2 });
+    const { cache } = env.start();
+    await cache.set('a', answer('answer a'), 'p');
+    env.advance(1000);
+    await cache.set('b', answer('answer b'), 'p');
+    env.advance(6 * DAY_MS);
+    // Answered from the session cache, which used to leave the disk's last use at day 0.
+    expect(await cache.get('a')).toEqual(answer('answer a'));
+    env.advance(2 * DAY_MS);
+
+    const next = env.start();
+    // "a" was used 2 days ago, "b" 8 days ago.
+    expect(await next.disk.prune()).toBe(1);
+    expect(await next.cache.get('b')).toBeNull();
+    expect(await next.cache.get('a')).toEqual(answer('answer a'));
+
+    // The least recently used goes first: "c" pushes out "d", not "a".
+    const later = env.start();
+    await later.cache.set('d', answer('answer d'), 'p');
+    env.advance(1000);
+    expect(await later.cache.get('a')).toEqual(answer('answer a'));
+    env.advance(1000);
+    await later.cache.set('c', answer('answer c'), 'p');
+    expect(await env.start().disk.get('d')).toBeNull();
+    expect(await env.start().disk.get('a')).not.toBeNull();
+  });
+
+  it('an answer past Keep answers for is a miss even while Chrome stays open (review on #68)', async () => {
+    const env = setup({ days: 7 });
+    const { cache, session } = env.start();
+    await cache.set('k', answer('old'), 'p');
+    env.advance(8 * DAY_MS);
+    expect(await cache.get('k')).toBeNull();
+    // Gone from the session cache and the disk.
+    expect(session.data['explainCache.index']).toEqual([]);
+    expect(session.data['explainCache.entry.k']).toBeUndefined();
+    expect(await env.start().cache.get('k')).toBeNull();
+
+    // Within the limit, a session hit stands.
+    await cache.set('k2', answer('recent'), 'p');
+    env.advance(6 * DAY_MS);
+    expect(await cache.get('k2')).toEqual(answer('recent'));
+  });
+
+  it('with Keep answers for at 0, the session cache still answers for as long as Chrome is open', async () => {
+    const env = setup({ days: 0 });
+    const { cache } = env.start();
+    await cache.set('k', answer('x'), 'p');
+    env.advance(30 * DAY_MS);
+    expect(await cache.get('k')).toEqual(answer('x'));
+  });
+
+  it('a session hit stands when IndexedDB fails', async () => {
+    const broken = {
+      open: () => {
+        throw new Error('IndexedDB is off');
+      },
+    } as unknown as IDBFactory;
+    const disk = createPersistentCache({ indexedDB: broken, keepDays: async () => 7 });
+    expect(await disk.touch('k')).toBe('missing');
+    await expect(disk.remove('k')).resolves.toBeUndefined();
+  });
+
   it('drops the least recently used answers past the size limit', async () => {
     const one = sizeOf('k0', answer('answer 0'));
     const env = setup({ maxBytes: one * 3 });

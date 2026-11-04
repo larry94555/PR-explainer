@@ -36,6 +36,8 @@ const BY_USED = 'usedAt';
 export const DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
+type Lookup = { status: 'fresh'; record: AnswerRecord } | { status: 'expired' | 'missing' | 'off' };
+
 /** One saved answer, as IndexedDB holds it. */
 interface AnswerRecord {
   key: string;
@@ -51,6 +53,15 @@ interface AnswerRecord {
 export interface PersistentCache {
   /** The saved answer and its PR, or null for a miss (or any failure). */
   get(key: string): Promise<{ value: CachedExplanation; pr: string } | null>;
+  /**
+   * For an answer the session cache already has (review on #68): checks it
+   * against Keep answers for, using the same last-used time as `get`, and
+   * counts the read as a use. `expired` means it must not be shown, and is
+   * removed from disk; `off` means Keep answers for is 0, so the session
+   * cache alone decides; `missing` means there is no copy on disk (or
+   * IndexedDB failed), and the session cache's answer stands.
+   */
+  touch(key: string): Promise<'fresh' | 'expired' | 'missing' | 'off'>;
   /** Saves an answer, unless Keep answers for is 0. Failures are ignored. */
   set(key: string, value: CachedExplanation, pr: string): Promise<void>;
   /**
@@ -58,6 +69,8 @@ export interface PersistentCache {
    * is 0). Returns how many were removed. Failures are ignored.
    */
   prune(): Promise<number>;
+  /** Removes one saved answer. Failures are ignored. */
+  remove(key: string): Promise<void>;
   /** Removes every saved answer. */
   clear(): Promise<void>;
 }
@@ -217,40 +230,52 @@ export function createPersistentCache({
     return removed;
   };
 
-  return {
-    get: (key) =>
-      serial(async () => {
-        try {
-          const days = await keepDays();
-          if (days <= 0) return null;
-          const database = await db();
-          const tx = database.transaction(STORE, 'readwrite');
-          const wrote = committed(tx);
-          const store = tx.objectStore(STORE);
-          const record: unknown = await done(store.get(key));
-          if (!isRecord(record)) {
-            // A broken record is removed; a missing one changes nothing.
-            if (record !== undefined) {
-              store.delete(key);
-              total = null;
-            }
-            await wrote;
-            return null;
-          }
-          if (expired(record.usedAt, days)) {
+  /**
+   * Reads an answer and counts it as a use: a read moves it to the most
+   * recently used end, so answers you keep coming back to stay longest. An
+   * answer past Keep answers for, or a broken record, is removed.
+   */
+  const use = (key: string): Promise<Lookup> =>
+    serial(async (): Promise<Lookup> => {
+      try {
+        const days = await keepDays();
+        if (days <= 0) return { status: 'off' };
+        const database = await db();
+        const tx = database.transaction(STORE, 'readwrite');
+        const wrote = committed(tx);
+        const store = tx.objectStore(STORE);
+        const record: unknown = await done(store.get(key));
+        if (!isRecord(record)) {
+          // A broken record is removed; a missing one changes nothing.
+          if (record !== undefined) {
             store.delete(key);
-            if (total !== null) total -= record.size;
-            await wrote;
-            return null;
+            total = null;
           }
-          // A read counts as a use, so answers you keep coming back to stay longest.
-          store.put({ ...record, usedAt: now() });
           await wrote;
-          return { value: pick(record.value), pr: record.pr };
-        } catch {
-          return null;
+          return { status: 'missing' };
         }
-      }),
+        if (expired(record.usedAt, days)) {
+          store.delete(key);
+          if (total !== null) total -= record.size;
+          await wrote;
+          return { status: 'expired' };
+        }
+        store.put({ ...record, usedAt: now() });
+        await wrote;
+        return { status: 'fresh', record };
+      } catch {
+        return { status: 'missing' };
+      }
+    });
+
+  return {
+    get: async (key) => {
+      const found = await use(key);
+      return found.status === 'fresh'
+        ? { value: pick(found.record.value), pr: found.record.pr }
+        : null;
+    },
+    touch: async (key) => (await use(key)).status,
     set: (key, value, pr) =>
       serial(async () => {
         try {
@@ -311,6 +336,19 @@ export function createPersistentCache({
           return 0;
         }
       }),
+    remove: (key) =>
+      serial(async () => {
+        try {
+          const database = await db();
+          const tx = database.transaction(STORE, 'readwrite');
+          const wrote = committed(tx);
+          tx.objectStore(STORE).delete(key);
+          await wrote;
+        } finally {
+          // Counted again from the database on the next save.
+          total = null;
+        }
+      }).catch(() => {}),
     clear: () =>
       serial(async () => {
         const database = await db();
@@ -331,7 +369,14 @@ export function createLayeredCache(session: ExplainCache, disk: PersistentCache)
   return {
     get: async (key) => {
       const hit = await session.get(key).catch(() => null);
-      if (hit) return hit;
+      if (hit) {
+        // The disk keeps the last-used time Keep answers for counts from, so
+        // a session hit is a use there too, and an answer past the limit is
+        // not shown just because Chrome stayed open (review on #68).
+        if ((await disk.touch(key)) !== 'expired') return hit;
+        await session.remove(key).catch(() => {});
+        return null;
+      }
       const saved = await disk.get(key);
       if (!saved) return null;
       // Back into the session cache, so the next read does not reach the disk.
@@ -340,6 +385,9 @@ export function createLayeredCache(session: ExplainCache, disk: PersistentCache)
     },
     set: async (key, value, pr = '') => {
       await Promise.all([session.set(key, value, pr), disk.set(key, value, pr)]);
+    },
+    remove: async (key) => {
+      await Promise.all([session.remove(key), disk.remove(key)]);
     },
     list: (): Promise<ListedExplanation[]> => session.list(),
     clear: async () => {
