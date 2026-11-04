@@ -6,7 +6,7 @@
 
 | Part of the extension | Talks to | What it sends |
 |---|---|---|
-| The script on GitHub pages | `https://github.com` and `https://raw.githubusercontent.com` only | Requests for the PR's description and the full files it changes, from raw.githubusercontent.com (public repositories) or from the file's page on github.com with your GitHub sign-in (private repositories). This is what GitHub's own pages load. |
+| The script on GitHub pages | `https://github.com`, `https://raw.githubusercontent.com` and, for one address only, `https://api.github.com` | Requests for the PR's description and the full files it changes, from raw.githubusercontent.com (public repositories) or from the file's page on github.com with your GitHub sign-in (private repositories). The list of the PR's changed files and their diffs from GitHub's API (`/repos/{owner}/{repo}/pulls/{n}/files`), sent without your GitHub sign-in, so it works for public repositories only. This is what GitHub's own pages load. |
 | The service worker and the settings page | The LLM URL on the settings page only (default `http://localhost:11434`) | The prompt: the clicked code, the code around it, the PR's title and description, and your chat questions. |
 
 Nothing else is contacted: no analytics, no tracking, no error reporting, no update checks, and no fonts, scripts or images from the web.
@@ -14,7 +14,7 @@ Nothing else is contacted: no analytics, no tracking, no error reporting, no upd
 ## How this is enforced
 
 - The settings page refuses an LLM URL that is not on this computer.
-- Every request goes through one of two guarded fetches (`src/net/githubFetch.ts` and `src/net/llmFetch.ts`). A request to any other address is refused before it is sent, and the LLM side refuses any address but the one you set.
+- Every request goes through one of two guarded fetches (`src/net/githubFetch.ts` and `src/net/llmFetch.ts`). A request to any other address is refused before it is sent, and the LLM side refuses any address but the one you set. On `api.github.com` only a PR's changed files may be read, and never with your cookies.
 - Redirects are refused, not followed: a server that answers with a redirect elsewhere makes the request fail, so the browser never sends anything to the new address. Tests check this against real HTTP servers. (GitHub's `/raw/` file links always redirect, so they are not used; private files are read from the file's page instead.)
 - A unit test (`tests/networkGuard.test.ts`) scans the source and fails if any code reaches the network another way (a direct `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `sendBeacon`, or a script, image or stylesheet loaded from the web).
 - The manifest asks Chrome for access to `github.com` and this computer only, and `tests/manifest.test.ts` fails if a broader permission is added. Its only other permissions are `storage` and `contextMenus` (the **Open debug window** item on the toolbar button's menu), which read nothing from any page.
@@ -27,4 +27,4 @@ In Chrome's extension storage: your settings (synced with your Chrome profile if
 
 ## Check it yourself
 
-On `chrome://extensions`, click **service worker** on the PR Explainer card to open its DevTools, and choose the **Network** tab. Click a few lines in a PR: every request listed goes to your LLM URL. The PR page's own DevTools shows GitHub's requests too; the extension's are the ones to `github.com` and `raw.githubusercontent.com` started by `content.js` (see the **Initiator** column).
+On `chrome://extensions`, click **service worker** on the PR Explainer card to open its DevTools, and choose the **Network** tab. Click a few lines in a PR: every request listed goes to your LLM URL. The PR page's own DevTools shows GitHub's requests too; the extension's are the ones to `github.com`, `raw.githubusercontent.com` and `api.github.com` started by `content.js` (see the **Initiator** column).

@@ -19,7 +19,8 @@ import { closeDetached, DiffPageFeatures, showsDiffs, watchNavigation } from './
 import { currentPopup, openPopup } from './popup/popup';
 import { buildWaterfall } from './popup/latencyBreakdown';
 import { traceLine } from './trace/clickTrace';
-import { createFileContextLoader, type CodeSpan } from './fileContext';
+import { createFileContextLoader, headShaFromPage, type CodeSpan } from './fileContext';
+import { createPatchRequestLoader, describePatchResult } from './patchRequests';
 import type { FileContext } from './explain/explainPrompt';
 import { createPrefetcher, trackHoverSetting, type PrefetchEvent } from './prefetch';
 import {
@@ -84,6 +85,67 @@ const fileContexts = createFileContextLoader({
 function loadFileContext(code: CodeSpan | undefined): Promise<FileContext | undefined> {
   const pr = parsePrUrl(location.href);
   return pr && code ? fileContexts.load(pr, code) : Promise.resolve(undefined);
+}
+
+// Every changed line's request, built from the PR's diff on GitHub's API
+// rather than the page (PR 10.4), read once per PR and head commit. Nothing
+// sends them yet (PR 10.6 will); for now the list is read only with the
+// Debug window setting on, so the debug window can show it.
+const patchRequests = createPatchRequestLoader({
+  fetchJson: async (url, signal) => {
+    const response = await githubFetch(
+      url,
+      { credentials: 'omit', signal, headers: { Accept: 'application/vnd.github+json' } },
+      'PR files',
+    );
+    if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
+    return response.json();
+  },
+  headSha: (pr) => headShaFromPage(document, pr),
+});
+
+/**
+ * With the Debug window setting on, reads the PR's diff from GitHub's API as
+ * a Files changed page opens, and adds its round trips to the page's group in
+ * the debug log, named with how many files and changed lines it found.
+ */
+function readPatchAhead(): void {
+  const pr = parsePrUrl(location.href);
+  if (!pr || !showsDiffs(location.href) || !debugSetting.current()) return;
+  const { id, at, tripsFrom } = pageOpen;
+  void patchRequests.load(pr).then((result) => {
+    const summary = describePatchResult(result);
+    console.info(`[PR Explainer] PR diff from GitHub: ${summary}`);
+    // Only the reads this load started; a list read before is not sent again.
+    const roundTrips = githubTrips
+      .since(tripsFrom)
+      .filter((trip) => trip.purpose === 'PR files' && trip.cause === 'click')
+      .map((trip) => ({ ...trip, purpose: `PR files: ${summary}` }));
+    if (roundTrips.length === 0) return;
+    sendRequest('debugLogAdd', { group: id, cause: 'warmup', at, roundTrips, tasks: [] }).catch(
+      () => {
+        // Only the debug log misses it.
+      },
+    );
+  });
+}
+
+// In a dev build, `prExplainerDebug.patchRequests()` in the page's DevTools
+// console (with "PR Explainer" picked in its context menu, where the content
+// script runs) lists the requests built from the PR's diff.
+if (import.meta.env.MODE === 'development') {
+  (globalThis as { prExplainerDebug?: unknown }).prExplainerDebug = {
+    patchRequests: async () => {
+      const pr = parsePrUrl(location.href);
+      if (!pr) return 'Not on a PR page.';
+      const result = await patchRequests.load(pr);
+      if (result.status !== 'done') return describePatchResult(result);
+      console.table(
+        result.lines.map(({ key, hunk, request }) => ({ key, hunk, code: request.code?.text })),
+      );
+      return result;
+    },
+  };
 }
 
 let workerStatus = 'Service worker: checking…';
@@ -333,7 +395,10 @@ const prefetcher = createPrefetcher({
 });
 
 // The Debug window setting (PR 9.3), for the popup's Debug button.
-const debugSetting = trackDebugSetting(chrome.storage.sync, chrome.storage.onChanged);
+// Turning it on also reads the PR's diff for the debug window (PR 10.4).
+const debugSetting = trackDebugSetting(chrome.storage.sync, chrome.storage.onChanged, (on) => {
+  if (on) readPatchAhead();
+});
 // Show answers as they are written (PR 9.6): off, the popup and the chat show
 // each answer whole once it is ready. Read again for each popup and chat.
 const streamSetting = trackStreamSetting(chrome.storage.sync, chrome.storage.onChanged);
@@ -471,10 +536,12 @@ function onPageChanged(url: string): void {
   features.sync(url);
   prMetadata.forget();
   fileContexts.forget();
+  patchRequests.forget();
   // A prefetch or wait from before the move is for code that may be gone.
   prefetcher.pageChanged();
   ahead.pageChanged();
   if (features.attached) ahead.restart();
   readDescriptionAhead();
+  readPatchAhead();
 }
 watchNavigation(window, onPageChanged, { onRedraw: onPageChanged });

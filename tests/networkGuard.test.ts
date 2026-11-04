@@ -55,6 +55,10 @@ describe('createGithubFetch (content script)', () => {
     'https://github.com.evil.example/owner/repo',
     'https://gist.github.com/owner/abc',
     'https://api.github.com/repos/owner/repo',
+    'https://api.github.com/repos/owner/repo/pulls/7', // only the PR's files
+    'https://api.github.com/repos/owner/repo/pulls/7/files/extra',
+    'https://api.github.com/user',
+    'https://api.github.com/graphql',
     'https://user:secret@github.com/owner/repo',
     'https://github.com:8443/owner/repo',
     '//example.com/collect', // protocol-relative
@@ -67,6 +71,13 @@ describe('createGithubFetch (content script)', () => {
     expect(error).toBeInstanceOf(BlockedRequestError);
     expect((error as Error).message).toContain(input);
     expect(base).not.toHaveBeenCalled();
+  });
+
+  it("reads only a PR's files from the GitHub API, without the GitHub sign-in (PR 10.4)", async () => {
+    const base = okFetch();
+    const url = 'https://api.github.com/repos/owner/repo/pulls/7/files?per_page=100&page=2';
+    await createGithubFetch(base, () => PAGE)(url, { credentials: 'include' });
+    expect(base).toHaveBeenCalledExactlyOnceWith(url, { credentials: 'omit', redirect: 'error' });
   });
 
   it('resolves relative paths against the current page each time', async () => {
