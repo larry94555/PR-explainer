@@ -16,9 +16,11 @@ import {
 import { createExplainCache } from './explain/explainCache';
 import {
   createExplainHandler,
+  type ExplainDeps,
   type ExplainPayload,
   type ExplainResult,
 } from './explain/explainHandler';
+import { createHunkExplainHandler, linePayload, type HunkResult } from './explain/hunkHandler';
 import { buildExplainPrompt } from './explain/explainPrompt';
 import { createPrefetchQueue, explainJob } from './explain/prefetchQueue';
 import { SAMPLE_CONTEXT } from './explain/sampleContext';
@@ -94,7 +96,7 @@ const warmup = createWarmup({
 // Finished explanations, each under its own key (src/explain/explainCache.ts).
 const explainCache = createExplainCache(chrome.storage.session);
 
-const explain = createExplainHandler({
+const explainDeps: ExplainDeps = {
   getSettings,
   createClient: createLlmClient,
   platform: detectPlatform(navigator.userAgent),
@@ -110,7 +112,10 @@ const explain = createExplainHandler({
   get onRoundTrip() {
     return roundTripSink();
   },
-});
+};
+const explain = createExplainHandler(explainDeps);
+// Every changed line of a hunk in one request (PR 10.5), for background work.
+const explainHunk = createHunkExplainHandler(explainDeps);
 
 // Every explanation a PR tab asks for goes through one queue (PR 10.3,
 // src/explain/prefetchQueue.ts): clicks at once, Explain on hover and
@@ -121,10 +126,23 @@ const explain = createExplainHandler({
 const QUEUE_GROUP_IDLE_MS = 5_000;
 let queueGroup = crypto.randomUUID();
 let queueIdleSince: number | undefined;
-const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult>({
-  run: (payload, options) => explain(payload, options),
+const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult | HunkResult>({
+  run: (payload, options) =>
+    payload.hunk ? explainHunk(payload, options) : explain(payload, options),
   failed: (result) => result.status === 'failed',
-  cached: (result) => result.status === 'done' && result.cached !== undefined,
+  cached: (result) =>
+    result.status === 'hunk'
+      ? result.lines.every((line) => line.status === 'cached')
+      : result.status === 'done' && result.cached !== undefined,
+  // The lines a hunk's answer left out go back one by one.
+  followUps: (spec, result) =>
+    result.status === 'hunk' && spec.payload.hunk
+      ? result.lines.flatMap((line, i) =>
+          line.status === 'missing'
+            ? [explainJob(linePayload(spec.payload, spec.payload.hunk!.lines[i]!), spec.tab)]
+            : [],
+        )
+      : [],
   onEvent: (event) => {
     const at = Date.now();
     if (queueIdleSince !== undefined && at - queueIdleSince > QUEUE_GROUP_IDLE_MS) {

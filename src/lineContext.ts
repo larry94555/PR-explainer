@@ -82,6 +82,31 @@ export function formatContext(context: LineContext): string {
   ].join('\n');
 }
 
+// --- Whole hunks (PR 10.5) --------------------------------------------------
+
+/**
+ * The diff section a hunk request shows the model: the file, the hunk
+ * header, and the hunk's lines from `options.before` lines above the first
+ * line to explain to `options.after` below the last, diff style. The lines
+ * to explain are listed separately, numbered (src/explain/hunkPrompt.ts).
+ */
+export function hunkSection(
+  hunk: DiffHunk,
+  indexes: readonly number[],
+  options: ContextOptions = DEFAULT_CONTEXT,
+): string {
+  const first = Math.min(...indexes);
+  const last = Math.max(...indexes);
+  const { filePath } = hunk.lines[first]!;
+  const from = Math.max(0, first - Math.max(0, options.before));
+  const to = Math.min(hunk.lines.length, last + 1 + Math.max(0, options.after));
+  return [
+    `File: ${filePath} (${languageFor(filePath)})`,
+    ...(hunk.header ? [hunk.header] : []),
+    ...hunk.lines.slice(from, to).map(withMarker),
+  ].join('\n');
+}
+
 // --- Selected blocks (PR 4.4) ------------------------------------------------
 
 /** The most lines one selection may hold, to keep the prompt a sensible size. */

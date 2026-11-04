@@ -75,6 +75,7 @@ import { buildFittedExplainPrompt, type PromptReport } from './fitPrompt';
 import { parseExplanation, type Explanation } from './parseExplanation';
 import { PromptTooLargeError } from './tokenBudget';
 import type { TraceTask, WorkerTrace } from '../trace/types';
+import type { HunkPayload } from './hunkHandler';
 
 export interface ExplainPayload {
   /** The context block from formatContext (src/lineContext.ts). */
@@ -99,6 +100,12 @@ export interface ExplainPayload {
    * for the line, such as "src/a.ts:added:12", and where it is in the PR.
    */
   job?: ExplainJobInfo;
+  /**
+   * Every changed line of a hunk to explain in one request (PR 10.5,
+   * src/explain/hunkHandler.ts), for the background queue. `context` is then
+   * the hunk's diff section.
+   */
+  hunk?: HunkPayload;
 }
 
 export interface ExplainJobInfo {

@@ -14,7 +14,13 @@ import { currentChatPanel, openChatPanel } from './chat/chatPanel';
 import { ChatSessions } from './chat/chatSession';
 import { createClickHandler, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
-import { openAfter, openChatStream, openExplainStream, sendRequest } from './messaging/client';
+import {
+  openAfter,
+  openChatStream,
+  openExplainStream,
+  openHunkStream,
+  sendRequest,
+} from './messaging/client';
 import { closeDetached, DiffPageFeatures, showsDiffs, watchNavigation } from './navigation';
 import { currentPopup, openPopup } from './popup/popup';
 import { buildWaterfall } from './popup/latencyBreakdown';
@@ -28,6 +34,7 @@ import {
   trackAheadSetting,
   visibleAddedLines,
   type AheadEvent,
+  type ExplainAheadDeps,
 } from './explainAhead';
 import { createPrMetadataLoader, type PrMetadata } from './prMetadata';
 import { parsePrUrl } from './prUrl';
@@ -327,6 +334,38 @@ const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
   });
 };
 
+// Every line of one hunk in one request (PR 10.5), for Explain ahead. Each
+// line carries what a click on it would send, so the service worker saves
+// its answer under the key that click looks up.
+const askWorkerHunk: NonNullable<ExplainAheadDeps['explainHunk']> = (request, { debugId }) => {
+  const pr = prName(location.href);
+  const ready = Promise.all([
+    loadPrMetadata(),
+    Promise.all(request.lines.map((line) => loadFileContext(line.request.code))),
+  ]);
+  return openAfter(ready, ([prInfo, files]) =>
+    openHunkStream({
+      context: request.text,
+      pr,
+      fresh: false,
+      prInfo,
+      cause: 'ahead',
+      debugId,
+      job: { label: request.label },
+      hunk: {
+        text: request.text,
+        lines: request.lines.map((line, i) => ({
+          label: line.label,
+          context: line.request.text,
+          line: line.line,
+          code: line.code,
+          ...(files[i] && { fileContext: files[i] }),
+        })),
+      },
+    }),
+  );
+};
+
 // Explain on hover (PR 8.7): with the setting on, resting the pointer on a
 // line starts its explanation, and a click joins it in the service worker's
 // queue (src/prefetch.ts, PR 10.3).
@@ -361,6 +400,7 @@ function describeAhead(event: AheadEvent): string {
 }
 const ahead = createExplainAhead({
   explain: askWorker,
+  explainHunk: askWorkerHunk,
   isOn: () => aheadSetting.current(),
   isEnabled: () => enabled.current() === true,
   // One request at a time: not while a click's or a chat answer is being

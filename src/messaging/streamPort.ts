@@ -11,6 +11,7 @@ import type {
   ExplainResult,
   ExplainStreamOptions,
 } from '../explain/explainHandler';
+import { toHunkPayload, type HunkResult } from '../explain/hunkHandler';
 import type {
   ChatPortName,
   ExplainPortName,
@@ -26,7 +27,7 @@ export type StreamingExplain = (
   payload: ExplainPayload,
   /** `tab` is the tab that asked, for the background queue (PR 10.3). */
   options: ExplainStreamOptions & { tab?: number },
-) => Promise<ExplainResult>;
+) => Promise<ExplainResult | HunkResult>;
 
 export type StreamingChat = (
   payload: ChatPayload,
@@ -115,6 +116,7 @@ export function serveExplainPort(port: PortLike, explain: StreamingExplain): voi
     port,
     (message) => {
       const job = toJobInfo(message.job);
+      const hunk = message.hunk === undefined ? undefined : toHunkPayload(message.hunk);
       return {
         context: message.context as string,
         pr: typeof message.pr === 'string' ? message.pr : undefined,
@@ -130,6 +132,20 @@ export function serveExplainPort(port: PortLike, explain: StreamingExplain): voi
         ...(typeof message.debugId === 'string' && { debugId: message.debugId }),
         // The line's name and place in the PR, for the background queue (PR 10.3).
         ...(job && { job }),
+        // Every changed line of a hunk, for one request (PR 10.5). Read like
+        // the single-line fields above, which take no file context, so each
+        // line's cache key is the one a click on it gets.
+        ...(hunk && {
+          hunk: {
+            ...hunk,
+            lines: hunk.lines.map(({ label, context, line, code }) => ({
+              label,
+              context,
+              line,
+              code,
+            })),
+          },
+        }),
       };
     },
     (payload, options) => explain(payload, { ...options, ...(tab !== undefined && { tab }) }),

@@ -17,7 +17,18 @@ import {
   type ExplainDeps,
   type ExplainPayload,
 } from '../src/explain/explainHandler';
-import { AHEAD_MAX_PER_PAGE, worthExplaining } from '../src/explainAhead';
+import {
+  AHEAD_HUNK_MAX_LINES,
+  AHEAD_MAX_PER_PAGE,
+  hunkRequest,
+  visibleAddedLines,
+  worthExplaining,
+  type AheadLine,
+  type HunkRequest,
+} from '../src/explainAhead';
+import { createHunkExplainHandler } from '../src/explain/hunkHandler';
+import { splitHunkLines } from '../src/explain/hunkPrompt';
+import type { Explanation } from '../src/explain/parseExplanation';
 import { createModelLookup } from '../src/llm/contextSize';
 import { gpuStatus } from '../src/llm/gpuStatus';
 import { OllamaClient } from '../src/llm/ollamaClient';
@@ -30,9 +41,13 @@ import {
   formatRate,
   formatShare,
   summarizeAhead,
+  summarizeByHunk,
   summarizeLevel,
   type AheadLineResult,
   type AheadResult,
+  type BenchAnswer,
+  type ByHunkResult,
+  type HunkBenchResult,
   type BenchRun,
   type BenchSample,
   type LevelResult,
@@ -56,15 +71,20 @@ export interface AheadSampleLine {
  * (PR 9.10) picks them: blank and closing lines skipped, at most
  * AHEAD_MAX_PER_PAGE, each with the request a click builds (lineRequest).
  */
-export function aheadLines(html: string): AheadSampleLine[] {
+function loadPage(html: string): Document {
   const { window } = new JSDOM(html);
   // src/diffDom.ts checks `instanceof Element`, which must be this page's Element.
   const scope = globalThis as Record<string, unknown>;
   for (const name of ['Element', 'Node', 'HTMLElement', 'Text']) {
     scope[name] = (window as unknown as Record<string, unknown>)[name];
   }
+  return window.document;
+}
+
+export function aheadLines(html: string): AheadSampleLine[] {
+  const document = loadPage(html);
   const lines: AheadSampleLine[] = [];
-  for (const cell of addedLineCells(window.document)) {
+  for (const cell of addedLineCells(document)) {
     const line = locateLine(cell);
     const request = line && worthExplaining(line.text) && lineRequest(cell)?.request;
     if (!line || !request) continue;
@@ -184,8 +204,77 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
         return { run, fromCache };
       });
     },
+
+    /**
+     * The by-hunk mode (PR 10.5) for one hunk: each line on its own, as a
+     * click asks with nothing cached, then the whole hunk in one request,
+     * whose answers are read back from the cache the way a click finds them.
+     */
+    async byHunk(request: HunkRequest, model: string): Promise<HunkBenchResult> {
+      const single: HunkBenchResult['single'] = [];
+      const fresh = handlerFor(model);
+      for (const line of request.lines) {
+        let answer: BenchAnswer | undefined;
+        const run = await timed(
+          fresh,
+          { context: line.request.text, pr: AHEAD_PR, cause: 'ahead' },
+          { onAnswer: (a) => (answer = a) },
+        );
+        single.push({ line: line.label, run, ...(answer && { answer }) });
+      }
+      const cache = createExplainCache(memoryStorage());
+      const settings = settingsFor(model);
+      const explainHunk = createHunkExplainHandler({
+        getSettings: async () => settings,
+        createClient,
+        platform,
+        contextTokens: contextSizer,
+        thinking,
+        cache,
+      });
+      const startedAt = performance.now();
+      let hunk: BenchRun;
+      try {
+        const result = await explainHunk({
+          context: request.text,
+          pr: AHEAD_PR,
+          cause: 'ahead',
+          hunk: {
+            text: request.text,
+            lines: request.lines.map((l) => ({
+              label: l.label,
+              context: l.request.text,
+              line: l.line,
+              code: l.code,
+            })),
+          },
+        });
+        hunk =
+          result.status === 'failed'
+            ? { ok: false, error: result.message }
+            : {
+                ok: true,
+                totalMs: performance.now() - startedAt,
+                ...(result.timings && { timings: result.timings }),
+              };
+      } catch (error) {
+        hunk = { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+      // A click on each line, answered from what the hunk request saved.
+      const cached = handlerFor(model, cache);
+      const byHunk: (BenchAnswer | undefined)[] = [];
+      for (const line of request.lines) {
+        const result = await cached({ context: line.request.text, pr: AHEAD_PR });
+        byHunk.push(
+          result.status === 'done' && result.cached ? answerOf(result.explanation) : undefined,
+        );
+      }
+      return { label: request.label, single, hunk, byHunk };
+    },
   };
 }
+
+const answerOf = ({ what, why, concerns }: Explanation): BenchAnswer => ({ what, why, concerns });
 
 /**
  * Runs one explain request, timing it the way the popup does: the whole
@@ -199,7 +288,12 @@ async function timed(
   {
     onCached,
     onFirstToken,
-  }: { onCached?: (cached: boolean) => void; onFirstToken?: () => void } = {},
+    onAnswer,
+  }: {
+    onCached?: (cached: boolean) => void;
+    onFirstToken?: () => void;
+    onAnswer?: (answer: BenchAnswer) => void;
+  } = {},
 ): Promise<BenchRun> {
   const startedAt = performance.now();
   let firstTokenMs: number | undefined;
@@ -217,6 +311,7 @@ async function timed(
     const totalMs = performance.now() - startedAt;
     if (result.status === 'failed') return { ok: false, error: result.message };
     onCached?.(result.cached !== undefined);
+    onAnswer?.(answerOf(result.explanation));
     const { timings } = result;
     // The thinking part of the answer, as the popup's Think row works it out
     // (PR 9.1), with thinking in its own field counted too (PR 9.5).
@@ -371,6 +466,61 @@ export async function runParallel(
         `${formatRate(s.perMinute)} answers/min, median ${formatMs(s.medianMs)} per answer, ` +
           `${s.ranTogether} ran together, click ${s.clickError ? `failed: ${s.clickError}` : formatMs(s.clickMs)}` +
           (s.failed ? ` (${s.failed} failed)` : ''),
+      );
+    }
+    const ranOn = await bench.ranOn(model);
+    if (ranOn) result.ranOn = ranOn;
+    results.push(result);
+  }
+  return results;
+}
+
+// --- By hunk (PR 10.5) -----------------------------------------------------
+
+/**
+ * The hunk requests Explain ahead would send for every added line of a saved
+ * diff page: the lines of each hunk, AHEAD_HUNK_MAX_LINES at a time.
+ */
+export function hunkRequests(html: string): HunkRequest[] {
+  const lines = visibleAddedLines(loadPage(html), () => true).filter((l) =>
+    worthExplaining(l.text),
+  );
+  const byHunk = new Map<string, AheadLine[]>();
+  for (const line of lines) {
+    const id = line.hunk?.id ?? line.key;
+    byHunk.set(id, [...(byHunk.get(id) ?? []), line]);
+  }
+  return [...byHunk.values()]
+    .flatMap((group) => splitHunkLines(group, AHEAD_HUNK_MAX_LINES))
+    .flatMap((part) => {
+      const request = hunkRequest(part);
+      return request ? [request] : [];
+    });
+}
+
+/** The by-hunk mode for each model (PR 10.5), after loading the model with `warmSample`. */
+export async function runByHunk(
+  bench: ReturnType<typeof createBench>,
+  models: readonly string[],
+  warmSample: BenchSample,
+): Promise<ByHunkResult[]> {
+  const root = resolve(import.meta.dirname, '..');
+  const requests = hunkRequests(readFileSync(join(root, AHEAD_PAGE), 'utf8'));
+  const lines = requests.reduce((n, r) => n + r.lines.length, 0);
+  const results: ByHunkResult[] = [];
+  for (const model of models) {
+    console.log(`  ${model} · loading, then ${lines} lines in ${requests.length} hunks …`);
+    await bench.explain(warmSample, model); // loads the model; not counted
+    const result: ByHunkResult = { model, page: AHEAD_PAGE, hunks: [] };
+    for (const request of requests) {
+      const hunk = await bench.byHunk(request, model);
+      result.hunks.push(hunk);
+      const s = summarizeByHunk([hunk]);
+      console.log(
+        `  ${model} · ${request.label} · one at a time ${formatMs(s.singlePerLineMs)} per line, ` +
+          (hunk.hunk.ok
+            ? `by hunk ${formatMs(s.hunkPerLineMs)} per line (${s.hunkAnswered} of ${s.lines} answered)`
+            : `by hunk failed: ${hunk.hunk.error}`),
       );
     }
     const ranOn = await bench.ranOn(model);

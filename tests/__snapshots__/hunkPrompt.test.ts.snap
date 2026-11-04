@@ -1,0 +1,24 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the hunk prompt > sends the PR, the diff section once, then the numbered lines 1`] = `
+"Pull request title: Only accept a local LLM server
+Pull request description:
+<description>
+Keeps code local.
+</description>
+
+\`\`\`
+File: src/settings.ts (TypeScript)
+@@ -38,6 +38,9 @@ export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
+ export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
++// Code never leaves the laptop, so only loopback addresses are accepted.
++const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+ export interface SettingsIssue {
+\`\`\`
+
+Lines to explain:
+[1] line 40: +// Code never leaves the laptop, so only loopback addresses are accepted.
+[2] line 41: +const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+Explain each of the 2 numbered lines."
+`;

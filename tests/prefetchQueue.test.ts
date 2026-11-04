@@ -526,3 +526,124 @@ describe('explain requests as jobs', () => {
     ).toMatchObject({ order: 4 });
   });
 });
+
+describe('hunk jobs (PR 10.5)', () => {
+  const hunk = (
+    env: ReturnType<typeof setup>,
+    lines: string[],
+    extra: Partial<JobSpec<string>> = {},
+  ) => env.job(`hunk:${lines.join(',')}`, 'on-screen', { covers: lines, ...extra });
+
+  it('makes a click on a line of the running hunk job wait for it instead of sending its own request', async () => {
+    const env = setup();
+    void env.queue.add(hunk(env, ['a', 'b']));
+    const click = env.queue.add(env.job('a', 'click'));
+    await settle();
+    expect(env.live().map((r) => r.payload)).toEqual(['hunk:a,b']);
+    expect(env.queue.state()).toEqual({ running: ['hunk:a,b'], waiting: ['a'] });
+    env.live()[0]!.finish();
+    await settle();
+    // Now it runs, and the handler answers it from the cache the hunk filled.
+    expect(env.live().map((r) => r.payload)).toEqual(['a']);
+    env.live()[0]!.finish({ cached: true });
+    await expect(click).resolves.toMatchObject({ cached: true });
+    expect(env.runs.map((r) => r.payload)).toEqual(['hunk:a,b', 'a']);
+  });
+
+  it('still stops the other background jobs for that click, and keeps them waiting until it is answered', async () => {
+    const env = setup({ concurrency: 2 });
+    void env.queue.add(hunk(env, ['a', 'b']));
+    void env.queue.add(env.job('other'));
+    expect(env.live()).toHaveLength(2);
+    void env.queue.add(env.job('b', 'click'));
+    expect(env.live().map((r) => r.payload)).toEqual(['hunk:a,b']);
+    expect(env.types()).toContain('cancelled other');
+    env.live()[0]!.finish();
+    await settle();
+    // The click goes first; the other job waits for it.
+    expect(env.live().map((r) => r.payload)).toEqual(['b']);
+    env.live()[0]!.finish({ cached: true });
+    await settle();
+    expect(env.live().map((r) => r.payload)).toEqual(['other']);
+  });
+
+  it('runs the click at once when the hunk job is only waiting', () => {
+    const env = setup();
+    void env.queue.add(env.job('busy'));
+    void env.queue.add(hunk(env, ['a', 'b']));
+    void env.queue.add(env.job('a', 'click'));
+    expect(env.live().map((r) => r.payload)).toEqual(['a']);
+  });
+
+  it('makes a hover on a line of the running hunk job wait too, instead of stopping it', () => {
+    const env = setup();
+    void env.queue.add(hunk(env, ['a', 'b']));
+    void env.queue.add(env.job('a', 'hovered'));
+    expect(env.live().map((r) => r.payload)).toEqual(['hunk:a,b']);
+    expect(env.types()).not.toContain('cancelled hunk:a,b');
+  });
+
+  it('queues the lines its answer left out as single-line jobs, first in its priority', async () => {
+    const env = setup({
+      followUps: (spec) =>
+        spec.covers ? [env.job('b', 'rest', { tab: 3 }), env.job('c', 'rest', { tab: 3 })] : [],
+    });
+    void env.queue.add(hunk(env, ['a', 'b', 'c'], { tab: 3 }));
+    void env.queue.add(env.job('later'));
+    env.live()[0]!.finish();
+    await settle();
+    expect(env.queue.state()).toEqual({ running: ['b'], waiting: ['c', 'later'] });
+    expect(env.events.find((e) => e.type === 'queued' && e.label === 'c')?.priority).toBe(
+      'on-screen',
+    );
+    // Nobody waits for them, but closing the tab lets go of them.
+    expect(env.queue.dropTab(3)).toBe(2);
+    expect(env.queue.state()).toEqual({ running: ['later'], waiting: [] });
+  });
+
+  it('does not queue a line again that already has a job, nor follow up a failed hunk', async () => {
+    const followUps = vi.fn(() => [
+      { id: 'b', label: 'b', priority: 'rest' as const, payload: 'b' },
+    ]);
+    const env = setup({ followUps });
+    void env.queue.add(hunk(env, ['a', 'b']));
+    const click = env.queue.add(env.job('b', 'click'));
+    env.live()[0]!.finish();
+    await settle();
+    expect(env.queue.state()).toEqual({ running: ['b'], waiting: [] });
+    env.live()[0]!.finish();
+    await click;
+    // A failed hunk job is tried again, then given up on, with no follow-ups.
+    followUps.mockClear();
+    void env.queue.add(hunk(env, ['x']));
+    env.live()[0]!.finish({ status: 'failed' });
+    await settle();
+    env.live()[0]!.finish({ status: 'failed' });
+    await settle();
+    expect(followUps).not.toHaveBeenCalled();
+  });
+
+  it('turns a hunk request into a background job covering the job of each of its lines', () => {
+    const line = (context: string) => ({ label: context, context, line: 1, code: '+x' });
+    const spec = explainJob(
+      {
+        context: 'section',
+        pr: 'o/r#1',
+        cause: 'ahead',
+        job: { label: 'src/a.ts: lines 1, 2' },
+        hunk: { text: 'section', lines: [line('one'), line('two')] },
+      },
+      7,
+    );
+    expect(spec).toMatchObject({ priority: 'on-screen', label: 'src/a.ts: lines 1, 2', tab: 7 });
+    expect(spec.covers).toEqual([
+      explainJob({ context: 'one', pr: 'o/r#1' }).id,
+      explainJob({ context: 'two', pr: 'o/r#1' }).id,
+    ]);
+    expect(spec.id).not.toBe(explainJob({ context: 'section', pr: 'o/r#1' }).id);
+    // Never a click, even if one says so.
+    expect(explainJob({ context: 's', hunk: { text: 's', lines: [line('one')] } }).priority).toBe(
+      'on-screen',
+    );
+  });
+});

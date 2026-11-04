@@ -3,8 +3,8 @@
 // way to a click. Every explain request from a PR tab goes through it, so two
 // tabs share one queue instead of each keeping the model busy.
 //
-// A job is one request (for now one line, built as a click would build it;
-// PR 10.5 adds whole hunks) with a priority. Jobs run highest priority first,
+// A job is one request (one line, built as a click would build it, or every
+// changed line of a hunk, PR 10.5) with a priority. Jobs run highest priority first,
 // then in the order their lines appear in the PR (`order`), then in the order
 // they came. At most `concurrency` jobs run at once (1 by default), and no
 // background job starts while a click runs.
@@ -21,6 +21,12 @@
 //   the two priorities. A click that joins a running job gets what the model
 //   has written so far, then the rest. Regenerate never joins (the caller
 //   gives it an id of its own).
+// - A hunk job names the line jobs it answers (`covers`). A click, or a
+//   hover, on one of those lines while the hunk job runs waits for it
+//   instead of sending its own request, and is then answered from the cache.
+//   The click still stops the other background jobs. Lines the hunk's answer
+//   left out come back as single-line jobs (`followUps`), first in their
+//   priority, kept for the tabs that asked for the hunk.
 // - A job whose answer is in the cache finishes at once (the handler answers
 //   it from the cache without the model) and is logged as skipped.
 // - A background job that fails is tried once more after the others of its
@@ -62,6 +68,11 @@ export interface JobSpec<P> {
   /** Where the line is in the PR, for the order within a priority. Lower first. */
   order?: number;
   payload: P;
+  /**
+   * For a hunk job (PR 10.5): the ids of the line jobs it answers. A click on
+   * one of those lines while it runs waits for it instead of running.
+   */
+  covers?: readonly string[];
 }
 
 export type QueueEventType =
@@ -93,6 +104,11 @@ export interface QueueDeps<P, R> {
   failed?(result: R): boolean;
   /** True when a result came from the cache, so the job is logged as skipped. */
   cached?(result: R): boolean;
+  /**
+   * Jobs to queue once `spec` has finished with `result`: for a hunk job,
+   * the lines its answer left out (PR 10.5). They take its priority.
+   */
+  followUps?(spec: JobSpec<P>, result: R): JobSpec<P>[];
   concurrency?: number;
   /** Clock in milliseconds. Defaults to Date.now. */
   now?(): number;
@@ -210,6 +226,7 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
     const ended = (outcome: { result: R } | { error: unknown }) => {
       // Stopped by a click or dropped: this run's answer is not wanted.
       if (job.run !== run) return;
+      const tabs = new Set([...job.callers].map((caller) => caller.tab));
       job.run = undefined;
       const elapsedMs = now() - run.startedAt;
       const failed = 'error' in outcome || deps.failed?.(outcome.result) === true;
@@ -226,6 +243,7 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
             : 'finished';
         settle(job, outcome);
         emit(type, job, elapsedMs);
+        if (!failed && 'result' in outcome) queueFollowUps(job, outcome.result, tabs);
       }
       pump();
     };
@@ -248,11 +266,49 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
     );
   };
 
+  /**
+   * Queues the jobs `deps.followUps` gives for a finished job, first in its
+   * priority, in the order given, each kept for the tabs that asked for it.
+   */
+  const queueFollowUps = (done: Job<P, R>, result: R, tabs: Set<number | undefined>) => {
+    const specs = (deps.followUps?.(done.spec, result) ?? []).filter((s) => !jobs.has(s.id));
+    front -= specs.length;
+    specs.forEach((spec, i) => {
+      const job: Job<P, R> = {
+        spec: { ...spec, priority: done.spec.priority },
+        seq: ++seq,
+        front: front + i,
+        attempts: 0,
+        // Nobody waits for the answer, which goes to the cache; closing the
+        // tab lets go of it.
+        callers: new Set(
+          [...tabs].map((tab) => ({
+            click: false,
+            ...(tab !== undefined && { tab }),
+            resolve: () => {},
+            reject: () => {},
+          })),
+        ),
+      };
+      jobs.set(spec.id, job);
+      emit('queued', job);
+    });
+  };
+
+  /** A running job that answers `job` as part of a hunk (PR 10.5). */
+  const coveredBy = (job: Job<P, R>) =>
+    running().find((other) => other !== job && other.spec.covers?.includes(job.spec.id));
+
+  /** Stops the background jobs in a click's way, except `keep`. */
+  const makeRoom = (keep: Job<P, R>) => {
+    for (const other of running()) {
+      if (other !== keep && other.spec.priority !== 'click') putBack(other);
+    }
+  };
+
   /** Starts a click at once, stopping the background jobs in its way. */
   const startClick = (job: Job<P, R>) => {
-    for (const other of running()) {
-      if (other !== job && other.spec.priority !== 'click') putBack(other);
-    }
+    makeRoom(job);
     if (!job.run) start(job);
   };
 
@@ -262,14 +318,23 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       .filter((other) => rank(other.spec.priority) > rank(job.spec.priority))
       .sort((a, b) => rank(b.spec.priority) - rank(a.spec.priority))[0];
 
-  const clickRunning = () => running().some((job) => job.spec.priority === 'click');
+  /** A click is running, or waiting for the hunk job that answers it. */
+  const clickActive = () => [...jobs.values()].some((job) => job.spec.priority === 'click');
 
   /** Starts waiting jobs while there is room. */
   function pump(): void {
     for (const job of waiting()) {
-      if (job.spec.priority === 'click') startClick(job);
+      const cover = coveredBy(job);
+      if (job.spec.priority === 'click') {
+        // The hunk job answering this line goes on alone; then the click
+        // finds the answer in the cache.
+        if (cover) makeRoom(cover);
+        else startClick(job);
+      }
       // While a click runs, the background waits, so the click has Ollama to itself.
-      else if (clickRunning()) continue;
+      else if (clickActive()) continue;
+      // A line being answered as part of a hunk waits for it.
+      else if (cover) continue;
       else if (running().length < concurrency) start(job);
       else if (job.spec.priority === 'hovered') {
         const lower = lowerRunning(job);
@@ -389,13 +454,25 @@ let freshCount = 0;
 /**
  * The job for an explain request from a tab. The same code in the same PR
  * is the same job, so a click on a line being explained ahead or on hover
- * joins it. Regenerate (`fresh`) always gets a job of its own.
+ * joins it. Regenerate (`fresh`) always gets a job of its own. A hunk
+ * request covers the job of each of its lines, so a click on one of them
+ * waits for it.
  */
 export function explainJob(payload: ExplainPayload, tab?: number): JobSpec<ExplainPayload> {
-  const priority = priorityFor(payload.cause);
+  // A hunk is only ever background work.
+  const priority =
+    payload.hunk && payload.cause !== 'hover' ? 'on-screen' : priorityFor(payload.cause);
+  const lineId = (context: string) => `${payload.pr ?? ''}\n${context}`;
+  // A hunk (PR 10.5) is named by its lines, and answers each line's job.
+  const covers = payload.hunk?.lines.map((line) => lineId(line.context));
   return {
     id:
-      payload.fresh === true ? `fresh:${++freshCount}` : `${payload.pr ?? ''}\n${payload.context}`,
+      payload.fresh === true
+        ? `fresh:${++freshCount}`
+        : covers
+          ? `hunk:${covers.join('\n\u0000')}`
+          : lineId(payload.context),
+    ...(covers && { covers }),
     label: payload.job?.label ?? (priority === 'click' ? 'clicked code' : 'a line'),
     priority,
     ...(tab !== undefined && { tab }),
