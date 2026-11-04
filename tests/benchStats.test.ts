@@ -392,6 +392,7 @@ describe('the ahead mode', () => {
     expect(s).toEqual({
       lines: 4,
       aheadFailed: 1,
+      aheadSkipped: 0,
       aheadMedianMs: 4000,
       aheadTotalMs: 12_000,
       clicksWithinGoal: 3,
@@ -409,6 +410,16 @@ describe('the ahead mode', () => {
     expect(s.share).toBeCloseTo(1 / 3);
     expect(summarizeAhead([])).toMatchObject({ lines: 0, share: 0, aheadTotalMs: 0 });
     expect(AHEAD_SHARE_GOAL).toBe(0.9);
+  });
+
+  it('counts lines not tried ahead apart from those that failed', () => {
+    const notTried: AheadLineResult = { line: 'a.ts:5', click: ok(4100), fromCache: false };
+    const s = summarizeAhead([...lines, notTried]);
+    expect(s).toMatchObject({ lines: 5, aheadFailed: 1, aheadSkipped: 1, clicksWithinGoal: 3 });
+    expect(formatAheadTable([{ model: 'm', page: 'p', lines: [...lines, notTried] }])).toContain(
+      '| m | 5 (1 failed ahead, 1 not tried) |',
+    );
+    expect(aheadFailures([{ model: 'm', page: 'p', lines: [notTried] }])).toEqual([]);
   });
 
   it('writes a row per model and lists the lines that failed', () => {
@@ -441,6 +452,54 @@ describe('the ahead mode', () => {
     expect(text).toContain('each added line of `page.html` is explained ahead');
     expect(text).toContain('| m | 4 (1 failed ahead) |');
     expect(text).toContain('Failed lines:\n\n- m, a.ts:4, ahead: Ollama stopped\n');
+  });
+});
+
+describe('explaining ahead, then clicking (review on #56)', () => {
+  // A fake model behind a cache, as in the service worker: an answer explained
+  // ahead is in the cache when its line is clicked.
+  function fakeModel(failOn: string) {
+    const cache = new Set<string>();
+    const asked: string[] = [];
+    const ask = async (line: { key: string; context: string }, cause: 'ahead' | 'click') => {
+      asked.push(`${cause} ${line.key}`);
+      if (cache.has(line.key)) return { run: ok(2), fromCache: true };
+      if (cause === 'ahead' && line.key === failOn) {
+        return { run: { ok: false as const, error: 'Ollama stopped' }, fromCache: false };
+      }
+      cache.add(line.key);
+      return { run: ok(cause === 'ahead' ? 3000 : 3100), fromCache: false };
+    };
+    return { ask, asked };
+  }
+  const lines = ['l1', 'l2', 'l3', 'l4'].map((key) => ({ key, context: key }));
+
+  it('stops explaining ahead at the first failed line, as Explain ahead does', async () => {
+    const { explainAheadThenClick } = await import('../scripts/benchExplain.ts');
+    const model = fakeModel('l2');
+    const results = await explainAheadThenClick(lines, model.ask);
+    expect(model.asked).toEqual([
+      'ahead l1',
+      'ahead l2',
+      'click l1',
+      'click l2',
+      'click l3',
+      'click l4',
+    ]);
+    expect(results.map((r) => [r.line, r.ahead?.ok, r.fromCache])).toEqual([
+      ['l1', true, true],
+      ['l2', false, false],
+      ['l3', undefined, false],
+      ['l4', undefined, false],
+    ]);
+    const s = summarizeAhead(results);
+    expect(s).toMatchObject({ aheadFailed: 1, aheadSkipped: 2, clicksWithinGoal: 1, share: 0.25 });
+  });
+
+  it('explains every line ahead when none fails', async () => {
+    const { explainAheadThenClick } = await import('../scripts/benchExplain.ts');
+    const results = await explainAheadThenClick(lines, fakeModel('none').ask);
+    expect(results.every((r) => r.ahead?.ok && r.fromCache)).toBe(true);
   });
 });
 

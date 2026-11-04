@@ -69,6 +69,36 @@ export function aheadLines(html: string): AheadSampleLine[] {
   return lines;
 }
 
+/** One request of the ahead mode: its timing, and whether the cache answered it. */
+export type AheadAsk = (
+  line: AheadSampleLine,
+  cause: 'ahead' | 'click',
+) => Promise<{ run: BenchRun; fromCache: boolean }>;
+
+/**
+ * Explains `lines` ahead one at a time, then clicks each. As in Explain ahead
+ * (src/explainAhead.ts), a failed line ends the pass, so the lines after it
+ * are not explained ahead and their clicks are fresh answers.
+ */
+export async function explainAheadThenClick(
+  lines: readonly AheadSampleLine[],
+  ask: AheadAsk,
+): Promise<AheadLineResult[]> {
+  const ahead: (BenchRun | undefined)[] = [];
+  for (const line of lines) {
+    const { run } = await ask(line, 'ahead');
+    ahead.push(run);
+    if (!run.ok) break;
+  }
+  const results: AheadLineResult[] = [];
+  for (const [i, line] of lines.entries()) {
+    const { run: click, fromCache } = await ask(line, 'click');
+    const before = ahead[i];
+    results.push({ line: line.key, ...(before && { ahead: before }), click, fromCache });
+  }
+  return results;
+}
+
 /** chrome.storage.session in memory, for the explanation cache. */
 function memoryStorage(): SessionStorageLike {
   const items: Record<string, unknown> = {};
@@ -129,23 +159,17 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
      * same handler and an explanation cache, as in the service worker, so a
      * click on a line explained ahead is answered from the cache.
      */
-    async aheadThenClick(lines: readonly AheadSampleLine[], model: string) {
+    aheadThenClick(lines: readonly AheadSampleLine[], model: string) {
       const explain = handlerFor(model, createExplainCache(memoryStorage()));
-      const ahead: BenchRun[] = [];
-      for (const line of lines) {
-        ahead.push(await timed(explain, { context: line.context, pr: AHEAD_PR, cause: 'ahead' }));
-      }
-      const results: AheadLineResult[] = [];
-      for (const [i, line] of lines.entries()) {
+      return explainAheadThenClick(lines, async (line, cause) => {
         let fromCache = false;
-        const click = await timed(
+        const run = await timed(
           explain,
-          { context: line.context, pr: AHEAD_PR, cause: 'click' },
+          { context: line.context, pr: AHEAD_PR, cause },
           (cached) => (fromCache = cached),
         );
-        results.push({ line: line.key, ahead: ahead[i]!, click, fromCache });
-      }
-      return results;
+        return { run, fromCache };
+      });
     },
   };
 }

@@ -308,19 +308,15 @@ export function conclusion(
   const where = fresh ? 'in the fresh answers' : 'at the last step';
   const best = fastest(results);
   const unfinished = failedRuns(results);
-  if (!best) {
-    return results.length
-      ? `**No conclusion.** No model finished every run ${where}: ${unfinished}. ` +
-          'Its times leave out the runs that failed, so they do not show whether the goal is met.'
-      : `No run finished ${where}, so there is no conclusion.`;
-  }
   const leftOut = unfinished
     ? ` Left out because some runs failed, so their times do not cover every sample: ${unfinished}.`
     : '';
-  const how = `(median of every sample${best.ranOn ? `, on ${best.ranOn}` : ''})`;
-  const aheadFor = ahead.find((a) => a.model === best.model) ?? ahead.find(aheadMeetsGoal);
-  const afterAhead = aheadFor ? ` ${aheadSentence(aheadFor)}` : '';
-  if (best.medianMs! < GOAL_MS) {
+  const how = (r: StepResult) => `(median of every sample${r.ranOn ? `, on ${r.ranOn}` : ''})`;
+  // The after-ahead numbers of the fastest fresh model, given for context.
+  const bestAhead = best && ahead.find((a) => a.model === best.model);
+  const afterAhead = bestAhead ? ` ${aheadSentence(bestAhead)}` : '';
+
+  if (best && best.medianMs! < GOAL_MS) {
     const slow =
       best.slowestMs !== undefined && best.slowestMs >= GOAL_MS
         ? ` The slowest run took ${fmt(best.slowestMs)}, so a long selection can still pass ${fmt(GOAL_MS)}.`
@@ -328,22 +324,53 @@ export function conclusion(
     const writes = fresh
       ? `With the default settings and the model warm, ${best.model} writes a fresh answer in`
       : `With the default settings, ${best.model} explains in`;
-    return `**Goal met.** ${writes} ${fmt(best.medianMs)} ${how}.${slow}${leftOut}${afterAhead}`;
+    return `**Goal met.** ${writes} ${fmt(best.medianMs)} ${how(best)}.${slow}${leftOut}${afterAhead}`;
   }
-  const fastestTakes = `The fastest model, ${best.model}, takes ${fmt(best.medianMs)} ${how}`;
-  if (aheadFor && aheadMeetsGoal(aheadFor)) {
+
+  // Fresh answers miss the goal (or no model finished them all), so any model
+  // that meets it after Explain ahead counts, not only the fastest fresh one.
+  const metAhead = bestAhead && aheadMeetsGoal(bestAhead) ? bestAhead : bestAheadModel(ahead);
+  if (metAhead) {
+    const freshNote = !best
+      ? `No model finished every fresh run (${unfinished}), so fresh answers are not judged.`
+      : best.model === metAhead.model
+        ? `${best.model} takes ${fmt(best.medianMs)} ${how(best)} for a fresh answer.${leftOut}`
+        : `The fastest model for fresh answers, ${best.model}, takes ${fmt(best.medianMs)} ` +
+          `${how(best)}.${leftOut}`;
     return [
-      `**Goal met only after Explain ahead.** ${fastestTakes} for a fresh answer.${leftOut}` +
-        ` ${aheadSentence(aheadFor)} So a click on a changed line the page has had time to ` +
+      `**Goal met only after Explain ahead, with ${metAhead.model}.** ${freshNote}` +
+        ` ${aheadSentence(metAhead)} So a click on a changed line the page has had time to ` +
         'explain is answered within the goal; a fresh answer, such as a selection or a line ' +
         'the work has not reached, is not.',
-      ...floorLines(best, floors),
+      ...(best ? floorLines(best, floors) : []),
     ].join('\n');
   }
+
+  if (!best) {
+    return results.length
+      ? `**No conclusion.** No model finished every run ${where}: ${unfinished}. ` +
+          'Its times leave out the runs that failed, so they do not show whether the goal is met.'
+      : `No run finished ${where}, so there is no conclusion.`;
+  }
   return [
-    `**Goal not met.** ${fastestTakes}.${leftOut}${afterAhead}`,
+    `**Goal not met.** The fastest model, ${best.model}, takes ${fmt(best.medianMs)} ${how(best)}.` +
+      `${leftOut}${afterAhead}`,
     ...floorLines(best, floors),
   ].join('\n');
+}
+
+/**
+ * Of the models that meet the goal after Explain ahead, the one with the
+ * most clicks within it, then the quickest to explain a line ahead.
+ */
+export function bestAheadModel(ahead: readonly AheadResult[]): AheadResult | undefined {
+  return ahead
+    .filter(aheadMeetsGoal)
+    .map((result) => ({ result, s: summarizeAhead(result.lines) }))
+    .sort(
+      (a, b) =>
+        b.s.share - a.s.share || (a.s.aheadMedianMs ?? Infinity) - (b.s.aheadMedianMs ?? Infinity),
+    )[0]?.result;
 }
 
 /** The section `npm run bench:history` adds to docs/latency.md. */

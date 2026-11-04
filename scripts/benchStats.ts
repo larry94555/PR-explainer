@@ -287,8 +287,11 @@ export const AHEAD_SHARE_GOAL = 0.9;
 export interface AheadLineResult {
   /** Such as "src/a.ts:12". */
   line: string;
-  /** Explaining it ahead, as Explain ahead does (PR 9.10). */
-  ahead: BenchRun;
+  /**
+   * Explaining it ahead, as Explain ahead does (PR 9.10). Left out when it was
+   * not tried: a failed line ends the pass, as it does in the extension.
+   */
+  ahead?: BenchRun;
   /** The click on it afterwards. */
   click: BenchRun;
   /** Whether the click was answered from the cache. */
@@ -309,6 +312,8 @@ export interface AheadSummary {
   lines: number;
   /** Lines the model failed on ahead of time. */
   aheadFailed: number;
+  /** Lines not tried ahead, because an earlier line failed. */
+  aheadSkipped: number;
   /** Median time to explain one line ahead. */
   aheadMedianMs?: number;
   /** Time to explain every line ahead, one after another. */
@@ -326,12 +331,14 @@ export function summarizeAhead(
   lines: readonly AheadLineResult[],
   goalMs: number = LATENCY_GOAL_MS,
 ): AheadSummary {
-  const aheadDone = lines.flatMap((l) => (l.ahead.ok ? [l.ahead.totalMs] : []));
+  const aheadDone = lines.flatMap((l) => (l.ahead?.ok ? [l.ahead.totalMs] : []));
+  const aheadSkipped = lines.filter((l) => !l.ahead).length;
   const clicks = lines.flatMap((l) => (l.click.ok ? [l.click.totalMs] : []));
   const within = clicks.filter((ms) => ms < goalMs).length;
   const summary: AheadSummary = {
     lines: lines.length,
-    aheadFailed: lines.length - aheadDone.length,
+    aheadFailed: lines.length - aheadDone.length - aheadSkipped,
+    aheadSkipped,
     aheadTotalMs: aheadDone.reduce((a, b) => a + b, 0),
     clicksWithinGoal: within,
     share: lines.length ? within / lines.length : 0,
@@ -364,6 +371,15 @@ export const AHEAD_TABLE_HEADER = [
   'From cache',
 ] as const;
 
+/** "7", or "7 (1 failed ahead, 4 not tried)". */
+function aheadLinesCell(s: AheadSummary): string {
+  const notes = [
+    s.aheadFailed && `${s.aheadFailed} failed ahead`,
+    s.aheadSkipped && `${s.aheadSkipped} not tried`,
+  ].filter(Boolean);
+  return notes.length ? `${s.lines} (${notes.join(', ')})` : String(s.lines);
+}
+
 /** A row per model: how long explaining ahead took, then how the clicks went. */
 export function formatAheadTable(results: readonly AheadResult[]): string {
   const line = (cells: readonly string[]) => `| ${cells.map(cell).join(' | ')} |`;
@@ -374,7 +390,7 @@ export function formatAheadTable(results: readonly AheadResult[]): string {
       const s = summarizeAhead(lines);
       return line([
         ranOn ? `${model} (${ranOn})` : model,
-        s.aheadFailed ? `${s.lines} (${s.aheadFailed} failed ahead)` : String(s.lines),
+        aheadLinesCell(s),
         formatMs(s.aheadMedianMs),
         formatMs(s.aheadTotalMs),
         formatShare(s),
@@ -390,7 +406,7 @@ export function formatAheadTable(results: readonly AheadResult[]): string {
 export function aheadFailures(results: readonly AheadResult[]): string[] {
   return results.flatMap(({ model, lines }) =>
     lines.flatMap((l) => [
-      ...(l.ahead.ok ? [] : [`- ${model}, ${l.line}, ahead: ${l.ahead.error}`]),
+      ...(l.ahead && !l.ahead.ok ? [`- ${model}, ${l.line}, ahead: ${l.ahead.error}`] : []),
       ...(l.click.ok ? [] : [`- ${model}, ${l.line}, click: ${l.click.error}`]),
     ]),
   );
@@ -414,7 +430,8 @@ export function formatAheadReport(report: AheadReport): string {
     ...machineLines(report),
     `- **Settings:** temperature ${report.temperature}, answers up to ${report.maxResponseTokens} tokens`,
     `- **How:** each added line of ${page ? `\`${page}\`` : 'a saved diff page'} is explained ` +
-      'ahead, one at a time, as Explain ahead does; then a click on each line is timed. A click ' +
+      'ahead, one at a time, as Explain ahead does (a failed line ends the pass, so the lines ' +
+      'after it are not tried); then a click on each line is timed. A click ' +
       `counts when its whole answer came within ${LATENCY_GOAL_MS / 1000} s.`,
     '',
     formatAheadTable(report.results),

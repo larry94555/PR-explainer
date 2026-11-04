@@ -20,9 +20,9 @@ same benchmark run with the code as it was after each latency PR, a row per step
 conclusion. Reports from before PR 9.11 measure against 10 seconds (Milestone 8). Since PR 9.11
 the goal is 2 seconds, and the report also times **fresh answers** (every sample with the
 current code, the model warm, no cache) and **clicks after Explain ahead** (each added line of a
-saved diff page explained ahead, then a click on each timed; `npm run bench -- --ahead` runs
+saved diff page explained ahead, stopping at a failed line as Explain ahead does, then a click on each timed; `npm run bench -- --ahead` runs
 only this part). The conclusion says whether the goal is met for fresh answers, only for clicks
-after Explain ahead (at least 90% of them within 2 seconds), or for neither, and then gives the
+after Explain ahead (at least 90% of them within 2 seconds, with any model), or for neither, and then gives the
 floor (the shortest sample, an answer of at most 150 tokens, the model already loaded), which
 part of the time limits it, and what would help next.
 

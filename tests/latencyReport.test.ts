@@ -9,6 +9,7 @@ import {
 } from '../scripts/benchStats.ts';
 import {
   aheadMeetsGoal,
+  bestAheadModel,
   conclusion,
   demote,
   dominantTerm,
@@ -426,7 +427,7 @@ describe('fresh answers and Explain ahead', () => {
       ahead: [ahead('m', [4, 6, 5, 7, 5, 5, 5, 5, 5, 5])],
     });
     expect(text).toMatch(
-      /^\*\*Goal met only after Explain ahead\.\*\* The fastest model, m, takes 4\.5 s \(median of every sample, on 100% CPU\) for a fresh answer\./,
+      /^\*\*Goal met only after Explain ahead, with m\.\*\* m takes 4\.5 s \(median of every sample, on 100% CPU\) for a fresh answer\./,
     );
     expect(text).toContain('10 of 10 (100%) clicks were answered within 2.0 s');
     expect(text).toContain(
@@ -444,6 +445,41 @@ describe('fresh answers and Explain ahead', () => {
     expect(text).toMatch(/^\*\*Goal not met\.\*\* The fastest model, m, takes 4\.5 s/);
     expect(text).toContain('2 of 4 (50%) clicks were answered within 2.0 s');
     expect(text).toMatch(/Next step: The model runs on 100% CPU/);
+  });
+
+  it('picks a model that meets the goal after ahead even when another is fastest fresh (review on #56)', () => {
+    // a is faster fresh but only 5 of 7 clicks come in time; b gets all 7.
+    const text = conclusion([], [floor], {
+      fresh: [
+        { model: 'a', medianMs: 3000, failed: 0 },
+        { model: 'b', medianMs: 5000, failed: 0 },
+      ],
+      ahead: [ahead('a', [5, 5, 5, 5, 5, 3000, 3000]), ahead('b', [5, 5, 5, 5, 5, 5, 5])],
+    });
+    expect(text).toMatch(
+      /^\*\*Goal met only after Explain ahead, with b\.\*\* The fastest model for fresh answers, a, takes 3\.0 s/,
+    );
+    expect(text).toContain('7 of 7 (100%) clicks were answered within 2.0 s');
+    expect(text).toContain('in all with b)');
+  });
+
+  it('prefers the most clicks in time, then the quickest ahead, among models that meet it', () => {
+    const quick: AheadResult = { ...ahead('quick', [5, 5]), lines: aheadLines([5, 5]) };
+    quick.lines.forEach((l) => (l.ahead = run(1000)));
+    expect(bestAheadModel([ahead('slow', [5, 5]), quick, ahead('short', [5, 3000])])?.model).toBe(
+      'quick',
+    );
+    expect(bestAheadModel([ahead('x', [3000])])).toBeUndefined();
+  });
+
+  it('reports a goal met after ahead even when no model finished every fresh run', () => {
+    const text = conclusion([], [], {
+      fresh: [{ model: 'm', runs: 3, failed: 1, medianMs: 4000 }],
+      ahead: [ahead('m', [5, 5, 5])],
+    });
+    expect(text).toMatch(
+      /^\*\*Goal met only after Explain ahead, with m\.\*\* No model finished every fresh run \(m \(1 of 3 runs failed\)\), so fresh answers are not judged\./,
+    );
   });
 
   it('gives no conclusion when no model finished every fresh run', () => {
@@ -473,6 +509,6 @@ describe('fresh answers and Explain ahead', () => {
     expect(text.indexOf('### Clicks after Explain ahead')).toBeLessThan(
       text.indexOf('### Conclusion'),
     );
-    expect(text).toContain('**Goal met only after Explain ahead.**');
+    expect(text).toContain('**Goal met only after Explain ahead, with m.**');
   });
 });
