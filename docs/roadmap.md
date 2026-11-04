@@ -97,7 +97,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 10.7 | Show prefetch progress | Small | Not started |
 | 10.8 | Report: how many clicks are instant | Small | Not started |
 | 10.9 | Keep answers after the browser closes | Medium | Not started |
-| 11.0 | Plan Milestone 11 | Small | ✅ Done |
+| 11.0 | Plan Milestone 11 | Small | ✅ Done ([#53](https://github.com/larry94555/PR-explainer/pull/53)) |
 | 11.1 | Start the request when the mouse goes down | Small | Not started |
 | 11.2 | Explain on hover, on by default and quicker | Small | Not started |
 | 11.3 | Pause background work on battery | Small | Not started |
@@ -1124,7 +1124,7 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
 **Order.** 11.1, 11.3, 11.6, 11.7, 11.9, 11.10 and 11.11 need nothing new and can start now. 11.2 turns hover on by default, so it comes after 11.3 (no background work on battery). 11.4 and 11.5 change the background queue, so they come after PRs 10.3 and 10.4. 11.12 needs 11.11. 11.8 and 11.13 are the largest and are best left until the rest are done.
 
 ### PR 11.0: Plan Milestone 11 (Small) ✅ Done
-- **Status:** Done.
+- **Status:** Done ([#53](https://github.com/larry94555/PR-explainer/pull/53)).
 - **Why it's needed:** A review of the roadmap found latency and user experience ideas that no milestone covers: starting on mouse press, quicker hover, battery use, skipping generated files, the service worker being stopped, Ollama going away, the side panel, shortcuts, copy and pin, rating answers, Ollama server settings and Chrome's built-in model.
 - **Problem it solves:** Adds this milestone to the roadmap and the matching features to `features.md`: its goal, demo, order and PRs 11.1 to 11.13. No code changes.
 - **Unit tests added:** None (documentation only).
