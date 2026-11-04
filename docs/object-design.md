@@ -72,6 +72,7 @@ The dotted line is the only connection between the two halves: the content scrip
 | `a11y.ts` | `isExplainShortcut`, `shortcutTarget`, `restoreFocus` | Keyboard helpers: matching Alt+E by key position, finding the focused line, returning focus. |
 | `prefetch.ts` | `createPrefetcher`, `Prefetcher` | Explain on hover: one prefetch at a time, cancelled on move, joined by a click. |
 | `popup/popup.ts` | `Popup`, `PopupState` | The explanation popup. States: `loading`, `streaming`, `done`, `failed`, `stopped`, `closed`. Shows timings and the optional prompt. |
+| `popup/sectionProgress.ts` | `sectionProgress` | Which sections of a reply still being written are finished (PR 9.13), so the popup shows each one whole as soon as the next heading starts. Keeps its own copy of the heading matcher, since the content script shares no code with the service worker; a test checks it agrees with `parseExplanation`. |
 | `popup/renderMarkdown.ts` | `renderMarkdown` | Safe Markdown to DOM for untrusted model output. |
 | `popup/latencyBreakdown.ts` | `latencyBreakdown`, `latencyRows` | Splits "Answered in …" into load, prompt, answer and time outside Ollama. |
 | `chat/chatSession.ts` | `ChatSession`, `ChatSessions`, `CHAT_SYSTEM_PROMPT` | The record of one conversation and the message list for the next question. `ChatSessions` keeps one per PR. No UI, no network. |

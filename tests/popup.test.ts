@@ -571,6 +571,147 @@ describe('popup', () => {
     });
   });
 
+  describe('each section as soon as it is written (PR 9.13)', () => {
+    const stopButton = () => shadow().querySelector<HTMLButtonElement>('button.stop')!;
+    const body = () => shadow().querySelector<HTMLElement>('.body')!;
+    const placeholders = () =>
+      [...shadow().querySelectorAll<HTMLElement>('.placeholder section')].map(
+        (s) => s.dataset.section,
+      );
+    const shownSections = () =>
+      ([...body().children] as HTMLElement[])
+        .filter((el) => el.tagName === 'SECTION')
+        .map((el) => el.dataset.section);
+    const WHAT = '## What it does\nAdds a `retry` loop.\n\n';
+    const WHY = "## Why it's needed\nThe server is *slow* to start.\n\n";
+    // The whole answer those parts add up to.
+    const FULL: Explanation = { ...SAMPLE, what: 'Adds a `retry` loop.' };
+
+    it('shows a section whole once the next heading arrives, and not before', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showPartial('## What it does\nAdds a `retry`');
+      expect(shownSections()).toEqual([]);
+      expect(placeholders()).toEqual(['what', 'why', 'concerns']);
+      popup.showPartial(WHAT + '## Why');
+      expect(popup.state).toBe('streaming');
+      expect(shownSections()).toEqual(['what']);
+      expect(section('what').querySelector('code')!.textContent).toBe('retry');
+      // The others keep their placeholders, and the spinner stays.
+      expect(placeholders()).toEqual(['why', 'concerns']);
+      expect(shadow().querySelector('.spinner')).not.toBeNull();
+      expect(body().textContent).not.toContain('slow');
+    });
+
+    it('shows them in order, each in one update, and announces each once', () => {
+      const popup = openPopup(ANCHOR);
+      const observer = new MutationObserver(() => {});
+      observer.observe(body(), { childList: true });
+      popup.showPartial(WHAT + '## Why');
+      popup.showPartial(WHAT + WHY);
+      popup.showPartial(WHAT + WHY + '## Concerns\nNone');
+      expect(shownSections()).toEqual(['what', 'why']);
+      expect(placeholders()).toEqual(['concerns']);
+      // Readable as soon as something is shown, not held back as busy.
+      expect(shadow().querySelector('[role="dialog"]')!.getAttribute('aria-busy')).toBe('false');
+      const whatNode = body().querySelector('section[data-section="what"]');
+      popup.showExplanation(FULL, 'llama3');
+      const added = observer
+        .takeRecords()
+        .flatMap((r) => [...r.addedNodes] as HTMLElement[])
+        .filter((n) => n.parentNode === body())
+        .map((n) => n.dataset.section);
+      observer.disconnect();
+      // Each section was added to the live region once, in order.
+      expect(added).toEqual(['what', 'why', 'concerns']);
+      expect(body().querySelector('section[data-section="what"]')).toBe(whatNode);
+      expect(popup.state).toBe('done');
+      expect(shownSections()).toEqual(['what', 'why', 'concerns']);
+      expect(shadow().querySelector('.placeholder, .loading')).toBeNull();
+    });
+
+    it('keeps the timer running until the whole answer is in', () => {
+      let clock = 0;
+      const popup = openPopup(ANCHOR, { now: () => clock });
+      clock = 500;
+      popup.showPartial(WHAT + '## Why');
+      clock = 1_700;
+      expect(popup.elapsedMs).toBe(1_700);
+      popup.showExplanation(SAMPLE);
+      clock = 9_000;
+      expect(shadow().querySelector('.elapsed')!.textContent).toBe('Answered in 1.7 s');
+    });
+
+    it('Stop keeps the sections shown and adds what was written of the next', () => {
+      const onStop = vi.fn();
+      const popup = openPopup(ANCHOR, { onStop });
+      popup.showPartial(WHAT + "## Why it's needed\nThe server");
+      stopButton().click();
+      expect(onStop).toHaveBeenCalledOnce();
+      expect(popup.state).toBe('stopped');
+      expect(shownSections()).toEqual(['what', 'why']);
+      expect(section('why').textContent).toBe('The server');
+      expect(shadow().querySelector('.placeholder, .loading, .partial')).toBeNull();
+      popup.showExplanation(SAMPLE);
+      expect(popup.state).toBe('stopped');
+      expect(shownSections()).toEqual(['what', 'why']);
+    });
+
+    it('Stop just after a heading shows only the finished sections', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showPartial(WHAT + '## Why');
+      stopButton().click();
+      expect(shownSections()).toEqual(['what']);
+    });
+
+    it('a cut-off answer marks the last section and adds the note', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showPartial(WHAT + WHY + '## Concerns\n- The loop never');
+      popup.showExplanation(
+        { ...SAMPLE, what: 'Adds a `retry` loop.', concerns: '- The loop never …', cutOff: true },
+        'llama3',
+      );
+      expect(shownSections()).toEqual(['what', 'why', 'concerns']);
+      expect(section('concerns').textContent).toBe('The loop never …');
+      expect(shadow().querySelector('.cut-off-note')).not.toBeNull();
+    });
+
+    it('replaces a shown section the whole answer changed', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showPartial(WHAT + '## Why');
+      popup.showExplanation({ ...SAMPLE, what: 'Something else.' });
+      expect(shownSections()).toEqual(['what', 'why', 'concerns']);
+      expect(section('what').textContent).toBe('Something else.');
+    });
+
+    it('a cached answer shows all three at once', () => {
+      const popup = openPopup(ANCHOR);
+      const observer = new MutationObserver(() => {});
+      observer.observe(body(), { childList: true });
+      popup.showExplanation(SAMPLE, 'llama3', { elapsedMs: 3_000 });
+      const changes = observer.takeRecords();
+      observer.disconnect();
+      expect(changes).toHaveLength(1);
+      expect(shownSections()).toEqual(['what', 'why', 'concerns']);
+    });
+
+    it('Regenerate starts over with every placeholder', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showPartial(WHAT + '## Why');
+      popup.showError('Broke.', 'Fix it.');
+      shadow().querySelector<HTMLButtonElement>('button.regenerate')!.click();
+      expect(placeholders()).toEqual(['what', 'why', 'concerns']);
+      expect(shownSections()).toEqual([]);
+      expect(shadow().querySelector('[role="dialog"]')!.getAttribute('aria-busy')).toBe('true');
+    });
+
+    it('with Show answers as they are written on, streams as before', () => {
+      const popup = openPopup(ANCHOR, { streamAnswers: true });
+      popup.showPartial(WHAT + '## Why');
+      expect(shadow().querySelector('.partial')).not.toBeNull();
+      expect(shownSections()).toEqual([]);
+    });
+  });
+
   describe('Details waterfall (PR 9.1)', () => {
     const TIMINGS = {
       totalMs: 13_900,

@@ -10,7 +10,12 @@
 // By default (PR 9.6) the reply is not shown while the model writes it: the
 // placeholders stay, untouched, until the whole answer is shown at once, so
 // the sections do not jump around as they fill in and screen readers hear
-// "Explaining…" once instead of every word. With the Show answers as they are
+// "Explaining…" once instead of every word. Each section still appears as
+// soon as it is finished (PR 9.13): once the model starts the next section's
+// heading, that section replaces its placeholder in one update, so What it
+// does shows first, then Why it's needed, then Concerns, each whole and each
+// announced once. The timer runs until the whole answer is in. A cached
+// answer shows all three at once. With the Show answers as they are
 // written setting on (streamAnswers), the reply so far is shown as markdown
 // while it streams in, as before. It closes with the close button, the Esc
 // key, or a click anywhere outside it. Once stopped or closed it ignores
@@ -66,6 +71,7 @@
 
 import type { CodeFacts } from '../codeFacts';
 import type { PromptReport } from '../explain/fitPrompt';
+import { sectionProgress } from './sectionProgress';
 import type { Explanation, SectionKey } from '../explain/parseExplanation';
 import type { LlmTimings } from '../llm/types';
 import type { RoundTrip, TraceTask } from '../trace/types';
@@ -197,6 +203,19 @@ function loadingBody(doc: Document, model?: string): HTMLElement[] {
   return [loading, placeholder];
 }
 
+/** A section of the answer: its heading and its text as markdown. */
+function sectionNode(doc: Document, key: SectionKey, markdown: string): HTMLElement {
+  const section = doc.createElement('section');
+  section.dataset.section = key;
+  const heading = doc.createElement('h3');
+  heading.textContent = SECTION_TITLES[key];
+  const content = doc.createElement('div');
+  content.className = 'content';
+  content.append(renderMarkdown(doc, markdown));
+  section.append(heading, content);
+  return section;
+}
+
 export interface Popup {
   readonly host: HTMLElement;
   readonly state: PopupState;
@@ -208,8 +227,9 @@ export interface Popup {
   /** Shows the spinner and placeholders, and restarts the timer. */
   showLoading(model?: string): void;
   /**
-   * The reply so far (markdown) while the model is still writing. Shown only
-   * with streamAnswers on; otherwise kept, and shown only if Stop is pressed.
+   * The reply so far (markdown) while the model is still writing. Shown as
+   * it is with streamAnswers on; otherwise each finished section is shown
+   * whole (PR 9.13), and the rest is kept, shown only if Stop is pressed.
    */
   showPartial(markdown: string): void;
   /** `cached` is set when the answer came from the cache. */
@@ -541,7 +561,10 @@ export function openPopup(
   const setState = (next: PopupState) => {
     state = next;
     panel.dataset.state = next;
-    panel.setAttribute('aria-busy', String(next === 'loading' || next === 'streaming'));
+    // Busy until there is something to read: once a section is shown it is
+    // announced at once, not held back until the whole answer is in.
+    const working = next === 'loading' || next === 'streaming';
+    panel.setAttribute('aria-busy', String(working && shown.size === 0));
   };
   const setBody = (next: PopupState, ...children: Node[]) => {
     setState(next);
@@ -569,7 +592,16 @@ export function openPopup(
     if (state !== 'loading' && state !== 'streaming') return;
     stopTicking('Stopped after ');
     // A reply that was kept back is shown now, so what the model wrote is not lost.
-    if (state === 'streaming' && !options.streamAnswers) {
+    if (shown.size > 0) {
+      // Sections already shown stay; the one being written follows with
+      // what the model had of it.
+      body.querySelector('.loading')?.remove();
+      body.querySelector('.placeholder')?.remove();
+      const { writing } = sectionProgress(written);
+      if (writing.markdown) body.append(sectionNode(doc, writing.key, writing.markdown));
+      setState('stopped');
+      place();
+    } else if (state === 'streaming' && !options.streamAnswers) {
       setBody('stopped', partialBody(written));
     } else if (state === 'loading') {
       const note = doc.createElement('p');
@@ -590,6 +622,17 @@ export function openPopup(
   const nearBottom = () => panel.scrollHeight - panel.scrollTop - panel.clientHeight < 24;
   // The reply so far, kept while it is not shown (streamAnswers off).
   let written = '';
+  // Sections shown before the whole answer was in (PR 9.13), with their text.
+  const shown = new Map<SectionKey, { node: HTMLElement; markdown: string }>();
+  const revealSection = (key: SectionKey, markdown: string) => {
+    const node = sectionNode(doc, key, markdown);
+    const placeholder = body.querySelector('.placeholder');
+    if (!placeholder) return;
+    // Shown sections come before the placeholders left, so the order holds.
+    placeholder.before(node);
+    placeholder.querySelector(`section[data-section="${key}"]`)?.remove();
+    shown.set(key, { node, markdown });
+  };
   const partialBody = (markdown: string) => {
     const partial = doc.createElement('div');
     partial.className = 'partial';
@@ -611,13 +654,22 @@ export function openPopup(
       startTicking();
       hideTimings();
       written = '';
+      shown.clear();
       setBody('loading', ...loadingBody(doc, model || undefined));
     },
     showPartial(markdown) {
       if (state !== 'loading' && state !== 'streaming') return;
       written = markdown;
-      // Kept back: the placeholders stay as they are until the answer is whole.
-      if (!options.streamAnswers) return setState('streaming');
+      // Kept back: each placeholder stays as it is until its section is whole.
+      if (!options.streamAnswers) {
+        const before = shown.size;
+        for (const { key, markdown: text } of sectionProgress(markdown).finished) {
+          if (!shown.has(key)) revealSection(key, text);
+        }
+        setState('streaming');
+        if (shown.size !== before) place();
+        return;
+      }
       const follow = state === 'loading' || nearBottom();
       setBody('streaming', partialBody(markdown));
       if (follow) panel.scrollTop = panel.scrollHeight;
@@ -627,17 +679,7 @@ export function openPopup(
       setModel(model);
       if (cached) showCached(cached.elapsedMs);
       else stopTicking('Answered in ');
-      const sections = (Object.keys(SECTION_TITLES) as SectionKey[]).map((key) => {
-        const section = doc.createElement('section');
-        section.dataset.section = key;
-        const heading = doc.createElement('h3');
-        heading.textContent = SECTION_TITLES[key];
-        const content = doc.createElement('div');
-        content.className = 'content';
-        content.append(renderMarkdown(doc, explanation[key]));
-        section.append(heading, content);
-        return section;
-      });
+      const keys = Object.keys(SECTION_TITLES) as SectionKey[];
       const notes: HTMLElement[] = [];
       if (explanation.cutOff) {
         const note = doc.createElement('p');
@@ -645,7 +687,27 @@ export function openPopup(
         appendInline(note, CUT_OFF_NOTE);
         notes.push(note);
       }
-      setBody('done', ...sections, ...notes);
+      if (shown.size > 0 && state === 'streaming') {
+        // Some sections are already shown (PR 9.13): they stay as they are,
+        // so they are not announced again, unless the whole answer changed
+        // them (a cut-off mark, or a heading the model repeated).
+        const placeholder = body.querySelector('.placeholder');
+        for (const key of keys) {
+          const before = shown.get(key);
+          if (before?.markdown === explanation[key]) continue;
+          const node = sectionNode(doc, key, explanation[key]);
+          if (before) before.node.replaceWith(node);
+          else if (placeholder) placeholder.before(node);
+          else body.append(node);
+        }
+        body.querySelector('.loading')?.remove();
+        placeholder?.remove();
+        body.append(...notes);
+        setState('done');
+        place();
+        return;
+      }
+      setBody('done', ...keys.map((key) => sectionNode(doc, key, explanation[key])), ...notes);
     },
     showError(message, fix) {
       if (state === 'closed' || state === 'stopped') return;

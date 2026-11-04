@@ -36,8 +36,9 @@ export const CUT_OFF_MARK = ' …';
 const SECTION_ORDER: readonly SectionKey[] = ['what', 'why', 'concerns'];
 
 // Heading names, lowercased, with straight apostrophes. Several wordings map
-// to the same section.
-const HEADING_NAMES: Record<string, SectionKey> = {
+// to the same section. src/popup/sectionProgress.ts keeps its own copy for
+// the content script (PR 9.13); tests/sectionProgress.test.ts checks they match.
+export const HEADING_NAMES: Record<string, SectionKey> = {
   'what it does': 'what',
   'what this does': 'what',
   "why it's needed": 'why',
@@ -51,7 +52,7 @@ const HEADING_NAMES: Record<string, SectionKey> = {
 // Matches a heading line and captures the heading name and any text after it.
 // The name must be followed by the end of the line, a colon, or closing bold,
 // so a sentence such as "What it does is..." is not taken as a heading.
-const HEADING = new RegExp(
+export const HEADING = new RegExp(
   '^\\s*(?:#{1,6}\\s*)?(?:\\*\\*|__)?\\s*(?:\\d+[.)]\\s*)?' +
     `(${Object.keys(HEADING_NAMES)
       .sort((a, b) => b.length - a.length)
