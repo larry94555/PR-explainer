@@ -41,8 +41,15 @@ const REPLY =
   '**Why it is needed** Ollama can fail the first request while it loads the model.\n\n' +
   '**Concerns** A real failure (a wrong URL) now takes 600 ms longer to report.';
 
+// A small model explains and a bigger one answers chat questions (PR 9.14).
+const EXPLAIN_MODEL = 'qwen2.5-coder:1.5b';
+const CHAT_MODEL = 'qwen2.5-coder:7b';
+
 function trip(extra: Partial<RoundTrip> & Pick<RoundTrip, 'endpoint' | 'purpose'>): RoundTrip {
+  // Ollama requests with a body name their model, as the service worker records them.
+  const namesModel = /\/api\/(chat|show)$/.test(extra.endpoint);
   return {
+    ...(namesModel && { model: extra.cause === 'chat' ? CHAT_MODEL : EXPLAIN_MODEL }),
     target: 'ollama',
     method: 'POST',
     cause: 'click',

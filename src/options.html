@@ -28,6 +28,18 @@
         </div>
 
         <div class="field">
+          <label for="chatModel">Chat model</label>
+          <select id="chatModel" name="chatModel"></select>
+          <p class="hint">
+            The model that answers questions in the chat. Explanations, Explain on hover and Explain
+            ahead keep using Model, so a small fast model can explain while a bigger one answers
+            questions. Opening the chat loads it ahead of the first question.
+          </p>
+          <p id="chat-model-note" class="note" role="status" hidden></p>
+          <p class="error" data-error-for="chatModel" role="alert"></p>
+        </div>
+
+        <div class="field">
           <label for="temperature">
             Temperature <output id="temperature-value" for="temperature"></output>
           </label>

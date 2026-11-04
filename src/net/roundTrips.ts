@@ -127,6 +127,20 @@ function thinkOf(body: RequestInit['body']): boolean | string | undefined {
 }
 
 /**
+ * The model a request is about (PR 9.14), from the `model` field of its JSON
+ * body (/api/chat and /api/show), or undefined when it names none.
+ */
+function modelOf(body: RequestInit['body']): string | undefined {
+  if (typeof body !== 'string') return undefined;
+  try {
+    const { model } = JSON.parse(body) as { model?: unknown };
+    return typeof model === 'string' && model !== '' ? model : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The reply and thinking in a /api/chat body: one JSON object, or a stream
  * of them, one per line, each with a piece of `message.content` (and
  * `message.thinking` when Ollama returns thinking in its own field).
@@ -228,6 +242,7 @@ export function createRoundTripLog(
     const isChat = path === '/api/chat';
     const messages = isChat ? messagesOf(init?.body) : undefined;
     const think = isChat ? thinkOf(init?.body) : undefined;
+    const model = modelOf(init?.body);
     const entry: Entry = {
       startedAt: now(),
       trip: {
@@ -242,6 +257,7 @@ export function createRoundTripLog(
         status: 'running',
         bytesSent: sizeOf(init?.body),
         bytesReceived: 0,
+        ...(model && { model }),
         ...(messages && { messages }),
         ...(think !== undefined && { think }),
       },

@@ -142,6 +142,17 @@ function warmUpModel(): void {
   );
 }
 
+/**
+ * Asks the service worker to load the Chat model as the chat opens (PR
+ * 9.14), so the first question does not wait for it. The worker does nothing
+ * when chat uses the same model as explanations, and loads it once per tab,
+ * PR and Chat model.
+ */
+function warmUpChatModel(pr: string | undefined): void {
+  if (!pr) return;
+  sendRequest('warmup', { pr, for: 'chat' }, { timeoutMs: WARMUP_TIMEOUT_MS }).catch(() => {});
+}
+
 // The page's own round trips before any click (PR 9.7): the warm-up and the
 // PR description read ahead share one group in the debug log, so it shows
 // what opening the page cost and that the first click did not wait for it.
@@ -353,6 +364,7 @@ const explainDeps: ClickHandlerDeps = {
     );
     currentChat.set(chat, pr);
     chat.focus();
+    warmUpChatModel(pr);
   },
   // While the chat is open, clicked code in its PR joins the conversation (PR 5.4).
   addToChat: ({ text, subject }) => currentChat.addCode(prName(location.href), text, subject),

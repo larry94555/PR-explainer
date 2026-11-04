@@ -61,6 +61,15 @@ button {
   display: none;
 }
 
+/* The memory note under Chat model (PR 9.14). */
+.note {
+  margin: 0.4rem 0 0;
+  padding: 0.4rem 0.6rem;
+  border-left: 3px solid currentColor;
+  color: #9a6700;
+  font-size: 0.9em;
+}
+
 .fix {
   display: block;
   margin-top: 0.15rem;
@@ -173,7 +182,8 @@ label.check {
     color: #3fb950;
   }
 
-  .gpu-warn {
+  .gpu-warn,
+  .note {
     color: #d29922;
   }
 }

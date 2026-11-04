@@ -474,7 +474,8 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
     view.target.dataset.target = trip.target;
     view.endpoint.textContent = trip.endpoint;
     view.endpoint.title = `${trip.method} ${trip.endpoint}`;
-    view.purpose.textContent = trip.purpose;
+    // The model each request went to (PR 9.14), since chat can use its own.
+    view.purpose.textContent = trip.model ? `${trip.purpose} · ${trip.model}` : trip.purpose;
     view.duration.textContent = formatMs(duration);
     const label = statusText(trip, row.running);
     view.status.textContent = label;
@@ -483,7 +484,7 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
     view.button.setAttribute(
       'aria-label',
       `${formatClock(row.entry.at)}, ${TARGET_LABELS[trip.target]} ${trip.endpoint}, ` +
-        `${trip.purpose}, ${formatMs(duration)}, ${label}`,
+        `${trip.purpose}${trip.model ? `, ${trip.model}` : ''}, ${formatMs(duration)}, ${label}`,
     );
     const open = opened.has(row.key);
     view.button.setAttribute('aria-expanded', String(open));
@@ -527,6 +528,7 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
     nodes.push(
       facts([
         ['Request', `${trip.method} ${trip.endpoint}`],
+        ...(trip.model ? ([['Model', trip.model]] as [string, string][]) : []),
         ['Started', formatClock(row.entry.at)],
         ['Took', row.running ? 'still running' : formatMs(trip.durationMs)],
         [

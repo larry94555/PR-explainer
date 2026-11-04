@@ -13,7 +13,7 @@ function setup(
     loaded?: () => Promise<(string | RunningModel)[]>;
     load?: () => Promise<void>;
     settings?: Partial<Settings>;
-    contextTokens?: () => Promise<number>;
+    contextTokens?: (settings: Settings) => Promise<number>;
     loadedWindow?: LoadedWindowMemory;
   } = {},
 ) {
@@ -302,5 +302,77 @@ describe('warm-up and the remembered window (PR 9.7)', () => {
     fail(new Error('connection reset'));
     await expect(warming).resolves.toEqual({ outcome: 'failed' });
     expect(loadedWindow.known(at)).toBe(4096);
+  });
+});
+
+describe('chat warm-up (PR 9.14)', () => {
+  const OWN = { model: 'qwen2.5-coder:1.5b', chatModel: 'qwen2.5-coder:7b' };
+  const CHAT = { ...PR, for: 'chat' as const };
+
+  it('loads the Chat model when the chat opens', async () => {
+    const { warmup, client, log } = setup({ settings: OWN });
+    await expect(warmup.warmUp(1, CHAT)).resolves.toEqual({ outcome: 'loaded' });
+    expect(client.loadModel).toHaveBeenCalledTimes(1);
+    expect(client.loadModel).toHaveBeenCalledWith('qwen2.5-coder:7b', { keepAliveMinutes: 30 });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('loaded qwen2.5-coder:7b'));
+  });
+
+  it('loads it once per tab, PR and Chat model', async () => {
+    const { warmup, client } = setup({ settings: OWN });
+    await warmup.warmUp(1, CHAT);
+    await expect(warmup.warmUp(1, CHAT)).resolves.toEqual({ outcome: 'repeat' });
+    expect(client.loadModel).toHaveBeenCalledTimes(1);
+    // The page's own warm-up for the same PR is counted apart.
+    await expect(warmup.warmUp(1, PR)).resolves.toEqual({ outcome: 'loaded' });
+    expect(client.loadModel).toHaveBeenLastCalledWith('qwen2.5-coder:1.5b', {
+      keepAliveMinutes: 30,
+    });
+  });
+
+  it('does nothing when chat uses the same model as explanations', async () => {
+    for (const chatModel of ['', 'qwen2.5-coder:1.5b']) {
+      const { warmup, client } = setup({ settings: { ...OWN, chatModel } });
+      await expect(warmup.warmUp(1, CHAT)).resolves.toEqual({ outcome: 'same-model' });
+      expect(client.runningModels).not.toHaveBeenCalled();
+      expect(client.loadModel).not.toHaveBeenCalled();
+    }
+  });
+
+  it('is skipped when the Chat model is already loaded', async () => {
+    const { warmup, client } = setup({
+      settings: OWN,
+      loaded: async () => ['qwen2.5-coder:1.5b', 'qwen2.5-coder:7b'],
+    });
+    await expect(warmup.warmUp(1, CHAT)).resolves.toEqual({ outcome: 'already-loaded' });
+    expect(client.loadModel).not.toHaveBeenCalled();
+  });
+
+  it("loads it with the whole window chat questions use, not the first click's", async () => {
+    const contextTokens = vi.fn<(settings: Settings) => Promise<number>>(async () => 8192);
+    const { warmup, client } = setup({ settings: OWN, contextTokens });
+    await warmup.warmUp(1, CHAT);
+    expect(client.loadModel).toHaveBeenCalledWith('qwen2.5-coder:7b', {
+      keepAliveMinutes: 30,
+      contextTokens: 8192,
+    });
+    expect(vi.mocked(contextTokens).mock.calls[0]![0]).toMatchObject({
+      model: 'qwen2.5-coder:7b',
+    });
+  });
+
+  it("remembers the Chat model's window next to the explanation model's", async () => {
+    const loadedWindow = createLoadedWindowMemory();
+    const { warmup } = setup({ settings: OWN, contextTokens: async () => 8192, loadedWindow });
+    await warmup.warmUp(1, PR);
+    await warmup.warmUp(1, CHAT);
+    const base = { llmUrl: SETTINGS.llmUrl };
+    expect(loadedWindow.known({ ...base, model: 'qwen2.5-coder:1.5b' })).toBe(2048);
+    expect(loadedWindow.known({ ...base, model: 'qwen2.5-coder:7b' })).toBe(8192);
+  });
+
+  it('does nothing when Keep model loaded is 0', async () => {
+    const { warmup, client } = setup({ settings: { ...OWN, keepAliveMinutes: 0 } });
+    await expect(warmup.warmUp(1, CHAT)).resolves.toEqual({ outcome: 'off' });
+    expect(client.loadModel).not.toHaveBeenCalled();
   });
 });

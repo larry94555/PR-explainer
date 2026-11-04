@@ -242,3 +242,69 @@ describe('chat handler and the remembered window (PR 9.7)', () => {
     expect(failed.loadedWindow.known(SETTINGS)).toBeUndefined();
   });
 });
+
+describe('chat handler with a Chat model of its own (PR 9.14)', () => {
+  const OWN: Settings = { ...SETTINGS, model: 'qwen2.5-coder:1.5b', chatModel: 'qwen2.5-coder:7b' };
+
+  function withChatModel(settings: Settings, error?: Error) {
+    const chatStream = vi.fn<
+      (messages: ChatMessage[], options: ChatOptions) => AsyncGenerator<string, ChatStreamEnd>
+    >(async function* (_messages, options) {
+      yield 'Answer.';
+      if (error) throw error;
+      return { model: options.model, doneReason: 'stop' };
+    });
+    const client = { chatStream } as unknown as LlmClient;
+    const contextTokens = vi.fn<(settings: Settings) => Promise<number>>(async () => 8192);
+    const thinking = vi.fn<(settings: Settings) => Promise<null>>(async () => null);
+    const loadedWindow = createLoadedWindowMemory();
+    const handler = createChatHandler({
+      getSettings: async () => settings,
+      createClient: () => client,
+      platform: 'windows',
+      contextTokens,
+      thinking,
+      loadedWindow,
+    });
+    return { handler, chatStream, contextTokens, thinking, loadedWindow };
+  }
+
+  it('sends questions to the Chat model', async () => {
+    const { handler, chatStream } = withChatModel(OWN);
+    const result = await handler({ messages: MESSAGES });
+    expect(chatStream.mock.calls[0]![1].model).toBe('qwen2.5-coder:7b');
+    expect(result).toEqual({ status: 'done', answer: 'Answer.', model: 'qwen2.5-coder:7b' });
+  });
+
+  it('sends them to Model when it is "Same as explanations"', async () => {
+    const { handler, chatStream } = withChatModel({ ...OWN, chatModel: '' });
+    await handler({ messages: MESSAGES });
+    expect(chatStream.mock.calls[0]![1].model).toBe('qwen2.5-coder:1.5b');
+  });
+
+  it("looks up the Chat model's context size and thinking, not the explanation model's", async () => {
+    const { handler, contextTokens, thinking } = withChatModel(OWN);
+    await handler({ messages: MESSAGES });
+    expect(contextTokens.mock.calls[0]![0]).toMatchObject({ model: 'qwen2.5-coder:7b' });
+    expect(thinking.mock.calls[0]![0]).toMatchObject({ model: 'qwen2.5-coder:7b' });
+  });
+
+  it("remembers the Chat model's window without forgetting the explanation model's", async () => {
+    const { handler, loadedWindow } = withChatModel(OWN);
+    loadedWindow.start(OWN, 2048).done();
+    await handler({ messages: MESSAGES });
+    expect(loadedWindow.known({ ...OWN, model: 'qwen2.5-coder:7b' })).toBe(8192);
+    expect(loadedWindow.known(OWN)).toBe(2048);
+  });
+
+  it('names the Chat model in an error', async () => {
+    const { handler } = withChatModel(
+      OWN,
+      new LlmError('model-not-found', 'model "qwen2.5-coder:7b" not found'),
+    );
+    const result = await handler({ messages: MESSAGES });
+    expect(result.status).toBe('failed');
+    expect(JSON.stringify(result)).toContain('qwen2.5-coder:7b');
+    expect(JSON.stringify(result)).not.toContain('1.5b');
+  });
+});
