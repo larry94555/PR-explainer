@@ -1,7 +1,7 @@
 // `npm run bench` (PR 8.2): times explanations on the local Ollama, so each
 // latency change in Milestone 8 has a repeatable before and after.
 //
-//   npm run bench -- [model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4 | --by-hunk]
+//   npm run bench -- [model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4 | --by-hunk | --whole-pr]
 //
 // Sends the real explain prompt for each sample in bench/ to each model named
 // (or the first installed model when none is), N times each (3 by default),
@@ -22,6 +22,12 @@
 // With --by-hunk (PR 10.5) it explains each added line of the same saved page
 // on its own, then each hunk in one request, and compares the time per line,
 // printing both answers for every line to check by hand.
+//
+// With --whole-pr (PR 10.8) it prefetches every changed line of a saved PR
+// through the service worker's queue, as Whole PR does, and reports how long
+// the whole PR took, the time per line (one at a time and by hunk), the share
+// of clicks answered from the cache after 1, 5 and 15 minutes, and how long a
+// click sent during the run waited.
 import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -29,10 +35,12 @@ import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { runnerImport } from 'vite';
 import type * as BenchExplain from './benchExplain.ts';
+import { wholePrConclusion } from './latencyReport.ts';
 import {
   appendReport,
   formatAheadReport,
   formatByHunkReport,
+  formatWholePrReport,
   formatMs,
   formatParallelReport,
   formatReport,
@@ -175,6 +183,34 @@ async function main(): Promise<number> {
     console.log(`\n${section}`);
     if (!aheadResults.some((r) => r.lines.some((l) => l.click.ok))) {
       console.error('Every click failed, so docs/latency.md was not changed.');
+      return 1;
+    }
+    if (args.save) {
+      const existing = existsSync(LATENCY_DOC) ? readFileSync(LATENCY_DOC, 'utf8') : null;
+      writeFileSync(LATENCY_DOC, appendReport(existing, section));
+      console.log('Added to docs/latency.md');
+    }
+    return 0;
+  }
+  if (args.wholePr) {
+    console.log(`Whole PR with ${models.join(', ')} at ${llmUrl}, on ${bench.WHOLE_PR_SAMPLE}`);
+    const results = await bench.runWholePr(explainer, models, samples[0]!);
+    const section = formatWholePrReport({
+      startedAt,
+      machine,
+      llmUrl,
+      temperature: settings.temperature,
+      maxResponseTokens: settings.maxResponseTokens,
+      maxMs: bench.WHOLE_PR_MAX_MS,
+      results,
+      conclusion: wholePrConclusion(results, {
+        atOnce: bench.REQUESTS_AT_ONCE.default,
+        maxPerPr: bench.AHEAD_MAX_PER_PR,
+      }),
+    });
+    console.log(`\n${section}`);
+    if (!results.some((r) => r.answered.length)) {
+      console.error('No line was answered, so docs/latency.md was not changed.');
       return 1;
     }
     if (args.save) {

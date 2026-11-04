@@ -12,8 +12,12 @@ import {
   median,
   summarize,
   summarizeAhead,
+  summarizeWholePr,
+  formatMinutes,
   type AheadResult,
   type BenchRun,
+  type WholePrResult,
+  type WholePrSummary,
 } from './benchStats.ts';
 
 /** The goal the report is measured against (PR 9.9): the same one as the Speed test. */
@@ -456,4 +460,133 @@ export function formatHistoryReport(report: HistoryReport): string {
     if (section) out.push('', `### ${step.label}`, '', demote(demote(section)).trimEnd());
   });
   return out.join('\n') + '\n';
+}
+
+// --- Whole PR (PR 10.8) ----------------------------------------------------
+
+/** The extension's defaults the whole-PR conclusion weighs. */
+export interface WholePrDefaults {
+  /** Requests at once (REQUESTS_AT_ONCE.default). */
+  atOnce: number;
+  /** The per-PR limit, in lines (AHEAD_MAX_PER_PR). */
+  maxPerPr: number;
+}
+
+/** How long Whole PR may take to get through a PR at the per-PR limit before the limit should come down. */
+export const WHOLE_PR_LIMIT_BUDGET_MS = 30 * 60_000;
+
+const sharePercent = (share: number) => `${Math.floor(share * 100)}%`;
+
+const cachedAfter = (s: WholePrSummary, minutes: number) =>
+  s.cached.find((c) => c.minutes === minutes)?.share ?? 0;
+
+/**
+ * The model the whole-PR conclusion is about: the most lines cached after 5
+ * minutes, then after 15, then the quicker whole PR. Undefined when no model
+ * answered any line.
+ */
+export function bestWholePr(
+  results: readonly WholePrResult[],
+): { result: WholePrResult; summary: WholePrSummary } | undefined {
+  return results
+    .map((result) => ({ result, summary: summarizeWholePr(result) }))
+    .filter(({ summary }) => summary.answered > 0)
+    .sort(
+      (a, b) =>
+        cachedAfter(b.summary, 5) - cachedAfter(a.summary, 5) ||
+        cachedAfter(b.summary, 15) - cachedAfter(a.summary, 15) ||
+        (a.summary.wholePrMs ?? Infinity) - (b.summary.wholePrMs ?? Infinity),
+    )[0];
+}
+
+/**
+ * The whole-PR section's conclusion: how many clicks are instant after 5
+ * minutes (most, at least AHEAD_SHARE_GOAL, or only after 15 minutes, or
+ * not yet), how long the whole PR took, whether a click during the run
+ * waited no longer than one cancelled request, and what the numbers say
+ * about the defaults (Requests at once and the per-PR limit). Undefined when
+ * no model answered a line. `defaults` are the extension's (src/explainAhead.ts,
+ * which Node cannot load directly, so scripts/bench.ts passes them in).
+ */
+export function wholePrConclusion(
+  results: readonly WholePrResult[],
+  defaults: WholePrDefaults,
+): string | undefined {
+  const best = bestWholePr(results);
+  if (!best) return undefined;
+  const { result, summary: s } = best;
+  const five = cachedAfter(s, 5);
+  const fifteen = cachedAfter(s, 15);
+  const whole = s.estimated
+    ? `the whole PR (${result.sent} lines) would take ${formatMinutes(s.wholePrMs, true)} at that rate`
+    : `the whole PR (${result.sent} lines) took ${formatMinutes(s.wholePrMs)}`;
+  const perLine =
+    s.byHunkPerLineMs === undefined
+      ? ''
+      : ` (${formatMs(s.byHunkPerLineMs)} per line by hunk` +
+        (s.speedup !== undefined
+          ? s.speedup >= 1
+            ? `, ${s.speedup.toFixed(1)}× faster than ${formatMs(s.singlePerLineMs)} one at a time)`
+            : `, slower than ${formatMs(s.singlePerLineMs)} one at a time)`
+          : ')');
+  let head: string;
+  if (five >= AHEAD_SHARE_GOAL) {
+    head =
+      `**Most clicks are instant after 5 minutes, with ${result.model}.** ` +
+      `${sharePercent(five)} of the changed lines were answered in the background after 5 minutes, and ${whole}${perLine}.`;
+  } else if (fifteen >= AHEAD_SHARE_GOAL) {
+    head =
+      `**Most clicks are instant only after 15 minutes, with ${result.model}.** ` +
+      `${sharePercent(five)} of the changed lines were answered after 5 minutes and ` +
+      `${sharePercent(fifteen)} after 15, and ${whole}${perLine}.`;
+  } else {
+    head =
+      `**Most clicks are not instant yet.** The best model, ${result.model}, answered ` +
+      `${sharePercent(five)} of the changed lines after 5 minutes and ${sharePercent(fifteen)} after 15, ` +
+      `and ${whole}${perLine}. A click on a line not reached yet is answered fresh, as before.`;
+  }
+  const out = [head];
+
+  const click = s.click;
+  if (!click) out.push('No click was sent during the run, so the click wait was not checked.');
+  else if (click.waitedAtMostOneCancelled) {
+    out.push(
+      `A click sent during the run started after ${formatMs(click.waitMs)} and waited no longer than ` +
+        `one cancelled request` +
+        (click.error !== undefined
+          ? `, but it failed: ${click.error}.`
+          : `; it was answered in ${formatMs(click.totalMs)}.`),
+    );
+  } else if (click.waitMs === undefined) {
+    out.push('**Check failed:** the click sent during the run never started.');
+  } else {
+    const finished = result.click?.finishedWhileWaiting ?? 0;
+    out.push(
+      `**Check failed:** the click sent during the run waited ${formatMs(click.waitMs)}, while ` +
+        `${finished} background ${finished === 1 ? 'request' : 'requests'} finished and ` +
+        `${click.cancelled} ${click.cancelled === 1 ? 'was' : 'were'} stopped. The queue (PR 10.3) should stop one at most.`,
+    );
+  }
+
+  const notes: string[] = [];
+  if (result.atOnce === defaults.atOnce) {
+    notes.push(
+      `**Requests at once** stays at ${defaults.atOnce}: this run measured that setting only, and the ` +
+        'Requests at once report (`npm run bench -- --parallel 1,2`) is what would change it.',
+    );
+  }
+  if (s.byHunkPerLineMs !== undefined) {
+    const atLimitMs = s.byHunkPerLineMs * defaults.maxPerPr;
+    const inBudget = Math.floor(WHOLE_PR_LIMIT_BUDGET_MS / s.byHunkPerLineMs);
+    notes.push(
+      atLimitMs <= WHOLE_PR_LIMIT_BUDGET_MS
+        ? `The per-PR limit of ${defaults.maxPerPr} lines stays: at this rate a PR that large takes ` +
+            `${formatMinutes(atLimitMs, true)}.`
+        : `The per-PR limit of ${defaults.maxPerPr} lines would take ${formatMinutes(atLimitMs, true)} at ` +
+            `this rate, so about ${inBudget} lines (what ${formatMinutes(WHOLE_PR_LIMIT_BUDGET_MS)} covers) ` +
+            'would be a better limit on this laptop.',
+    );
+  }
+  out.push(...notes);
+  return out.join(' ') + '\n';
 }

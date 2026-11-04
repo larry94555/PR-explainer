@@ -6,10 +6,13 @@ import {
   type AheadResult,
   type BenchReport,
   type BenchRun,
+  type WholePrResult,
 } from '../scripts/benchStats.ts';
 import {
   aheadMeetsGoal,
   bestAheadModel,
+  bestWholePr,
+  wholePrConclusion,
   conclusion,
   demote,
   dominantTerm,
@@ -510,5 +513,118 @@ describe('fresh answers and Explain ahead', () => {
       text.indexOf('### Conclusion'),
     );
     expect(text).toContain('**Goal met only after Explain ahead, with m.**');
+  });
+});
+
+// PR 10.8: the conclusion of the whole-PR section.
+describe('the whole-PR conclusion', () => {
+  const minutes = (m: number) => m * 60_000;
+  const defaults = { atOnce: 1, maxPerPr: 500 };
+
+  /** `lines` lines answered evenly over `wholeMin` minutes, one at a time in 3 s each alone. */
+  const run = (model: string, lines: number, wholeMin: number, over: Partial<WholePrResult> = {}) =>
+    ({
+      model,
+      sample: 'tests/fixtures/pr.json',
+      lines,
+      sent: lines,
+      requests: Math.ceil(lines / 10),
+      atOnce: 1,
+      totalMs: minutes(wholeMin),
+      stopped: false,
+      answered: Array.from({ length: lines }, (_, i) => ({
+        line: `a.ts:added:${i + 1}`,
+        atMs: (minutes(wholeMin) * (i + 1)) / lines,
+      })),
+      single: [{ ok: true, totalMs: 3000 }],
+      click: {
+        line: `a.ts:added:${lines}`,
+        sentAtMs: 20_000,
+        startedAtMs: 20_005,
+        run: { ok: true, totalMs: 3500 },
+        finishedWhileWaiting: 0,
+        cancelled: 1,
+      },
+      failures: [],
+      ...over,
+    }) satisfies WholePrResult;
+
+  it('says most clicks are instant after 5 minutes when 90% of lines are cached by then', () => {
+    const text = wholePrConclusion([run('m', 200, 4)], defaults)!;
+    expect(text).toContain('**Most clicks are instant after 5 minutes, with m.**');
+    expect(text).toContain(
+      '100% of the changed lines were answered in the background after 5 minutes',
+    );
+    expect(text).toContain(
+      'the whole PR (200 lines) took 4.0 min (1.2 s per line by hunk, 2.5× faster than 3.0 s one at a time)',
+    );
+    expect(text).toContain(
+      'A click sent during the run started after 5 ms and waited no longer than one cancelled request; it was answered in 3.5 s.',
+    );
+    expect(text).toContain('**Requests at once** stays at 1');
+    expect(text).toContain(
+      'The per-PR limit of 500 lines stays: at this rate a PR that large takes about 10.0 min.',
+    );
+  });
+
+  it('says only after 15 minutes when the 5-minute share falls short', () => {
+    const text = wholePrConclusion([run('m', 200, 12)], defaults)!;
+    expect(text).toContain('**Most clicks are instant only after 15 minutes, with m.**');
+    expect(text).toContain(
+      '41% of the changed lines were answered after 5 minutes and 100% after 15, and the whole PR (200 lines) took 12.0 min (3.6 s per line by hunk, slower than 3.0 s one at a time)',
+    );
+  });
+
+  it('says not yet, and suggests a lower per-PR limit, when even 15 minutes is not enough', () => {
+    const slow = run('m', 300, 20, {
+      stopped: true,
+      answered: run('m', 300, 40).answered.slice(0, 150),
+    });
+    const text = wholePrConclusion([slow], defaults)!;
+    expect(text).toContain('**Most clicks are not instant yet.** The best model, m, answered');
+    expect(text).toContain('would take about 40.0 min at that rate');
+    expect(text).toContain(
+      'The per-PR limit of 500 lines would take about 66.7 min at this rate, so about 225 lines (what 30.0 min covers) would be a better limit on this laptop.',
+    );
+  });
+
+  it('picks the model with the most lines cached after 5 minutes', () => {
+    const text = wholePrConclusion([run('slow', 200, 12), run('fast', 200, 4)], defaults)!;
+    expect(text).toContain('with fast.**');
+  });
+
+  it('flags a click that waited for a background request to finish', () => {
+    const late = run('m', 200, 4, {
+      click: {
+        line: 'a.ts:added:200',
+        sentAtMs: 20_000,
+        startedAtMs: 50_000,
+        run: { ok: true, totalMs: 33_000 },
+        finishedWhileWaiting: 1,
+        cancelled: 0,
+      },
+    });
+    expect(wholePrConclusion([late], defaults)).toContain(
+      '**Check failed:** the click sent during the run waited 30.0 s, while 1 background request finished and 0 were stopped.',
+    );
+  });
+
+  it('says when no click was sent or it failed', () => {
+    expect(wholePrConclusion([run('m', 200, 4, { click: undefined })], defaults)).toContain(
+      'No click was sent during the run',
+    );
+    const failedClick = run('m', 200, 4);
+    failedClick.click.run = { ok: false, error: 'timeout' } as never;
+    expect(wholePrConclusion([failedClick], defaults)).toContain('but it failed: timeout.');
+  });
+
+  it('leaves Requests at once out when the run used another value', () => {
+    const text = wholePrConclusion([run('m', 200, 4, { atOnce: 2 })], defaults)!;
+    expect(text).not.toContain('Requests at once');
+  });
+
+  it('has no conclusion when no line was answered', () => {
+    expect(wholePrConclusion([run('m', 200, 4, { answered: [] })], defaults)).toBeUndefined();
+    expect(bestWholePr([])).toBeUndefined();
   });
 });

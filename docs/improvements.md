@@ -29,7 +29,7 @@ This table is from the Milestone 8 report. `npm run bench:history` now adds the 
 3. **Use the GPU.** Ollama did not use the Intel Iris Xe GPU on Windows, so the model ran entirely on the CPU. A supported GPU (or freeing video memory so the whole model fits) makes generation several times faster. The settings page already shows whether the model runs on the GPU and suggests a fix.
 4. **Pick a model for the user.** First-run setup could run the speed test automatically and recommend the fastest model that gives good answers, instead of leaving users to discover it.
 5. **Shorter, more focused answers.** A compact mode (for example, only *Concerns*, or one sentence per section) would cut the dominant term, answer tokens, directly.
-6. **Hide the wait.** Explain on hover already starts early. Prefetching the next likely lines, or explaining a whole hunk in the background when it scrolls into view, could make many clicks instant on capable hardware.
+6. **Hide the wait.** Explain on hover starts early, and **Explain ahead** explains changed lines in the background: the lines on screen, or with **Whole PR** every changed line of the PR, one request per hunk (Milestone 10). `npm run bench -- --whole-pr` measures how many clicks that makes instant after 1, 5 and 15 minutes; this page is updated once it has been run on the laptop.
 7. **Other runtimes.** llama.cpp server or LM Studio, through the existing `LlmClient` interface, may be faster on some machines (for example with better support for integrated GPUs).
 
 ## 2. Easier setup for non-developers
