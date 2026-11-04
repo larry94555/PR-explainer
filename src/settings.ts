@@ -72,6 +72,15 @@ export interface Settings {
    */
   requestsAtOnce: number;
   /**
+   * Background work on battery (PR 11.3): `pause` (the default) stops
+   * Explain on hover, Explain ahead and the service worker's background
+   * queue from sending anything new while the laptop runs on battery, and
+   * lets a running request finish; `keep` never pauses. Clicks and chat
+   * questions are never paused. The content script reads it straight from
+   * storage (src/batteryState.ts).
+   */
+  backgroundOnBattery: BatteryMode;
+  /**
    * Keep answers for, in days (PR 10.9): how long explanations are kept on
    * this computer after Chrome closes, in IndexedDB
    * (src/explain/persistentCache.ts). An answer not used for this long is
@@ -108,6 +117,10 @@ export type SettingsField = keyof Settings;
 export const AHEAD_MODES = ['off', 'screen', 'pr'] as const;
 export type AheadMode = (typeof AHEAD_MODES)[number];
 
+/** The choices of Background work on battery (PR 11.3). */
+export const BATTERY_MODES = ['pause', 'keep'] as const;
+export type BatteryMode = (typeof BATTERY_MODES)[number];
+
 export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   llmUrl: 'http://localhost:11434',
   model: '',
@@ -119,6 +132,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   explainOnHover: false,
   explainAhead: 'off',
   requestsAtOnce: 1,
+  backgroundOnBattery: 'pause',
   keepAnswersDays: 7,
   letModelThink: false,
   streamAnswers: false,
@@ -240,6 +254,10 @@ function checkField(field: SettingsField, value: unknown): string | null {
         : 'Explain ahead must be Off, Lines on screen or Whole PR.';
     case 'requestsAtOnce':
       return checkNumber(value, REQUESTS_AT_ONCE_RANGE, true, 'Requests at once');
+    case 'backgroundOnBattery':
+      return (BATTERY_MODES as readonly unknown[]).includes(value)
+        ? null
+        : 'Background work on battery must be Pause or Keep going.';
     case 'keepAnswersDays':
       return checkNumber(value, KEEP_ANSWERS_DAYS_RANGE, true, 'Keep answers for');
     case 'letModelThink':

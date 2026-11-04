@@ -23,6 +23,9 @@
 // - A click on other code makes the service worker's queue stop the line
 //   being explained ahead, so the model is free for it, and run it again
 //   once the click is answered. Its request here simply takes longer.
+// - Nothing new starts while background work is paused on battery
+//   (`isPaused`, PR 11.3, src/batteryState.ts). Requests already sent are
+//   let finish, and the content script calls `restart` once it is plugged in.
 // - Scrolling empties the queue and starts the wait again, so the lines on
 //   screen once the page is still are the ones explained next. A line
 //   already being explained keeps going.
@@ -356,6 +359,11 @@ export interface ExplainAheadDeps {
   isEnabled?(): boolean;
   /** True while a click's or chat answer is being written, a hover runs, or the tab is hidden. */
   isBusy?(): boolean;
+  /**
+   * True while background work is paused on battery (PR 11.3): nothing new
+   * is sent, and `restart` is called once it ends. Left out means never.
+   */
+  isPaused?(): boolean;
   /** The added lines on screen, top to bottom. Tests pass a fake. */
   lines(): AheadLine[];
   /** A new debug log group id, one per page. Defaults to crypto.randomUUID. */
@@ -537,6 +545,8 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
       report();
       return false;
     }
+    // Paused on battery: the lines wait for `restart` once plugged in.
+    if (deps.isPaused?.() === true) return false;
     if (deps.isBusy?.() === true) {
       retryLater();
       return false;

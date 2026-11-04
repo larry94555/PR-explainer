@@ -1,7 +1,8 @@
 // The settings page: the Ollama URL, a model dropdown filled from the server,
 // temperature, max response length, context size, how long to keep the model
 // loaded (PR 8.3), Explain on hover (PR 8.7), Explain ahead (PR 9.10; Off,
-// Lines on screen or Whole PR from PR 10.6) and Requests at once, Let the
+// Lines on screen or Whole PR from PR 10.6), Requests at once, Background
+// work on battery (PR 11.3; Pause or Keep going), Let the
 // model think (PR 9.5), the Debug section (Show prompt, PR 6.2, and Debug
 // window, PR 9.3), Save, and Test connection. Under the model, a line says
 // whether it is a reasoning model and whether its thinking is on (PR 9.5). The
@@ -110,6 +111,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const hoverInput = el<HTMLInputElement>(doc, 'explainOnHover');
   const aheadSelect = el<HTMLSelectElement>(doc, 'explainAhead');
   const requestsInput = el<HTMLInputElement>(doc, 'requestsAtOnce');
+  const batterySelect = el<HTMLSelectElement>(doc, 'backgroundOnBattery');
   const keepAnswersInput = el<HTMLInputElement>(doc, 'keepAnswersDays');
   const clearButton = el<HTMLButtonElement>(doc, 'clear-answers');
   const clearStatus = el(doc, 'clear-status');
@@ -145,6 +147,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     hoverInput.checked = settings.explainOnHover;
     aheadSelect.value = settings.explainAhead;
     requestsInput.value = String(settings.requestsAtOnce);
+    batterySelect.value = settings.backgroundOnBattery;
     keepAnswersInput.value = String(settings.keepAnswersDays);
     thinkInput.checked = settings.letModelThink;
     streamInput.checked = settings.streamAnswers;
@@ -171,6 +174,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       explainOnHover: hoverInput.checked,
       explainAhead: aheadSelect.value as Settings['explainAhead'],
       requestsAtOnce: requests === '' ? NaN : Number(requests),
+      backgroundOnBattery: batterySelect.value as Settings['backgroundOnBattery'],
       keepAnswersDays: keepAnswers === '' ? NaN : Number(keepAnswers),
       letModelThink: thinkInput.checked,
       streamAnswers: streamInput.checked,

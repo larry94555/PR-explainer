@@ -187,6 +187,63 @@ describe('the background queue', () => {
   });
 });
 
+describe('paused on battery (PR 11.3)', () => {
+  it('starts no background job while paused, and starts them once resumed', async () => {
+    const env = setup();
+    env.queue.setPaused(true);
+    void env.queue.add(env.job('a'));
+    void env.queue.add(env.job('h', 'hovered'));
+    expect(env.live()).toEqual([]);
+    expect(env.queue.state()).toEqual({ running: [], waiting: ['h', 'a'] });
+
+    env.queue.setPaused(false);
+    expect(env.live().map((r) => r.payload)).toEqual(['h']);
+    env.live()[0]!.finish();
+    await settle();
+    expect(env.live().map((r) => r.payload)).toEqual(['a']);
+  });
+
+  it('lets a running background job finish, then starts nothing new', async () => {
+    const env = setup();
+    const a = env.queue.add(env.job('a'));
+    void env.queue.add(env.job('b'));
+    env.queue.setPaused(true);
+    expect(env.runs[0]!.signal.aborted).toBe(false);
+    env.live()[0]!.finish();
+    await expect(a).resolves.toMatchObject({ text: 'answer to a' });
+    await settle();
+    expect(env.live()).toEqual([]);
+    expect(env.queue.state().waiting).toEqual(['b']);
+  });
+
+  it('still runs a click at once', async () => {
+    const env = setup();
+    env.queue.setPaused(true);
+    void env.queue.add(env.job('a'));
+    const click = env.queue.add(env.job('x', 'click'));
+    expect(env.live().map((r) => r.payload)).toEqual(['x']);
+    env.live()[0]!.finish();
+    await expect(click).resolves.toMatchObject({ text: 'answer to x' });
+    await settle();
+    // The background still waits.
+    expect(env.live()).toEqual([]);
+  });
+
+  it('runs a click that joins a waiting background job', () => {
+    const env = setup();
+    env.queue.setPaused(true);
+    void env.queue.add(env.job('a'));
+    void env.queue.add(env.job('a', 'click'));
+    expect(env.live().map((r) => r.payload)).toEqual(['a']);
+  });
+
+  it('is not paused by default (Keep going never calls setPaused)', () => {
+    const env = setup();
+    void env.queue.add(env.job('a'));
+    expect(env.live().map((r) => r.payload)).toEqual(['a']);
+  });
+});
+
 describe('a click', () => {
   it('runs at once, stopping the running background job and putting it back first', async () => {
     const env = setup();

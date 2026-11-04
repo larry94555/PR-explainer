@@ -8,6 +8,7 @@
 // entry must not share imports with other entries: Vite would move shared
 // code into a chunk loaded with `import`, which fails in a content script.
 // Type-only imports (such as src/messaging/protocol.ts) are fine.
+import { trackBackgroundPause, type BatteryNavigatorLike } from './batteryState';
 import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
 import { chatSessionFor, CurrentChat, startChat } from './chat/chatFlow';
 import { currentChatPanel, openChatPanel } from './chat/chatPanel';
@@ -261,6 +262,7 @@ function update(): void {
   currentChat.leave(prName(location.href));
   if (!syncBadge(document, location.href)) return;
   pingWorker();
+  reportPause();
   warmUpModel();
   setBadgeStatus(document, workerStatus);
   const value = enabled.current();
@@ -369,11 +371,46 @@ const askWorkerHunk: NonNullable<ExplainAheadDeps['explainHunk']> = (request, { 
   );
 };
 
+// Background work on battery (PR 11.3): on battery, with the setting on
+// Pause (the default), Explain on hover and Explain ahead send nothing new,
+// and the service worker's queue starts no background job (it hears from
+// every PR tab, src/backgroundPause.ts). A running request is let finish.
+// Clicks and chat questions are never paused.
+const backgroundPause = trackBackgroundPause({
+  nav: navigator as Navigator & BatteryNavigatorLike,
+  storage: chrome.storage.sync,
+  events: chrome.storage.onChanged,
+  onChange: (paused) => {
+    console.info(`[PR Explainer] background work ${paused ? 'paused: on battery' : 'resumed'}`);
+    reportPause();
+    // Plugged in: Explain ahead looks at the lines on screen again.
+    if (!paused && features.attached) ahead.restart();
+  },
+});
+/**
+ * What the service worker was last told, so it is told only changes. It
+ * shows the pause on the toolbar icon only while some background work is
+ * on, since otherwise nothing is held back.
+ */
+let pauseSent: boolean | undefined;
+function reportPause(): void {
+  if (!parsePrUrl(location.href)) return;
+  const paused =
+    backgroundPause.paused() && (hoverSetting.current() || aheadSetting.current() !== 'off');
+  if (paused === pauseSent) return;
+  pauseSent = paused;
+  sendRequest('backgroundPaused', { paused }).catch(() => {
+    // Asked again on the next change.
+    pauseSent = undefined;
+  });
+}
+
 // Explain on hover (PR 8.7): with the setting on, resting the pointer on a
 // line starts its explanation, and a click joins it in the service worker's
 // queue (src/prefetch.ts, PR 10.3).
 const hoverSetting = trackHoverSetting(chrome.storage.sync, chrome.storage.onChanged, (on) => {
   if (!on) prefetcher.cancel();
+  reportPause();
 });
 function describePrefetch(event: PrefetchEvent): string {
   const seconds = 'elapsedMs' in event ? ` after ${(event.elapsedMs / 1000).toFixed(1)} s` : '';
@@ -394,6 +431,7 @@ function describePrefetch(event: PrefetchEvent): string {
 const aheadSetting = trackAheadSetting(chrome.storage.sync, chrome.storage.onChanged, (mode) => {
   if (mode === 'off') ahead.cancel();
   else if (features.attached) ahead.restart();
+  reportPause();
 });
 const requestsSetting = trackRequestsSetting(chrome.storage.sync, chrome.storage.onChanged);
 /** The PR and its head commit, for Whole PR's per-PR limit. */
@@ -431,6 +469,7 @@ const ahead = createExplainAhead({
   pageKey: aheadPage,
   concurrency: () => requestsSetting.current(),
   isEnabled: () => enabled.current() === true,
+  isPaused: () => backgroundPause.paused(),
   // One request at a time: not while a click's or a chat answer is being
   // written, not while Explain on hover runs, and not in a hidden tab.
   isBusy: () => {
@@ -456,6 +495,7 @@ const prefetcher = createPrefetcher({
   explain: askWorker,
   isOn: () => hoverSetting.current(),
   isEnabled: () => enabled.current() === true,
+  isPaused: () => backgroundPause.paused(),
   // One request at a time: not while a click's answer is still coming, and
   // not while the chat is open (a click then goes to the chat).
   isBusy: () => {

@@ -16,6 +16,8 @@
 // - Nothing starts while a click's explanation is still running or the chat
 //   is open (`isBusy`), or while a mouse button is held (a drag selects lines,
 //   src/selection.ts).
+// - Nothing starts while background work is paused on battery (`isPaused`,
+//   PR 11.3, src/batteryState.ts). A prefetch already running is let finish.
 // - A click on other code cancels the prefetch, so the click's request is the
 //   only one.
 // - Moving off the code (the gutter, a header, the popup) ends the wait.
@@ -110,6 +112,8 @@ export interface PrefetchDeps {
   isEnabled?(): boolean;
   /** True while a click's explanation is running or the chat is open. */
   isBusy?(): boolean;
+  /** True while background work is paused on battery (PR 11.3). Left out means never. */
+  isPaused?(): boolean;
   /** The line under the pointer. Defaults to hoveredLine; tests pass a fake. */
   locate?(target: EventTarget | null): HoveredLine | null;
   delayMs?: number;
@@ -159,7 +163,11 @@ export function createPrefetcher(deps: PrefetchDeps): Prefetcher {
   let current: Running | undefined;
   const done = new Set<string>();
 
-  const active = () => deps.isOn() && deps.isEnabled?.() !== false && deps.isBusy?.() !== true;
+  const active = () =>
+    deps.isOn() &&
+    deps.isEnabled?.() !== false &&
+    deps.isBusy?.() !== true &&
+    deps.isPaused?.() !== true;
 
   const clearTimer = () => {
     clearTimeout(timer);
@@ -225,7 +233,7 @@ export function createPrefetcher(deps: PrefetchDeps): Prefetcher {
     hoverKey = line.key;
     clearTimer();
     if (current && current.key !== line.key) cancelRunning();
-    if (!deps.isOn()) return;
+    if (!deps.isOn() || deps.isPaused?.() === true) return;
     timer = setTimeout(() => {
       timer = undefined;
       start(line);

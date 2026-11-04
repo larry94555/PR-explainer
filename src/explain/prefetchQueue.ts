@@ -31,6 +31,9 @@
 //   it from the cache without the model) and is logged as skipped.
 // - A background job that fails is tried once more after the others of its
 //   priority, then given up on. A click is never tried again by itself.
+// - While paused (PR 11.3: on battery, src/backgroundPause.ts), no
+//   background job starts; those running finish, and the rest wait until it
+//   is resumed. Clicks still run at once.
 // - A job whose callers have all gone (the popup closed, the tab moved on) is
 //   dropped, and stopped if it is running. Jobs can also be re-prioritised
 //   and dropped by PR. Closing a tab lets go of only that tab's callers, so a
@@ -140,6 +143,11 @@ export interface PrefetchQueue<P, R> {
    * many jobs were dropped.
    */
   dropTab(tab: number): number;
+  /**
+   * Pauses or resumes background jobs (PR 11.3). While paused, only clicks
+   * start; running background jobs are let finish.
+   */
+  setPaused(paused: boolean): void;
   /** The labels of the running and waiting jobs, in the order they would run. */
   state(): { running: string[]; waiting: string[] };
 }
@@ -178,6 +186,7 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
   const jobs = new Map<string, Job<P, R>>();
   let seq = 0;
   let front = 0;
+  let paused = false;
 
   const running = () => [...jobs.values()].filter((job) => job.run);
   const waiting = () =>
@@ -340,6 +349,8 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       }
       // While a click runs, the background waits, so the click has Ollama to itself.
       else if (clickActive()) continue;
+      // On battery (PR 11.3): nothing new starts until it is resumed.
+      else if (paused) continue;
       // A line being answered as part of a hunk waits for it.
       else if (cover) continue;
       else if (running().length < concurrency()) start(job);
@@ -443,6 +454,11 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       }
       if (dropped) pump();
       return dropped;
+    },
+    setPaused(value) {
+      if (value === paused) return;
+      paused = value;
+      if (!paused) pump();
     },
     state: () => ({
       running: running().map((job) => job.spec.label),

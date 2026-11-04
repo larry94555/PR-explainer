@@ -12,6 +12,8 @@ import * as toolbar from '../src/toolbarToggle';
 import {
   actionBadge,
   DONE_COLOR,
+  PAUSED_COLOR,
+  pausedBadge,
   progressBadge,
   PROGRESS_COLOR,
   setupToolbarToggle,
@@ -312,5 +314,46 @@ describe('Whole PR progress on the toolbar icon (PR 10.7)', () => {
     click();
     await toggle.idle();
     expect(vi.mocked(action.setTitle).mock.calls.map(([d]) => d.tabId)).toEqual([undefined, 8]);
+  });
+
+  describe('paused on battery (PR 11.3)', () => {
+    it('shows ⏸ with the reason in the tooltip, or OFF when click-to-explain is off', () => {
+      expect(pausedBadge(true)).toEqual({
+        text: '⏸',
+        color: PAUSED_COLOR,
+        title: 'Background work paused: on battery\nPR Explainer is on. Click to turn it off.',
+      });
+      expect(pausedBadge(false)).toEqual(actionBadge(false));
+    });
+
+    it('shows the pause on the icon and every drawn tab, over progress, and puts them back', async () => {
+      const { storage } = fakeStorage();
+      const { action, shown } = fakeTabAction();
+      const toggle = setupToolbarToggle({ action, storage });
+      await toggle.showProgress(7, { done: 3, total: 10 });
+      await toggle.showPaused(true);
+      expect(shown.get('all')).toEqual(pausedBadge(true));
+      expect(shown.get(7)).toEqual(pausedBadge(true));
+      // Progress arriving while paused does not hide the pause.
+      await toggle.showProgress(7, { done: 4, total: 10 });
+      expect(shown.get(7)).toEqual(pausedBadge(true));
+
+      await toggle.showPaused(false);
+      expect(shown.get('all')).toEqual(actionBadge(true));
+      expect(shown.get(7)).toEqual(progressBadge({ done: 4, total: 10 }, true));
+    });
+
+    it('keeps the pause when the button is clicked, and shows OFF while off', async () => {
+      const { storage } = fakeStorage();
+      const { action, shown, click } = fakeTabAction();
+      const toggle = setupToolbarToggle({ action, storage });
+      await toggle.showPaused(true);
+      click();
+      await toggle.idle();
+      expect(shown.get('all')).toEqual(actionBadge(false));
+      click();
+      await toggle.idle();
+      expect(shown.get('all')).toEqual(pausedBadge(true));
+    });
   });
 });

@@ -1,5 +1,6 @@
 // Service worker. Answers requests from the content script (see
 // src/messaging/). All calls to the local LLM run here (see src/llm/).
+import { createBackgroundPause } from './backgroundPause';
 import { createChatHandler } from './chat/chatHandler';
 import {
   clearWhenTurnedOff,
@@ -183,9 +184,20 @@ const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult | HunkRes
 // The toolbar button turns click-to-explain on and off for every tab, and
 // shows Whole PR's progress in a tab (PR 10.7).
 const toolbar = setupToolbarToggle({ action: chrome.action, storage: chrome.storage.local });
+// Background work on battery (PR 11.3): while a tab says the laptop is on
+// battery with the setting on Pause, the queue starts no new background job
+// and the toolbar icon shows the pause. Kept across worker restarts.
+const backgroundPause = createBackgroundPause({
+  storage: chrome.storage.session,
+  onChange: (paused) => {
+    explainQueue.setPaused(paused);
+    void toolbar.showPaused(paused);
+  },
+});
 chrome.tabs.onRemoved.addListener((tabId) => {
   warmup.forgetTab(tabId);
   toolbar.forgetTab(tabId);
+  backgroundPause.forgetTab(tabId);
   // Only that tab's callers: a job shared with another tab keeps going.
   explainQueue.dropTab(tabId);
 });
@@ -212,6 +224,11 @@ new MessageRouter()
     return { cleared: true as const };
   })
   .on('openDebugWindow', async () => ({ window: await debugWindow.open() }))
+  .on('backgroundPaused', (payload, sender) => {
+    const tabId = sender.tab?.id;
+    if (tabId !== undefined) backgroundPause.report(tabId, payload.paused);
+    return { paused: backgroundPause.paused() };
+  })
   .on('aheadProgress', async (payload, sender) => {
     const tabId = sender.tab?.id;
     if (tabId === undefined) return { shown: false };

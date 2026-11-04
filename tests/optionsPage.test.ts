@@ -22,6 +22,7 @@ const SAVED: Settings = {
   explainOnHover: false,
   explainAhead: 'off',
   requestsAtOnce: 1,
+  backgroundOnBattery: 'pause',
   keepAnswersDays: 7,
   letModelThink: false,
   streamAnswers: false,
@@ -105,6 +106,32 @@ describe('options page', () => {
     $<HTMLInputElement>('explainOnHover').checked = true;
     await page.save();
     expect(await deps.getSettings()).toMatchObject({ explainOnHover: true });
+  });
+
+  it('loads and saves Background work on battery: Pause by default, or Keep going (PR 11.3)', async () => {
+    const deps = fakeDeps(fakeClient());
+    const page = await initOptionsPage(document, deps);
+    const select = $<HTMLSelectElement>('backgroundOnBattery');
+    expect(select.value).toBe('pause');
+    expect([...select.options].map((o) => [o.value, o.textContent])).toEqual([
+      ['pause', 'Pause'],
+      ['keep', 'Keep going'],
+    ]);
+    expect(document.querySelector('label[for="backgroundOnBattery"]')!.textContent!.trim()).toBe(
+      'Background work on battery',
+    );
+    const hint = select.closest('.field')!.querySelector('.hint')!.textContent!;
+    expect(hint).toMatch(/clicks and chat questions always run/i);
+
+    select.value = 'keep';
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ backgroundOnBattery: 'keep' });
+    await initOptionsPage(document, deps);
+    expect($<HTMLSelectElement>('backgroundOnBattery').value).toBe('keep');
+
+    $<HTMLSelectElement>('backgroundOnBattery').value = 'pause';
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ backgroundOnBattery: 'pause' });
   });
 
   it('loads and saves Explain ahead: Off by default, Lines on screen or Whole PR (PR 10.6)', async () => {
@@ -593,6 +620,7 @@ describe('options page', () => {
       explainOnHover: false,
       explainAhead: 'off',
       requestsAtOnce: 1,
+      backgroundOnBattery: 'pause',
       keepAnswersDays: 7,
       letModelThink: false,
       streamAnswers: false,

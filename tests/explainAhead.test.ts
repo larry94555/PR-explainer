@@ -154,6 +154,44 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
+describe('Explain ahead on battery (PR 11.3)', () => {
+  it('sends nothing while paused, and starts again on restart once plugged in', async () => {
+    let paused = true;
+    const env = setup({ isPaused: () => paused });
+    env.ahead.restart();
+    vi.advanceTimersByTime(AHEAD_IDLE_MS * 5);
+    expect(env.explain).not.toHaveBeenCalled();
+
+    // The content script restarts it when the laptop is plugged in.
+    paused = false;
+    env.ahead.restart();
+    vi.advanceTimersByTime(AHEAD_IDLE_MS);
+    expect(env.texts()).toEqual(['context of a']);
+  });
+
+  it('lets a running line finish when unplugged, then sends nothing new', async () => {
+    let paused = false;
+    const env = setup({ isPaused: () => paused });
+    env.ahead.restart();
+    vi.advanceTimersByTime(AHEAD_IDLE_MS);
+    expect(env.texts()).toEqual(['context of a']);
+
+    paused = true;
+    expect(env.streams[0]!.stopped).toBe(false);
+    await finishCurrent(env);
+    vi.advanceTimersByTime(AHEAD_IDLE_MS * 5);
+    expect(env.texts()).toEqual(['context of a']);
+    expect(env.events).toContainEqual(expect.objectContaining({ type: 'finished', key: 'a' }));
+  });
+
+  it('never pauses with Keep going (isPaused always false)', () => {
+    const env = setup({ isPaused: () => false });
+    env.ahead.restart();
+    vi.advanceTimersByTime(AHEAD_IDLE_MS);
+    expect(env.texts()).toEqual(['context of a']);
+  });
+});
+
 describe('Explain ahead', () => {
   it('waits until the page has been still for 2 seconds', () => {
     const env = setup();
