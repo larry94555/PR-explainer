@@ -153,6 +153,8 @@ describe('Explain ahead', () => {
       // Its round trips are marked as Explain ahead's, in one debug log group.
       cause: 'ahead',
       debugId: 'ahead-1',
+      // Names the line in the service worker's queue (PR 10.3).
+      job: { label: 'a' },
       code: { filePath: 'src/a.ts', startLine: 1, endLine: 1, text: 'const a = 1;' },
     });
   });
@@ -284,62 +286,22 @@ describe('Explain ahead', () => {
     expect(env.texts()).toEqual(['context of a', 'context of b']);
   });
 
-  it('stops for a click on other code, and asks that line again after', async () => {
+  it('leaves a click to the service worker queue: the line keeps waiting for its answer', async () => {
     const env = setup();
     env.ahead.restart();
     vi.advanceTimersByTime(AHEAD_IDLE_MS);
-    // The click's popup is open and loading.
+    // A click elsewhere: its popup is loading. The queue (PR 10.3) pauses
+    // this line's request in the service worker and runs it again after, so
+    // nothing is stopped or asked again here.
     env.setBusy(true);
-    env.ahead.explain('context of x', () => {}, { fresh: false });
-    expect(env.streams[0]!.stopped).toBe(true);
-    expect(env.streams[1]!.text).toBe('context of x');
-    expect(env.events).toContainEqual({ type: 'cancelled', key: 'a' });
-    expect(env.ahead.queued()).toEqual(['a', 'b', 'c']);
+    vi.advanceTimersByTime(5 * AHEAD_RETRY_MS);
+    expect(env.streams[0]!.stopped).toBe(false);
+    expect(env.explain).toHaveBeenCalledTimes(1);
 
-    // The click's answer is shown: a is asked again.
     await finishCurrent(env);
     env.setBusy(false);
     vi.advanceTimersByTime(AHEAD_RETRY_MS);
-    expect(env.texts()).toEqual(['context of a', 'context of x', 'context of a']);
-  });
-
-  it('lets a click join the line being explained ahead', async () => {
-    const env = setup();
-    env.ahead.restart();
-    vi.advanceTimersByTime(AHEAD_IDLE_MS);
-    env.streams[0]!.chunk('**What it does** Ad');
-    env.setTime(1500);
-
-    const got: string[] = [];
-    const joined = env.ahead.explain('context of a', (c) => got.push(c), { fresh: false });
-    expect(env.explain).toHaveBeenCalledTimes(1);
-    expect(env.events).toContainEqual({ type: 'joined', key: 'a', elapsedMs: 1500 });
-    await settle();
-    expect(got).toEqual(['**What it does** Ad']);
-    env.streams[0]!.chunk('ds one.');
-    expect(got).toEqual(['**What it does** Ad', 'ds one.']);
-
-    env.streams[0]!.finish();
-    await expect(joined.result).resolves.toBe(DONE);
-  });
-
-  it('does not join for Regenerate, which asks the model afresh', () => {
-    const env = setup();
-    env.ahead.restart();
-    vi.advanceTimersByTime(AHEAD_IDLE_MS);
-    env.ahead.explain('context of a', () => {}, { fresh: true });
-    expect(env.streams[0]!.stopped).toBe(true);
-    expect(env.streams[1]!.options).toEqual({ fresh: true });
-  });
-
-  it('answers a later click on an explained line from the cache', async () => {
-    const env = setup();
-    env.ahead.restart();
-    vi.advanceTimersByTime(AHEAD_IDLE_MS);
-    await finishCurrent(env);
-
-    const click = env.ahead.explain('context of a', () => {}, { fresh: false });
-    await expect(click.result).resolves.toBe(CACHED);
+    expect(env.texts()).toEqual(['context of a', 'context of b']);
   });
 
   it('ends the pass when a line fails (Ollama may be down), until the next scroll', async () => {
@@ -381,15 +343,6 @@ describe('Explain ahead', () => {
     expect(env.ahead.queued()).toEqual([]);
     vi.advanceTimersByTime(AHEAD_IDLE_MS * 3);
     expect(env.explain).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps a joined line running when cancelled, since the click is waiting for it', () => {
-    const env = setup();
-    env.ahead.restart();
-    vi.advanceTimersByTime(AHEAD_IDLE_MS);
-    env.ahead.explain('context of a', () => {}, { fresh: false });
-    env.ahead.cancel();
-    expect(env.streams[0]!.stopped).toBe(false);
   });
 });
 

@@ -6,6 +6,7 @@
 
 import type { ChatPayload, ChatResult, ChatStreamOptions } from '../chat/chatHandler';
 import type {
+  ExplainJobInfo,
   ExplainPayload,
   ExplainResult,
   ExplainStreamOptions,
@@ -23,7 +24,8 @@ export const CHAT_PORT: ChatPortName = 'pr-explainer:chat';
 
 export type StreamingExplain = (
   payload: ExplainPayload,
-  options: ExplainStreamOptions,
+  /** `tab` is the tab that asked, for the background queue (PR 10.3). */
+  options: ExplainStreamOptions & { tab?: number },
 ) => Promise<ExplainResult>;
 
 export type StreamingChat = (
@@ -95,25 +97,42 @@ function serveStreamPort<P, R>(
   });
 }
 
+/** The queue's name for the line and its place in the PR, when they are well formed. */
+function toJobInfo(value: unknown): ExplainJobInfo | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { label, order } = value as { label?: unknown; order?: unknown };
+  if (typeof label !== 'string' || !label) return undefined;
+  return {
+    label: label.slice(0, 200),
+    ...(typeof order === 'number' && Number.isFinite(order) && { order }),
+  };
+}
+
 /** Handles one connected explain port. Exported for the tests. */
 export function serveExplainPort(port: PortLike, explain: StreamingExplain): void {
+  const tab = port.sender?.tab?.id;
   serveStreamPort(
     port,
-    (message) => ({
-      context: message.context as string,
-      pr: typeof message.pr === 'string' ? message.pr : undefined,
-      fresh: message.fresh === true,
-      // Explain on hover (PR 8.7) and Explain ahead (PR 9.10) say so, for
-      // their round trips (PR 9.2).
-      cause:
-        message.cause === 'hover' || message.cause === 'ahead'
-          ? (message.cause as 'hover' | 'ahead')
-          : ('click' as const),
-      // Groups the request's round trips in the debug log (PR 9.3); the
-      // handler shortens it.
-      ...(typeof message.debugId === 'string' && { debugId: message.debugId }),
-    }),
-    explain,
+    (message) => {
+      const job = toJobInfo(message.job);
+      return {
+        context: message.context as string,
+        pr: typeof message.pr === 'string' ? message.pr : undefined,
+        fresh: message.fresh === true,
+        // Explain on hover (PR 8.7) and Explain ahead (PR 9.10) say so, for
+        // their round trips (PR 9.2).
+        cause:
+          message.cause === 'hover' || message.cause === 'ahead'
+            ? (message.cause as 'hover' | 'ahead')
+            : ('click' as const),
+        // Groups the request's round trips in the debug log (PR 9.3); the
+        // handler shortens it.
+        ...(typeof message.debugId === 'string' && { debugId: message.debugId }),
+        // The line's name and place in the PR, for the background queue (PR 10.3).
+        ...(job && { job }),
+      };
+    },
+    (payload, options) => explain(payload, { ...options, ...(tab !== undefined && { tab }) }),
   );
 }
 

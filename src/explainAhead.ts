@@ -5,8 +5,9 @@
 //
 // Each line goes through the same `explain` as a click, with the same request
 // text (lineRequest in src/clickHandler.ts), so its answer is saved under the
-// key a click on that line looks up. A click on the line being explained
-// joins it, as with Explain on hover (src/prefetch.ts).
+// key a click on that line looks up. Each request goes through the service
+// worker's queue (PR 10.3, src/explain/prefetchQueue.ts), which joins a click
+// on the line being explained to it, as with Explain on hover.
 //
 // It keeps out of the way:
 // - One line at a time, and at most AHEAD_MAX_PER_PAGE lines that the model
@@ -16,9 +17,9 @@
 // - Nothing starts while `isBusy` says so: a click's answer or a chat answer
 //   is being written, Explain on hover is running, or the tab is hidden. It
 //   checks again every AHEAD_RETRY_MS until it is free.
-// - A click (or a hover prefetch) on other code stops the line being
-//   explained ahead, so the model is free for it, and puts the line back at
-//   the front of the queue.
+// - A click on other code makes the service worker's queue stop the line
+//   being explained ahead, so the model is free for it, and run it again
+//   once the click is answered. Its request here simply takes longer.
 // - Scrolling empties the queue and starts the wait again, so the lines on
 //   screen once the page is still are the ones explained next. A line
 //   already being explained keeps going.
@@ -106,7 +107,6 @@ export function visibleAddedLines(
 export type AheadEvent =
   | { type: 'started'; key: string }
   | { type: 'cancelled'; key: string }
-  | { type: 'joined'; key: string; elapsedMs: number }
   | {
       type: 'finished';
       key: string;
@@ -134,7 +134,7 @@ export interface ExplainAheadDeps {
   maxPerPage?: number;
   /** Clock in milliseconds, for the events. Defaults to performance.now. */
   now?(): number;
-  /** Called as lines start, end, are cancelled or joined (logging). */
+  /** Called as lines start, end or are cancelled (logging). */
   onEvent?(event: AheadEvent): void;
 }
 
@@ -146,12 +146,9 @@ export interface ExplainAhead {
    */
   restart(): void;
   /**
-   * Use in place of `deps.explain` for clicks and Explain on hover: joins the
-   * line being explained ahead when it is the same text, and otherwise stops
-   * it (it is asked again later) and asks as usual.
+   * Stops the wait, the queue and the line being explained (turning off,
+   * leaving). A click that joined it in the service worker keeps its answer.
    */
-  explain: ClickHandlerDeps['explain'];
-  /** Stops the wait, the queue and a line no click has joined (turning off, leaving). */
   cancel(): void;
   /**
    * For every page change or redraw: cancels everything and forgets which
@@ -166,12 +163,8 @@ export interface ExplainAhead {
 
 interface Running {
   line: AheadLine;
-  text: string;
   stream: ExplainStream;
-  chunks: string[];
   startedAt: number;
-  listener?: (text: string) => void;
-  joined: boolean;
 }
 
 export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
@@ -205,9 +198,9 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
     retryTimer = setTimeout(pump, retryMs);
   };
 
-  /** Stops the running line unless a click has joined it, and puts it back first in line. */
+  /** Stops the running line and puts it back first in line. */
   const cancelRunning = () => {
-    if (!current || current.joined) return;
+    if (!current) return;
     const { line, stream } = current;
     current = undefined;
     asked -= 1;
@@ -247,30 +240,20 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
   }
 
   function run(line: AheadLine, request: ExplainRequest): void {
+    asked += 1;
     const running: Running = {
       line,
-      text: request.text,
-      chunks: [],
       startedAt: now(),
-      joined: false,
-      // Set just below; no chunk can arrive before explain returns.
-      stream: undefined as unknown as ExplainStream,
-    };
-    asked += 1;
-    current = running;
-    running.stream = deps.explain(
-      request.text,
-      (chunk) => {
-        running.chunks.push(chunk);
-        running.listener?.(chunk);
-      },
-      {
+      // The answer goes to the cache; only a click shows it.
+      stream: deps.explain(request.text, () => {}, {
         fresh: false,
         cause: 'ahead',
         debugId: group,
+        job: { label: line.key },
         ...(request.code && { code: request.code }),
-      },
-    );
+      }),
+    };
+    current = running;
     deps.onEvent?.({ type: 'started', key: line.key });
     const finish = (status: 'done' | 'failed', cached: boolean) => {
       if (current !== running) return;
@@ -279,7 +262,7 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
         done.add(line.key);
         // An answer from the cache did not keep the model busy.
         if (cached) asked -= 1;
-      } else if (!running.joined) {
+      } else {
         // Ollama may be down or the model missing: try again after a scroll.
         queue = [];
       }
@@ -314,39 +297,6 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
     }, idleMs);
   };
 
-  const explain: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
-    const running = current;
-    if (running && !running.joined && !options.fresh && running.text === context) {
-      running.joined = true;
-      deps.onEvent?.({
-        type: 'joined',
-        key: running.line.key,
-        elapsedMs: now() - running.startedAt,
-      });
-      let stopped = false;
-      // The caller starts listening once this returns, so the text so far is
-      // handed over a moment later, then each new piece as it arrives.
-      queueMicrotask(() => {
-        if (stopped) return;
-        const soFar = running.chunks.join('');
-        if (soFar) onChunk(soFar);
-        running.listener = onChunk;
-      });
-      return {
-        result: running.stream.result,
-        stop: () => {
-          stopped = true;
-          running.listener = undefined;
-          running.stream.stop();
-        },
-      };
-    }
-    cancelRunning();
-    // Carry on once the click (or hover) is done; isBusy holds it until then.
-    if (queue.length > 0) retryLater();
-    return deps.explain(context, onChunk, options);
-  };
-
   const cancel = () => {
     clearTimers();
     cancelRunning();
@@ -355,7 +305,6 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
 
   return {
     restart,
-    explain,
     cancel,
     pageChanged: () => {
       cancel();

@@ -6,11 +6,14 @@
 // opens, and a warm click's only round trip to Ollama is the explanation.
 // From PR 9.10 an "Explain ahead" group holds the lines explained once the
 // page was still, one at a time.
+// From PR 10.3 a "Queue" group shows the background queue at work: those
+// lines queued and run one at a time, one put back for a click and run again.
 // No extension APIs and no LLM. Add ?live=0 to the address to skip the live click.
 
 import '../src/debug/debugWindow.css';
 import { createDebugWindow, type DebugPort } from '../src/debug/debugWindow';
 import type { DebugEntry, DebugLogPortMessage, DebugRunningEntry } from '../src/debug/types';
+import type { QueueEvent } from '../src/explain/prefetchQueue';
 import type { RoundTrip, TraceTask } from '../src/trace/types';
 
 const T0 = Date.now() - 95_000;
@@ -177,6 +180,110 @@ const AHEAD_ENTRIES = AHEAD_LINES.map(({ line, code, reply }, i) => {
   return entry;
 });
 
+// The background queue (PR 10.3) while those lines were explained ahead,
+// with a click on line 14 coming in while line 10 ran.
+const line = (n: number) => `src/llm/retry.ts:added:${n}`;
+const QUEUE_EVENTS: [number, QueueEvent][] = [
+  [0, { type: 'queued', label: line(9), priority: 'on-screen', tab: 412, running: 0, waiting: 1 }],
+  [1, { type: 'started', label: line(9), priority: 'on-screen', tab: 412, running: 1, waiting: 0 }],
+  [
+    1_820,
+    {
+      type: 'finished',
+      label: line(9),
+      priority: 'on-screen',
+      tab: 412,
+      elapsedMs: 1_820,
+      running: 0,
+      waiting: 0,
+    },
+  ],
+  [
+    1_830,
+    { type: 'queued', label: line(10), priority: 'on-screen', tab: 412, running: 0, waiting: 1 },
+  ],
+  [
+    1_831,
+    { type: 'started', label: line(10), priority: 'on-screen', tab: 412, running: 1, waiting: 0 },
+  ],
+  [
+    2_400,
+    { type: 'queued', label: 'clicked code', priority: 'click', tab: 412, running: 1, waiting: 1 },
+  ],
+  [
+    2_401,
+    {
+      type: 'cancelled',
+      label: line(10),
+      priority: 'on-screen',
+      tab: 412,
+      elapsedMs: 570,
+      running: 0,
+      waiting: 2,
+    },
+  ],
+  [
+    2_402,
+    { type: 'started', label: 'clicked code', priority: 'click', tab: 412, running: 1, waiting: 1 },
+  ],
+  [
+    3_900,
+    {
+      type: 'finished',
+      label: 'clicked code',
+      priority: 'click',
+      tab: 412,
+      elapsedMs: 1_498,
+      running: 0,
+      waiting: 1,
+    },
+  ],
+  [
+    3_901,
+    { type: 'started', label: line(10), priority: 'on-screen', tab: 412, running: 1, waiting: 0 },
+  ],
+  [
+    5_540,
+    {
+      type: 'finished',
+      label: line(10),
+      priority: 'on-screen',
+      tab: 412,
+      elapsedMs: 1_639,
+      running: 0,
+      waiting: 0,
+    },
+  ],
+  [
+    5_550,
+    { type: 'queued', label: line(12), priority: 'on-screen', tab: 412, running: 0, waiting: 1 },
+  ],
+  [
+    5_551,
+    { type: 'started', label: line(12), priority: 'on-screen', tab: 412, running: 1, waiting: 0 },
+  ],
+  [
+    7_060,
+    {
+      type: 'finished',
+      label: line(12),
+      priority: 'on-screen',
+      tab: 412,
+      elapsedMs: 1_509,
+      running: 0,
+      waiting: 0,
+    },
+  ],
+];
+const QUEUE_ENTRIES: DebugEntry[] = QUEUE_EVENTS.map(([ms, event]) => ({
+  id: nextId++,
+  kind: 'queue',
+  group: 'queue-1',
+  cause: 'queue',
+  at: aheadAt + ms,
+  event,
+}));
+
 const ENTRIES: DebugEntry[] = [
   // The page reads the PR description as it opens (PR 9.7).
   rt(
@@ -313,6 +420,7 @@ const ENTRIES: DebugEntry[] = [
     'src/llm/retry.ts:12',
   ),
   ...AHEAD_ENTRIES,
+  ...QUEUE_ENTRIES,
   rt(
     'chat-1',
     'chat',

@@ -177,6 +177,51 @@ input:focus-visible {
   border-top: 1px solid var(--border);
 }
 
+/* A Queue group's events (PR 10.3): one line each, oldest first. */
+.queue-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.queue-event {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 10px;
+}
+
+.queue-event + .queue-event {
+  border-top: 1px solid var(--border);
+}
+
+.queue-label {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-meta {
+  color: var(--muted);
+}
+
+.queue-event[data-event='started'] .queue-what {
+  color: var(--running);
+}
+
+.queue-event[data-event='finished'] .queue-what,
+.queue-event[data-event='skipped'] .queue-what {
+  color: var(--ollama);
+}
+
+.queue-event[data-event='failed'] .queue-what,
+.queue-event[data-event='cancelled'] .queue-what {
+  color: var(--failed);
+}
+
 .row-button {
   display: grid;
   grid-template-columns: 92px 58px minmax(0, 1fr) minmax(0, 0.8fr) 64px 72px;
@@ -382,6 +427,13 @@ input:focus-visible {
   .row-button .time,
   .row-button .purpose,
   .row-button .trip-status {
+    display: none;
+  }
+  .queue-event {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .queue-event .time,
+  .queue-event .queue-meta {
     display: none;
   }
 }

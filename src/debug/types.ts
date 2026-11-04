@@ -5,13 +5,14 @@
 // Types only, so the content script, the service worker and the debug window
 // can all use them without sharing any code (see src/content.ts and PR 7.4).
 
+import type { QueueEvent } from '../explain/prefetchQueue';
 import type { RoundTrip, TraceTask } from '../trace/types';
 
 /**
  * What a group of entries was made for: a click, Explain on hover, Explain
  * ahead (PR 9.10, one group per page for all its lines), the warm-up or the chat.
  */
-export type DebugCause = 'click' | 'hover' | 'ahead' | 'warmup' | 'chat';
+export type DebugCause = 'click' | 'hover' | 'ahead' | 'warmup' | 'chat' | 'queue';
 
 interface DebugEntryBase {
   /** Counts up from 1 in the order entries were added, and never repeats in a browser session. */
@@ -37,10 +38,22 @@ export interface DebugTraceEntry extends DebugEntryBase {
   tasks: TraceTask[];
 }
 
-export type DebugEntry = DebugRoundTripEntry | DebugTraceEntry;
+/**
+ * One thing the background queue did (PR 10.3): a job queued, started,
+ * finished, cancelled for a click, joined, tried again or dropped. The
+ * service worker adds these itself, one group each time the queue starts
+ * working after being empty.
+ */
+export interface DebugQueueEntry extends DebugEntryBase {
+  kind: 'queue';
+  event: QueueEvent;
+}
+
+export type DebugEntry = DebugRoundTripEntry | DebugTraceEntry | DebugQueueEntry;
 
 /** An entry before the log gives it its id. */
-export type DebugEntryInput = Omit<DebugRoundTripEntry, 'id'> | Omit<DebugTraceEntry, 'id'>;
+export type DebugEntryInput =
+  Omit<DebugRoundTripEntry, 'id'> | Omit<DebugTraceEntry, 'id'> | Omit<DebugQueueEntry, 'id'>;
 
 /**
  * What the content script sends when a click's answer is shown: its GitHub
