@@ -249,7 +249,15 @@ export function createHunkExplainHandler(deps: ExplainDeps) {
             if (!explanation) return;
             // Done only once saved: a failed save stays missing, so the line
             // goes back to the queue on its own instead of being lost.
-            await cache.set(key, { explanation, model, elapsedMs, savedAt: now() }, pr).then(
+            // Only background work asks about a whole hunk (PR 10.7).
+            const saved = {
+              explanation,
+              model,
+              elapsedMs,
+              savedAt: now(),
+              prefetched: true as const,
+            };
+            await cache.set(key, saved, pr).then(
               () => (statuses[i] = 'done'),
               () => {},
             );

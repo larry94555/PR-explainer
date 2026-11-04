@@ -468,7 +468,12 @@ function explainRow(row: Element): void {
       );
       break;
     case 'cached':
-      popup.showExplanation(SAMPLE, MODEL, { elapsedMs: 14_200 });
+    case 'prefetched':
+      // Prefetched: Explain ahead wrote it in the background (PR 10.7).
+      popup.showExplanation(SAMPLE, MODEL, {
+        elapsedMs: 14_200,
+        ...(chosen() === 'prefetched' && { prefetched: true }),
+      });
       popup.showTrace({ tasks: CACHED_TASKS, roundTrips: [] });
       break;
     case 'prompt':

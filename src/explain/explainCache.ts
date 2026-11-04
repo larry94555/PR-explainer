@@ -50,6 +50,11 @@ export interface CachedExplanation {
   elapsedMs: number;
   /** When it was saved (Date.now()). */
   savedAt: number;
+  /**
+   * Written by background work (Explain ahead, one line or a whole hunk)
+   * rather than for a click or hover, so the popup says "Prefetched" (PR 10.7).
+   */
+  prefetched?: true;
 }
 
 /** An answer as the cache lists it (the debug helper). */
@@ -139,11 +144,13 @@ const pick = ({
   model,
   elapsedMs,
   savedAt,
+  prefetched,
 }: CachedExplanation): CachedExplanation => ({
   explanation,
   model,
   elapsedMs,
   savedAt,
+  ...(prefetched === true && { prefetched }),
 });
 
 /** One index row, stored as a short array so the index stays small. */

@@ -8,6 +8,7 @@
 import type { ChatPayload, ChatResult } from '../chat/chatHandler';
 import type { DebugLogPayload } from '../debug/types';
 import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
+import type { AheadProgress } from '../explainAhead';
 import type { WarmupPayload, WarmupResult } from '../llm/warmup';
 
 // Each request type maps to the payload it takes and the result it returns.
@@ -22,6 +23,9 @@ export interface RequestMap {
   debugLogClear: { payload: undefined; result: { cleared: true } };
   // Opens the debug window, or brings it to the front (the popup's Debug button, PR 9.4).
   openDebugWindow: { payload: undefined; result: { window: 'opened' | 'focused' } };
+  // Whole PR's progress in the sending tab, for the toolbar icon, or null to
+  // clear it (PR 10.7).
+  aheadProgress: { payload: AheadProgress | null; result: { shown: boolean } };
 }
 
 export type RequestType = keyof RequestMap;

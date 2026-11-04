@@ -7,7 +7,8 @@
 // under what caused them (a click, Explain on hover, Explain ahead, the
 // warm-up or a chat question), newest first. The background queue (PR 10.3)
 // has its own "Queue" groups, listing each job it queued, started, finished
-// or cancelled for a click. Opening a row shows the request (a chat prompt
+// or cancelled for a click, under a line counting the jobs waiting, running,
+// done and cancelled (PR 10.7). Opening a row shows the request (a chat prompt
 // message by message, with its role), the reply (thinking apart from the
 // answer), Ollama's own timings, and the click's tasks from PR 9.1. A row
 // still running shows its reply growing and its time ticking.
@@ -92,6 +93,45 @@ export const QUEUE_EVENT_LABELS: Record<DebugQueueEntry['event']['type'], string
   joined: 'joined',
   dropped: 'dropped',
 };
+
+/** A Queue group's counts (PR 10.7). */
+export interface QueueCounts {
+  /** Waiting and running after the group's last event. */
+  waiting: number;
+  running: number;
+  /** Jobs finished by the model or found in the cache. */
+  done: number;
+  /** Jobs stopped for a click (and put back). */
+  cancelled: number;
+  /** Jobs given up on. */
+  failed: number;
+}
+
+/** Counts a Queue group's events, oldest first. */
+export function queueCounts(events: readonly DebugQueueEntry[]): QueueCounts {
+  const last = events.at(-1)?.event;
+  const count = (...types: DebugQueueEntry['event']['type'][]) =>
+    events.filter((entry) => types.includes(entry.event.type)).length;
+  return {
+    waiting: last?.waiting ?? 0,
+    running: last?.running ?? 0,
+    done: count('finished', 'skipped'),
+    cancelled: count('cancelled'),
+    failed: count('failed'),
+  };
+}
+
+/** "3 waiting · 1 running · 12 done · 2 cancelled", with failed only when some did. */
+export function formatQueueCounts(counts: QueueCounts): string {
+  const { waiting, running, done, cancelled, failed } = counts;
+  return [
+    `${waiting} waiting`,
+    `${running} running`,
+    `${done} done`,
+    `${cancelled} cancelled`,
+    ...(failed > 0 ? [`${failed} failed`] : []),
+  ].join(' · ');
+}
 
 const TARGET_LABELS: Record<RoundTripTarget, string> = { github: 'GitHub', ollama: 'Ollama' };
 
@@ -205,6 +245,8 @@ interface GroupView {
   where: HTMLSpanElement;
   meta: HTMLSpanElement;
   list: HTMLUListElement;
+  /** A Queue group's counts (PR 10.7). */
+  counts: HTMLParagraphElement;
   events: HTMLOListElement;
   /** How many events were drawn, so the list is redrawn only when one is added. */
   drawnEvents: number;
@@ -427,11 +469,13 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
     const meta = el(doc, 'span', 'meta');
     heading.append(cause, where, meta);
     const list = el(doc, 'ul', 'rows');
+    const counts = el(doc, 'p', 'queue-counts');
+    counts.hidden = true;
     const events = el(doc, 'ol', 'queue-events');
     events.hidden = true;
-    section.append(heading, list, events);
+    section.append(heading, list, counts, events);
     section.dataset.group = group.id;
-    return { section, cause, where, meta, list, events, drawnEvents: 0 };
+    return { section, cause, where, meta, list, counts, events, drawnEvents: 0 };
   };
 
   const makeRow = (key: string): RowView => {
@@ -486,8 +530,10 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
     ].join(' · ');
     view.section.dataset.cause = group.cause;
     view.events.hidden = count === 0;
+    view.counts.hidden = count === 0;
     if (view.drawnEvents !== count) {
       view.drawnEvents = count;
+      view.counts.textContent = formatQueueCounts(queueCounts(group.events));
       view.events.replaceChildren(...group.events.map(queueEventItem));
     }
   };
@@ -806,6 +852,7 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
         })),
         ...(group.trace && { tasks: group.trace.tasks }),
         ...(group.events.length > 0 && {
+          queueCounts: queueCounts(group.events),
           queue: group.events.map((entry) => ({
             at: new Date(entry.at).toISOString(),
             ...entry.event,

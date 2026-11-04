@@ -2,6 +2,8 @@
 import {
   createDebugWindow,
   formatMs,
+  formatQueueCounts,
+  queueCounts,
   RECONNECT_MS,
   splitThinking,
   TICK_MS,
@@ -260,12 +262,59 @@ describe('debug window (PR 9.4)', () => {
     });
     expect(lines()).toHaveLength(3);
     expect(lines()[2]).toContain('clicked code');
+    // The counts above the events follow (PR 10.7).
+    expect(w.q('.queue-counts').hidden).toBe(false);
+    expect(w.q('.queue-counts').textContent).toBe('1 waiting · 1 running · 0 done · 1 cancelled');
 
     w.button(/Copy as JSON/).click();
     await vi.waitFor(() => expect(w.deps.copy).toHaveBeenCalled());
     const data = JSON.parse(vi.mocked(w.deps.copy).mock.calls[0]![0]);
     expect(data.groups[0].queue).toHaveLength(3);
     expect(data.groups[0].queue[1]).toMatchObject({ type: 'cancelled', elapsedMs: 1_200 });
+    expect(data.groups[0].queueCounts).toEqual({
+      waiting: 1,
+      running: 1,
+      done: 0,
+      cancelled: 1,
+      failed: 0,
+    });
+  });
+
+  it("counts a Queue group's jobs waiting, running, done and cancelled (PR 10.7)", () => {
+    const at = (type: QueueEvent['type'], running: number, waiting: number) => ({
+      id: nextId++,
+      kind: 'queue' as const,
+      group: 'q',
+      cause: 'queue' as const,
+      at: T0,
+      event: { type, label: 'x', priority: 'rest' as const, running, waiting },
+    });
+    const events = [
+      at('queued', 0, 3),
+      at('started', 1, 2),
+      at('finished', 0, 2),
+      at('skipped', 0, 1),
+      at('started', 1, 0),
+      at('cancelled', 0, 1),
+      at('retry', 0, 1),
+      at('failed', 0, 0),
+    ];
+    expect(queueCounts(events)).toEqual({
+      waiting: 0,
+      running: 0,
+      // Finished by the model, or found in the cache.
+      done: 2,
+      cancelled: 1,
+      // Given up on; a retry is not.
+      failed: 1,
+    });
+    expect(formatQueueCounts(queueCounts(events))).toBe(
+      '0 waiting · 0 running · 2 done · 1 cancelled · 1 failed',
+    );
+    expect(formatQueueCounts(queueCounts(events.slice(0, 2)))).toBe(
+      '2 waiting · 1 running · 0 done · 0 cancelled',
+    );
+    expect(queueCounts([])).toEqual({ waiting: 0, running: 0, done: 0, cancelled: 0, failed: 0 });
   });
 
   it('says how to fill it when the log is empty', () => {

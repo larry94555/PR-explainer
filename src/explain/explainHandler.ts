@@ -158,6 +158,8 @@ export interface CachedInfo {
   elapsedMs: number;
   /** When it was saved (Date.now()). */
   savedAt: number;
+  /** Written by Explain ahead rather than for a click or hover (PR 10.7). */
+  prefetched?: true;
 }
 
 export type ExplainResult =
@@ -415,7 +417,11 @@ export function createExplainHandler(deps: ExplainDeps) {
           status: 'done',
           explanation: hit.explanation,
           model: hit.model,
-          cached: { elapsedMs: hit.elapsedMs, savedAt: hit.savedAt },
+          cached: {
+            elapsedMs: hit.elapsedMs,
+            savedAt: hit.savedAt,
+            ...(hit.prefetched && { prefetched: true }),
+          },
           ...(prompt && { prompt }),
           trace: trace(),
         };
@@ -502,7 +508,17 @@ export function createExplainHandler(deps: ExplainDeps) {
         const elapsedMs = now() - startedAt;
         await tasks.time('cache-save', 'Save to the cache', () =>
           cache
-            .set(key, { explanation, model, elapsedMs, savedAt: now() }, payload.pr)
+            .set(
+              key,
+              {
+                explanation,
+                model,
+                elapsedMs,
+                savedAt: now(),
+                ...(payload.cause === 'ahead' && { prefetched: true }),
+              },
+              payload.pr,
+            )
             .catch(() => {}),
         );
       }

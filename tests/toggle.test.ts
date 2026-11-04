@@ -11,6 +11,9 @@ import {
 import * as toolbar from '../src/toolbarToggle';
 import {
   actionBadge,
+  DONE_COLOR,
+  progressBadge,
+  PROGRESS_COLOR,
   setupToolbarToggle,
   toggleEnabled,
   type ActionLike,
@@ -219,5 +222,95 @@ describe('toolbar button', () => {
     await toggle.idle();
     expect(shown.text).toBe('OFF');
     warn.mockRestore();
+  });
+});
+
+describe('Whole PR progress on the toolbar icon (PR 10.7)', () => {
+  // Remembers what each tab shows; the icon's own look is under "all".
+  function fakeTabAction() {
+    const shown = new Map<number | 'all', { text?: string; color?: string; title?: string }>();
+    const look = (tabId?: number) => {
+      const key = tabId ?? 'all';
+      if (!shown.has(key)) shown.set(key, {});
+      return shown.get(key)!;
+    };
+    let onClick: (() => void) | undefined;
+    const action: ActionLike = {
+      setBadgeText: vi.fn(async ({ text, tabId }) => void (look(tabId).text = text)),
+      setBadgeBackgroundColor: vi.fn(async ({ color, tabId }) => void (look(tabId).color = color)),
+      setTitle: vi.fn(async ({ title, tabId }) => void (look(tabId).title = title)),
+      onClicked: { addListener: (listener) => void (onClick = listener) },
+    };
+    return { action, shown, click: () => onClick?.() };
+  }
+
+  it('shows the share done, rounded down, with the counts in the tooltip', () => {
+    expect(progressBadge({ done: 112, total: 300 }, true)).toEqual({
+      text: '37%',
+      color: PROGRESS_COLOR,
+      title: 'Explained 112 of 300 changed lines\nPR Explainer is on. Click to turn it off.',
+    });
+    expect(progressBadge({ done: 0, total: 1 }, true).text).toBe('0%');
+    // Never 100% until every line is done.
+    expect(progressBadge({ done: 999, total: 1000 }, true).text).toBe('99%');
+  });
+
+  it('shows a tick when every line is done', () => {
+    expect(progressBadge({ done: 300, total: 300 }, true)).toEqual({
+      text: '✓',
+      color: DONE_COLOR,
+      title: 'Explained all 300 changed lines\nPR Explainer is on. Click to turn it off.',
+    });
+    expect(progressBadge({ done: 1, total: 1 }, true).title).toMatch(
+      /^Explained all 1 changed line\n/,
+    );
+  });
+
+  it('says when it stopped at the per-PR limit', () => {
+    expect(progressBadge({ done: 500, total: 1200, limited: 500 }, true).title).toBe(
+      'Explained 500 of 1200 changed lines (stopped at the 500-line limit)\n' +
+        'PR Explainer is on. Click to turn it off.',
+    );
+  });
+
+  it("draws a tab's progress on that tab only, and puts back ON when cleared", async () => {
+    const { storage } = fakeStorage();
+    const { action, shown } = fakeTabAction();
+    const toggle = setupToolbarToggle({ action, storage });
+    await toggle.showProgress(7, { done: 3, total: 10 });
+    expect(shown.get(7)).toEqual(progressBadge({ done: 3, total: 10 }, true));
+    expect(shown.get('all')).toEqual(actionBadge(true));
+    await toggle.showProgress(7, null);
+    expect(shown.get(7)).toEqual(actionBadge(true));
+  });
+
+  it('puts back ON when cleared after the service worker restarted (review on #66)', async () => {
+    const { storage } = fakeStorage();
+    const { action, shown } = fakeTabAction();
+    await setupToolbarToggle({ action, storage }).showProgress(7, { done: 3, total: 10 });
+    // Chrome keeps the tab's look; the new worker has never drawn tab 7.
+    const restarted = setupToolbarToggle({ action, storage });
+    await restarted.showProgress(7, null);
+    expect(shown.get(7)).toEqual(actionBadge(true));
+  });
+
+  it('redraws the tabs it drew when the button is clicked', async () => {
+    const { storage } = fakeStorage();
+    const { action, shown, click } = fakeTabAction();
+    const toggle = setupToolbarToggle({ action, storage });
+    await toggle.showProgress(7, { done: 3, total: 10 });
+    await toggle.showProgress(8, { done: 1, total: 2 });
+    await toggle.showProgress(8, null);
+    click();
+    await toggle.idle();
+    expect(shown.get('all')).toEqual(actionBadge(false));
+    expect(shown.get(7)).toEqual(progressBadge({ done: 3, total: 10 }, false));
+    expect(shown.get(8)).toEqual(actionBadge(false));
+    // A closed tab is forgotten.
+    toggle.forgetTab(7);
+    vi.mocked(action.setTitle).mockClear();
+    click();
+    await toggle.idle();
+    expect(vi.mocked(action.setTitle).mock.calls.map(([d]) => d.tabId)).toEqual([undefined, 8]);
   });
 });

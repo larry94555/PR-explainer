@@ -7,6 +7,7 @@ import type { HunkResult } from '../src/explain/hunkHandler';
 import { MAX_HUNK_LINES } from '../src/explain/hunkPrompt';
 import type { DiffHunk } from '../src/diffDom';
 import {
+  AHEAD_DONE_SHOWN_MS,
   AHEAD_HUNK_MAX_LINES,
   AHEAD_IDLE_MS,
   AHEAD_MAX_PER_PAGE,
@@ -21,6 +22,7 @@ import {
   type AheadEvent,
   type AheadLine,
   type AheadPage,
+  type AheadProgress,
   type ExplainAheadDeps,
   type HunkRequest,
   hunkRequest,
@@ -1025,5 +1027,109 @@ describe('Whole PR (PR 10.6)', () => {
     expect([1, 2, 4, 0, 5, 1.5, '2', undefined].map(requestsAtOnceOf)).toEqual([
       1, 2, 4, 1, 1, 1, 1, 1,
     ]);
+  });
+
+  describe('progress for the toolbar badge (PR 10.7)', () => {
+    function progressSetup(overrides: Partial<ExplainAheadDeps> = {}) {
+      const progress: (AheadProgress | null)[] = [];
+      const env = prSetup({ onProgress: (p) => progress.push(p), ...overrides });
+      return { ...env, progress };
+    }
+
+    it('counts the PR lines done, from the model or the cache, as they finish', async () => {
+      const env = progressSetup();
+      env.setScreen([]);
+      env.ahead.restart();
+      // Nothing to show until the PR's lines are known.
+      expect(env.progress).toEqual([null]);
+      await env.idle();
+      expect(env.progress.at(-1)).toEqual({ done: 0, total: 10 });
+      await finishCurrent(env);
+      expect(env.progress.at(-1)).toEqual({ done: 1, total: 10 });
+      await finishCurrent(env, CACHED);
+      expect(env.progress.at(-1)).toEqual({ done: 2, total: 10 });
+      // Only changes are told.
+      expect(env.progress).toEqual([null, ...[0, 1, 2].map((done) => ({ done, total: 10 }))]);
+    });
+
+    it('leaves out blank and closing lines from the total', async () => {
+      const env = progressSetup();
+      env.setPrLines([...PR_LINES, { ...prLine('e.ts', 3, 10), text: '  });' }]);
+      env.ahead.restart();
+      await env.idle();
+      expect(env.progress.at(-1)).toEqual({ done: 0, total: 10 });
+    });
+
+    it('shows the PR done once, then clears it', async () => {
+      const env = progressSetup();
+      env.ahead.restart();
+      await env.idle();
+      for (let i = 0; i < PR_LINES.length; i++) await finishCurrent(env);
+      expect(env.progress.at(-1)).toEqual({ done: 10, total: 10 });
+      vi.advanceTimersByTime(AHEAD_DONE_SHOWN_MS - 1);
+      expect(env.progress.at(-1)).not.toBeNull();
+      vi.advanceTimersByTime(1);
+      expect(env.progress.at(-1)).toBeNull();
+      // A scroll over the finished PR does not show the tick again.
+      const told = env.progress.length;
+      env.ahead.restart();
+      await env.idle();
+      expect(env.progress).toHaveLength(told);
+    });
+
+    it('says when it stopped at the per-PR limit', async () => {
+      const env = progressSetup({ maxPerPr: 2 });
+      env.setScreen([]);
+      env.ahead.restart();
+      await env.idle();
+      await finishCurrent(env);
+      await finishCurrent(env);
+      expect(env.progress.at(-1)).toEqual({ done: 2, total: 10, limited: 2 });
+    });
+
+    it('shows the progress again after a scroll', async () => {
+      const env = progressSetup();
+      env.ahead.restart();
+      await env.idle();
+      await finishCurrent(env);
+      env.ahead.cancel();
+      expect(env.progress.at(-1)).toBeNull();
+      env.ahead.restart();
+      expect(env.progress.at(-1)).toEqual({ done: 1, total: 10 });
+    });
+
+    it('clears when turned off, click-to-explain is off, or the page changes', async () => {
+      const env = progressSetup();
+      env.ahead.restart();
+      await env.idle();
+      env.setOn(false);
+      env.ahead.cancel();
+      expect(env.progress.at(-1)).toBeNull();
+      env.setOn(true);
+      env.ahead.restart();
+      await env.idle();
+      expect(env.progress.at(-1)).toEqual({ done: 0, total: 10 });
+      env.setEnabled(false);
+      env.ahead.restart();
+      expect(env.progress.at(-1)).toBeNull();
+      env.setEnabled(true);
+      env.ahead.restart();
+      await env.idle();
+      env.setKey({ pr: 'o/r#2', head: 'x' });
+      env.ahead.pageChanged();
+      expect(env.progress.at(-1)).toBeNull();
+    });
+
+    it('shows nothing with Lines on screen or when the PR diff cannot be read', async () => {
+      const screenOnly = progressSetup({ wholePr: () => false });
+      screenOnly.ahead.restart();
+      await screenOnly.idle();
+      expect(screenOnly.progress).toEqual([null]);
+      const unreadable = progressSetup();
+      unreadable.setPrLines(null);
+      unreadable.ahead.restart();
+      await unreadable.idle();
+      expect(unreadable.progress).toEqual([null]);
+    });
   });
 });
