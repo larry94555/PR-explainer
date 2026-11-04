@@ -5,12 +5,15 @@
 //
 // Each line goes through the same `explain` as a click, with the same request
 // text (lineRequest in src/clickHandler.ts), so its answer is saved under the
-// key a click on that line looks up. Each request goes through the service
+// key a click on that line looks up. Lines of one hunk are sent together, at
+// most AHEAD_HUNK_MAX_LINES at a time, as one request that explains each of
+// them (PR 10.5, src/explain/hunkHandler.ts), which saves each line's answer
+// under that same key. Each request goes through the service
 // worker's queue (PR 10.3, src/explain/prefetchQueue.ts), which joins a click
 // on the line being explained to it, as with Explain on hover.
 //
 // It keeps out of the way:
-// - One line at a time, and at most AHEAD_MAX_PER_PAGE lines that the model
+// - One request at a time, and at most AHEAD_MAX_PER_PAGE lines that the model
 //   answered per page (an answer already in the cache comes back at once and
 //   does not count).
 // - Blank lines and lines that only close a block (`}`, `});`) are skipped.
@@ -35,9 +38,12 @@
 // checks that the key matches.
 
 import { lineRequest, type ClickHandlerDeps, type ExplainRequest } from './clickHandler';
-import { addedLineCells, locateLine } from './diffDom';
+import { addedLineCells, locateHunk, locateLine, type DiffHunk } from './diffDom';
 import type { StorageChangedEvent } from './enabledState';
-import type { ExplainStream } from './messaging/client';
+import type { HunkResult } from './explain/hunkHandler';
+import type { ExplainResult } from './explain/explainHandler';
+import { hunkSection, withMarker } from './lineContext';
+import type { PortStream } from './messaging/client';
 import type { SyncStorageLike } from './prefetch';
 import { trackSyncFlag } from './syncFlag';
 
@@ -52,6 +58,13 @@ export const AHEAD_MAX_PER_PAGE = 30;
 
 /** While busy (a click, a chat answer, a hover, a hidden tab), how often to check again. */
 export const AHEAD_RETRY_MS = 500;
+
+/**
+ * The most lines of one hunk sent in one request. The service worker's
+ * MAX_HUNK_LINES (src/explain/hunkPrompt.ts); the content script keeps its
+ * own copy, and explainAhead.test.ts checks they agree.
+ */
+export const AHEAD_HUNK_MAX_LINES = 15;
 
 /** Follows the Explain ahead setting, like the other on/off settings (src/syncFlag.ts). */
 export function trackAheadSetting(
@@ -70,6 +83,61 @@ export interface AheadLine {
   text: string;
   /** The request a click on this line would send. Built only when its turn comes. */
   request(): ExplainRequest | null;
+  /**
+   * The hunk the line is in (PR 10.5): lines with the same `id` are sent in
+   * one request. `read` gives the hunk as the page shows it now.
+   */
+  hunk?: { id: string; read(): DiffHunk | null };
+}
+
+/** A hunk's lines to explain in one request (PR 10.5). */
+export interface HunkRequest {
+  /** For the debug window, such as "src/a.ts: lines 12, 14, 15". */
+  label: string;
+  /** The diff section the model reads (hunkSection in src/lineContext.ts). */
+  text: string;
+  lines: {
+    /** The line's name, such as "src/a.ts:added:12". */
+    label: string;
+    /** The request a click on it sends. */
+    request: ExplainRequest;
+    /** Its number in the new file. */
+    line: number;
+    /** The line diff style, such as "+const a = 1;". */
+    code: string;
+  }[];
+}
+
+/** Names a hunk on the page: its file, header and first line. */
+export function hunkId(hunk: DiffHunk): string {
+  const first = hunk.lines[0];
+  return `${first?.filePath ?? ''}\n${hunk.header}\n${first?.lineNumber ?? ''}`;
+}
+
+/**
+ * The request for `lines` of one hunk, or null when the page no longer
+ * shows it. `lines` that are not in it are left out.
+ */
+export function hunkRequest(lines: readonly AheadLine[]): HunkRequest | null {
+  const hunk = lines[0]?.hunk?.read();
+  if (!hunk) return null;
+  const out: HunkRequest['lines'] = [];
+  const indexes: number[] = [];
+  for (const line of lines) {
+    const request = line.request();
+    const number = request?.subject.startLine;
+    const index = hunk.lines.findIndex((l) => l.side === 'added' && l.lineNumber === number);
+    if (!request || number === undefined || index === -1) continue;
+    indexes.push(index);
+    out.push({ label: line.key, request, line: number, code: withMarker(hunk.lines[index]!) });
+  }
+  if (out.length === 0) return null;
+  const { filePath } = hunk.lines[indexes[0]!]!;
+  return {
+    label: `${filePath}: ${out.length === 1 ? 'line' : 'lines'} ${out.map((l) => l.line).join(', ')}`,
+    text: hunkSection(hunk, indexes),
+    lines: out,
+  };
 }
 
 /** True when the line is worth asking about: not blank, and not only closing brackets. */
@@ -95,10 +163,12 @@ export function visibleAddedLines(
     if (!isVisible(cell)) continue;
     const line = locateLine(cell);
     if (!line) continue;
+    const hunk = locateHunk(cell);
     lines.push({
       key: `${line.filePath}:${line.side}:${line.lineNumber}`,
       text: line.text,
       request: () => lineRequest(cell)?.request ?? null,
+      ...(hunk && { hunk: { id: hunkId(hunk), read: () => locateHunk(cell) } }),
     });
   }
   return lines;
@@ -119,6 +189,11 @@ export type AheadEvent =
 export interface ExplainAheadDeps {
   /** The explain a click uses (it reaches the service worker and its cache). */
   explain: ClickHandlerDeps['explain'];
+  /**
+   * Sends a hunk's lines in one request (PR 10.5). Left out, every line is
+   * sent on its own.
+   */
+  explainHunk?(request: HunkRequest, options: { debugId: string }): PortStream<HunkResult>;
   /** The Explain ahead setting. */
   isOn(): boolean;
   /** False while the toolbar button has click-to-explain off. Leaving it out means on. */
@@ -162,8 +237,11 @@ export interface ExplainAhead {
 }
 
 interface Running {
-  line: AheadLine;
-  stream: ExplainStream;
+  /** One line, or the lines of one hunk. */
+  lines: AheadLine[];
+  /** The line's key, or the hunk request's label. */
+  key: string;
+  stream: PortStream<ExplainResult | HunkResult>;
   startedAt: number;
 }
 
@@ -198,15 +276,32 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
     retryTimer = setTimeout(pump, retryMs);
   };
 
-  /** Stops the running line and puts it back first in line. */
+  /** Stops the running request and puts its lines back first in line. */
   const cancelRunning = () => {
     if (!current) return;
-    const { line, stream } = current;
+    const { lines, key, stream } = current;
     current = undefined;
-    asked -= 1;
+    asked -= lines.length;
     stream.stop();
-    queue.unshift(line);
-    deps.onEvent?.({ type: 'cancelled', key: line.key });
+    queue.unshift(...lines);
+    deps.onEvent?.({ type: 'cancelled', key });
+  };
+
+  /**
+   * The waiting lines of `line`'s hunk, `line` first, taken out of the queue:
+   * at most AHEAD_HUNK_MAX_LINES, and no more than the page's cap allows.
+   */
+  const takeHunk = (line: AheadLine): AheadLine[] => {
+    const id = line.hunk?.id;
+    const room = Math.min(AHEAD_HUNK_MAX_LINES, maxPerPage - asked);
+    if (!deps.explainHunk || id === undefined || room < 2) return [line];
+    const group = [line];
+    for (const other of queue) {
+      if (group.length >= room) break;
+      if (other.hunk?.id === id && !done.has(other.key)) group.push(other);
+    }
+    queue = queue.filter((other) => !group.includes(other));
+    return group;
   };
 
   function pump(): void {
@@ -231,6 +326,22 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
       pump();
       return;
     }
+    const lines = takeHunk(line);
+    if (lines.length > 1) {
+      const request = hunkRequest(lines);
+      // Lines the page no longer shows as part of the hunk go back.
+      const sent = new Set(request?.lines.map((l) => l.label));
+      const rest = lines.filter((l) => !sent.has(l.key));
+      if (request && request.lines.length > 1) {
+        queue.unshift(...rest);
+        runHunk(
+          lines.filter((l) => sent.has(l.key)),
+          request,
+        );
+        return;
+      }
+      queue.unshift(...lines.slice(1));
+    }
     const request = line.request();
     if (!request) {
       pump();
@@ -239,45 +350,80 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
     run(line, request);
   }
 
-  function run(line: AheadLine, request: ExplainRequest): void {
-    asked += 1;
-    const running: Running = {
-      line,
-      startedAt: now(),
-      // The answer goes to the cache; only a click shows it.
-      stream: deps.explain(request.text, () => {}, {
-        fresh: false,
-        cause: 'ahead',
-        debugId: group,
-        job: { label: line.key },
-        ...(request.code && { code: request.code }),
-      }),
-    };
+  /** Tracks one request to its end. `doneKeys` are the lines it answered. */
+  function track(
+    running: Running,
+    outcome: (result: ExplainResult | HunkResult) => { done: string[]; cached: number },
+  ): void {
     current = running;
-    deps.onEvent?.({ type: 'started', key: line.key });
-    const finish = (status: 'done' | 'failed', cached: boolean) => {
+    deps.onEvent?.({ type: 'started', key: running.key });
+    const finish = (status: 'done' | 'failed', answered = { done: [] as string[], cached: 0 }) => {
       if (current !== running) return;
       current = undefined;
       if (status === 'done') {
-        done.add(line.key);
+        for (const key of answered.done) done.add(key);
         // An answer from the cache did not keep the model busy.
-        if (cached) asked -= 1;
+        asked -= answered.cached;
       } else {
         // Ollama may be down or the model missing: try again after a scroll.
         queue = [];
       }
       deps.onEvent?.({
         type: 'finished',
-        key: line.key,
+        key: running.key,
         elapsedMs: now() - running.startedAt,
         status,
-        cached,
+        cached: answered.cached === running.lines.length,
       });
       pump();
     };
     running.stream.result.then(
-      (result) => finish(result.status, result.status === 'done' && result.cached !== undefined),
-      () => finish('failed', false),
+      (result) => (result.status === 'failed' ? finish('failed') : finish('done', outcome(result))),
+      () => finish('failed'),
+    );
+  }
+
+  function run(line: AheadLine, request: ExplainRequest): void {
+    asked += 1;
+    track(
+      {
+        lines: [line],
+        key: line.key,
+        startedAt: now(),
+        // The answer goes to the cache; only a click shows it.
+        stream: deps.explain(request.text, () => {}, {
+          fresh: false,
+          cause: 'ahead',
+          debugId: group,
+          job: { label: line.key },
+          ...(request.code && { code: request.code }),
+        }),
+      },
+      (result) => ({
+        done: [line.key],
+        cached: result.status === 'done' && result.cached !== undefined ? 1 : 0,
+      }),
+    );
+  }
+
+  function runHunk(lines: AheadLine[], request: HunkRequest): void {
+    asked += lines.length;
+    track(
+      {
+        lines,
+        key: request.label,
+        startedAt: now(),
+        stream: deps.explainHunk!(request, { debugId: group }),
+      },
+      (result) => {
+        // A line the answer left out is asked again on its own by the
+        // service worker, and here after the next scroll.
+        const answered = result.status === 'hunk' ? result.lines : [];
+        return {
+          done: answered.filter((l) => l.status !== 'missing').map((l) => l.label),
+          cached: answered.filter((l) => l.status === 'cached').length,
+        };
+      },
     );
   }
 
@@ -287,11 +433,11 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
     if (!active()) return;
     idleTimer = setTimeout(() => {
       idleTimer = undefined;
-      const running = current?.line.key;
+      const running = new Set(current?.lines.map((line) => line.key));
       queue = deps
         .lines()
         .filter(
-          (line) => line.key !== running && !done.has(line.key) && worthExplaining(line.text),
+          (line) => !running.has(line.key) && !done.has(line.key) && worthExplaining(line.text),
         );
       pump();
     }, idleMs);
@@ -312,7 +458,7 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
       asked = 0;
       group = newGroupId();
     },
-    running: () => current?.line.key,
+    running: () => current?.key,
     queued: () => queue.map((line) => line.key),
   };
 }

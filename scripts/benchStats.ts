@@ -709,6 +709,144 @@ export function formatParallelReport(report: ParallelReport): string {
   return out.join('\n') + '\n';
 }
 
+// --- By hunk (PR 10.5) -----------------------------------------------------
+
+/** An answer's three sections, as the popup shows them. */
+export interface BenchAnswer {
+  what: string;
+  why: string;
+  concerns: string;
+}
+
+/** One hunk of the by-hunk mode: its lines asked one at a time, then all at once. */
+export interface HunkBenchResult {
+  /** Such as "src/a.ts: lines 12, 14, 15". */
+  label: string;
+  /** Each line asked on its own, as a click would. */
+  single: { line: string; run: BenchRun; answer?: BenchAnswer }[];
+  /** The whole hunk in one request. */
+  hunk: BenchRun;
+  /** Each line's answer from the hunk request, left out when its part was missing. */
+  byHunk: (BenchAnswer | undefined)[];
+}
+
+export interface ByHunkResult {
+  model: string;
+  page: string;
+  hunks: HunkBenchResult[];
+  ranOn?: string;
+}
+
+export interface ByHunkSummary {
+  lines: number;
+  /** Lines answered one at a time, and the mean time per line. */
+  singleAnswered: number;
+  singlePerLineMs?: number;
+  /** Lines the hunk requests answered, and the hunk time per line answered. */
+  hunkAnswered: number;
+  hunkPerLineMs?: number;
+  /** How many times faster per line by hunk (single ÷ hunk), when both are known. */
+  speedup?: number;
+  /** Hunk requests that failed. */
+  hunkFailed: number;
+}
+
+/** The by-hunk mode's numbers. Failed requests and missing lines add no time. */
+export function summarizeByHunk(hunks: readonly HunkBenchResult[]): ByHunkSummary {
+  const singles = hunks.flatMap((h) => h.single.flatMap((l) => (l.run.ok ? [l.run.totalMs] : [])));
+  const hunkRuns = hunks.flatMap((h) =>
+    h.hunk.ok ? [{ ms: h.hunk.totalMs, answered: h.byHunk.filter(Boolean).length }] : [],
+  );
+  const hunkAnswered = hunkRuns.reduce((n, r) => n + r.answered, 0);
+  const summary: ByHunkSummary = {
+    lines: hunks.reduce((n, h) => n + h.single.length, 0),
+    singleAnswered: singles.length,
+    hunkAnswered,
+    hunkFailed: hunks.filter((h) => !h.hunk.ok).length,
+  };
+  if (singles.length) summary.singlePerLineMs = singles.reduce((a, b) => a + b, 0) / singles.length;
+  if (hunkAnswered) {
+    summary.hunkPerLineMs = hunkRuns.reduce((n, r) => n + r.ms, 0) / hunkAnswered;
+  }
+  if (summary.singlePerLineMs !== undefined && summary.hunkPerLineMs) {
+    summary.speedup = summary.singlePerLineMs / summary.hunkPerLineMs;
+  }
+  return summary;
+}
+
+export const BY_HUNK_TABLE_HEADER = [
+  'Model',
+  'Lines',
+  'One at a time, per line',
+  'By hunk, per line',
+  'Faster by',
+  'Answered by hunk',
+] as const;
+
+export function formatByHunkTable(results: readonly ByHunkResult[]): string {
+  const line = (cells: readonly string[]) => `| ${cells.map(cell).join(' | ')} |`;
+  return [
+    line(BY_HUNK_TABLE_HEADER),
+    line(BY_HUNK_TABLE_HEADER.map((_, i) => (i === 0 ? '---' : '---:'))),
+    ...results.map(({ model, hunks, ranOn }) => {
+      const s = summarizeByHunk(hunks);
+      return line([
+        ranOn ? `${model} (${ranOn})` : model,
+        String(s.lines),
+        formatMs(s.singlePerLineMs),
+        formatMs(s.hunkPerLineMs),
+        s.speedup === undefined ? '–' : `${s.speedup.toFixed(1)}×`,
+        `${s.hunkAnswered} of ${s.lines}` + (s.hunkFailed ? ` (${s.hunkFailed} failed)` : ''),
+      ]);
+    }),
+  ].join('\n');
+}
+
+const answerText = (a: BenchAnswer | undefined) =>
+  a ? `${a.what} ${a.why} Concerns: ${a.concerns}`.replace(/\s+/g, ' ') : '(missing)';
+
+/** Both answers for every line, one after the other, to check by hand. */
+export function formatSideBySide(result: ByHunkResult): string[] {
+  return result.hunks.flatMap((h) =>
+    h.single.flatMap((l, i) => [
+      `- **${l.line}**`,
+      `  - One at a time: ${l.run.ok ? answerText(l.answer) : `failed: ${l.run.error}`}`,
+      `  - By hunk: ${h.hunk.ok ? answerText(h.byHunk[i]) : `failed: ${h.hunk.error}`}`,
+    ]),
+  );
+}
+
+export interface ByHunkReport {
+  startedAt: Date;
+  machine: MachineInfo;
+  llmUrl: string;
+  temperature: number;
+  maxResponseTokens: number;
+  results: ByHunkResult[];
+}
+
+/** The section `npm run bench -- --by-hunk` adds to docs/latency.md. */
+export function formatByHunkReport(report: ByHunkReport): string {
+  const page = report.results[0]?.page;
+  const out = [
+    `## ${formatDate(report.startedAt)} · By hunk · ${report.results.map((r) => r.model).join(', ')}`,
+    '',
+    ...machineLines(report),
+    `- **Settings:** temperature ${report.temperature}, answers up to ${report.maxResponseTokens} ` +
+      'tokens per line',
+    `- **How:** each added line of ${page ? `\`${page}\`` : 'a saved diff page'} is explained ` +
+      'on its own, as a click does, then each hunk is explained in one request (PR 10.5). ' +
+      "**By hunk, per line** is the hunk requests' time divided by the lines they answered. " +
+      'Read the answers below to check those by hunk are still about their own line.',
+    '',
+    formatByHunkTable(report.results),
+  ];
+  for (const result of report.results) {
+    out.push('', `Answers with ${result.model}:`, '', ...formatSideBySide(result));
+  }
+  return out.join('\n') + '\n';
+}
+
 export const LATENCY_DOC_INTRO = `# Explanation latency
 
 Measured with \`npm run bench\` (roadmap PR 8.2), which sends the extension's real explain
@@ -746,6 +884,8 @@ export interface BenchArgs {
    * instead of timing each sample alone. Left out when not asked for.
    */
   parallel?: number[];
+  /** Compare one line at a time with a whole hunk per request (PR 10.5). */
+  byHunk: boolean;
 }
 
 /** The most requests `--parallel` sends at once. */
@@ -765,11 +905,11 @@ export function parseLevels(text: string): number[] {
 }
 
 /**
- * Reads `[model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4]`.
+ * Reads `[model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4 | --by-hunk]`.
  * Throws on anything else.
  */
 export function parseBenchArgs(argv: readonly string[]): BenchArgs {
-  const args: BenchArgs = { models: [], runs: 3, save: true, ahead: false };
+  const args: BenchArgs = { models: [], runs: 3, save: true, ahead: false, byHunk: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const [flag, inline] = arg.startsWith('--') ? arg.split(/=(.*)/s, 2) : [arg];
@@ -792,14 +932,16 @@ export function parseBenchArgs(argv: readonly string[]): BenchArgs {
       args.ahead = true;
     } else if (flag === '--parallel') {
       args.parallel = parseLevels(value());
+    } else if (flag === '--by-hunk') {
+      args.byHunk = true;
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown option ${arg}`);
     } else {
       args.models.push(arg);
     }
   }
-  if (args.ahead && args.parallel) {
-    throw new Error('--ahead and --parallel cannot be used together');
+  if ([args.ahead, args.parallel !== undefined, args.byHunk].filter(Boolean).length > 1) {
+    throw new Error('Use only one of --ahead, --parallel and --by-hunk');
   }
   return args;
 }

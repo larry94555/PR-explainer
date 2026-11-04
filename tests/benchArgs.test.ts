@@ -13,6 +13,7 @@ describe('--parallel', () => {
       runs: 1,
       save: true,
       ahead: false,
+      byHunk: false,
       parallel: [1, 2, 4],
     });
     expect(parseBenchArgs(['--parallel=2']).parallel).toEqual([2]);
@@ -39,7 +40,25 @@ describe('--parallel', () => {
 
   it('cannot be used with --ahead', () => {
     expect(() => parseBenchArgs(['--ahead', '--parallel', '1,2'])).toThrow(
-      '--ahead and --parallel cannot be used together',
+      'Use only one of --ahead, --parallel and --by-hunk',
     );
+  });
+});
+
+describe('--by-hunk (PR 10.5)', () => {
+  it('is off unless asked for, and reads with models', () => {
+    expect(parseBenchArgs(['m']).byHunk).toBe(false);
+    expect(parseBenchArgs(['--by-hunk', 'qwen2.5-coder:1.5b'])).toMatchObject({
+      models: ['qwen2.5-coder:1.5b'],
+      byHunk: true,
+    });
+  });
+
+  it('cannot be used with --ahead or --parallel', () => {
+    for (const other of [['--ahead'], ['--parallel', '1,2']]) {
+      expect(() => parseBenchArgs(['--by-hunk', ...other])).toThrow(
+        'Use only one of --ahead, --parallel and --by-hunk',
+      );
+    }
   });
 });

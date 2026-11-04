@@ -1,7 +1,7 @@
 // `npm run bench` (PR 8.2): times explanations on the local Ollama, so each
 // latency change in Milestone 8 has a repeatable before and after.
 //
-//   npm run bench -- [model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4]
+//   npm run bench -- [model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4 | --by-hunk]
 //
 // Sends the real explain prompt for each sample in bench/ to each model named
 // (or the first installed model when none is), N times each (3 by default),
@@ -18,6 +18,10 @@
 // With --parallel 1,2,4 (PR 10.1) it sends the samples that many at a time,
 // one level after another, and times a click sent while they run, to show
 // whether more than one background request at once pays off on this computer.
+//
+// With --by-hunk (PR 10.5) it explains each added line of the same saved page
+// on its own, then each hunk in one request, and compares the time per line,
+// printing both answers for every line to check by hand.
 import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -28,6 +32,7 @@ import type * as BenchExplain from './benchExplain.ts';
 import {
   appendReport,
   formatAheadReport,
+  formatByHunkReport,
   formatMs,
   formatParallelReport,
   formatReport,
@@ -170,6 +175,29 @@ async function main(): Promise<number> {
     console.log(`\n${section}`);
     if (!aheadResults.some((r) => r.lines.some((l) => l.click.ok))) {
       console.error('Every click failed, so docs/latency.md was not changed.');
+      return 1;
+    }
+    if (args.save) {
+      const existing = existsSync(LATENCY_DOC) ? readFileSync(LATENCY_DOC, 'utf8') : null;
+      writeFileSync(LATENCY_DOC, appendReport(existing, section));
+      console.log('Added to docs/latency.md');
+    }
+    return 0;
+  }
+  if (args.byHunk) {
+    console.log(`By hunk with ${models.join(', ')} at ${llmUrl}, on ${bench.AHEAD_PAGE}`);
+    const results = await bench.runByHunk(explainer, models, samples[0]!);
+    const section = formatByHunkReport({
+      startedAt,
+      machine,
+      llmUrl,
+      temperature: settings.temperature,
+      maxResponseTokens: settings.maxResponseTokens,
+      results,
+    });
+    console.log(`\n${section}`);
+    if (!results.some((r) => r.hunks.some((h) => h.hunk.ok))) {
+      console.error('Every hunk request failed, so docs/latency.md was not changed.');
       return 1;
     }
     if (args.save) {

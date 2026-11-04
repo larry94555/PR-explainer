@@ -186,7 +186,7 @@ input:focus-visible {
 
 .queue-event {
   display: grid;
-  grid-template-columns: 92px minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  grid-template-columns: 92px minmax(0, 0.6fr) minmax(0, 1.2fr) minmax(0, 1.2fr);
   gap: 8px;
   align-items: baseline;
   padding: 4px 10px;
@@ -199,9 +199,8 @@ input:focus-visible {
 .queue-label {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* A hunk's label lists its lines (PR 10.5), so it wraps instead of being cut. */
+  overflow-wrap: anywhere;
 }
 
 .queue-meta {

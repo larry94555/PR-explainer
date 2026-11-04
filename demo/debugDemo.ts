@@ -10,6 +10,9 @@
 // lines queued and run one at a time, one put back for a click and run again.
 // From PR 10.4 the warm-up group also has the PR's diff, read from GitHub's
 // API with how many files and changed lines it holds.
+// From PR 10.5 a second Queue group shows one job for a whole hunk: a click
+// on one of its lines waits for it and is answered from the cache, and the
+// line its answer left out comes back on its own.
 // No extension APIs and no LLM. Add ?live=0 to the address to skip the live click.
 
 import '../src/debug/debugWindow.css';
@@ -286,6 +289,45 @@ const QUEUE_ENTRIES: DebugEntry[] = QUEUE_EVENTS.map(([ms, event]) => ({
   event,
 }));
 
+// One request for a whole hunk (PR 10.5), after the page scrolled further.
+const hunkLabel = 'src/llm/retry.ts: lines 20, 21, 23';
+const q = (
+  type: QueueEvent['type'],
+  label: string,
+  running: number,
+  waiting: number,
+  extra: Partial<QueueEvent> = {},
+): QueueEvent => ({
+  type,
+  label,
+  priority: label === 'clicked code' ? 'click' : 'on-screen',
+  tab: 412,
+  running,
+  waiting,
+  ...extra,
+});
+const HUNK_QUEUE_EVENTS: [number, QueueEvent][] = [
+  [0, q('queued', hunkLabel, 0, 1)],
+  [1, q('started', hunkLabel, 1, 0)],
+  // A click on line 21 waits for the hunk instead of stopping it.
+  [2_100, q('queued', 'clicked code', 1, 1)],
+  [4_600, q('finished', hunkLabel, 0, 1, { elapsedMs: 4_599 })],
+  // Line 23 was missing from the answer, so it comes back on its own.
+  [4_601, q('queued', line(23), 0, 2)],
+  [4_602, q('started', 'clicked code', 1, 1)],
+  [4_640, q('skipped', 'clicked code', 0, 1, { elapsedMs: 38 })],
+  [4_641, q('started', line(23), 1, 0)],
+  [6_200, q('finished', line(23), 0, 0, { elapsedMs: 1_559 })],
+];
+const HUNK_QUEUE_ENTRIES: DebugEntry[] = HUNK_QUEUE_EVENTS.map(([ms, event]) => ({
+  id: nextId++,
+  kind: 'queue',
+  group: 'queue-2',
+  cause: 'queue',
+  at: aheadAt + 8_000 + ms,
+  event,
+}));
+
 const ENTRIES: DebugEntry[] = [
   // The page reads the PR description as it opens (PR 9.7).
   rt(
@@ -437,6 +479,7 @@ const ENTRIES: DebugEntry[] = [
   ),
   ...AHEAD_ENTRIES,
   ...QUEUE_ENTRIES,
+  ...HUNK_QUEUE_ENTRIES,
   rt(
     'chat-1',
     'chat',

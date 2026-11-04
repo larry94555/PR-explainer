@@ -241,6 +241,27 @@ describe('explain stream over a port', () => {
     expect(second.explain.mock.calls[0]![0].job).toEqual({ label: 'x'.repeat(200) });
   });
 
+  it("passes on a hunk's lines (PR 10.5), read like one line's request, and ignores a malformed hunk", async () => {
+    const model = controllableExplain();
+    const port = fakePort(EXPLAIN_PORT, { id: EXTENSION_ID });
+    serveExplainPort(port, model.explain);
+    const line = { label: 'src/a.ts:added:3', context: 'ctx 3', line: 3, code: '+c' };
+    port.emitMessage({
+      type: 'start',
+      context: 'section',
+      cause: 'ahead',
+      hunk: { text: 'section', lines: [{ ...line, fileContext: { kind: 'block' } }] },
+    });
+    // No file context, as for a single line, so its key is the one a click gets.
+    expect(model.explain.mock.calls[0]![0].hunk).toEqual({ text: 'section', lines: [line] });
+
+    const second = controllableExplain();
+    const other = fakePort(EXPLAIN_PORT, { id: EXTENSION_ID });
+    serveExplainPort(other, second.explain);
+    other.emitMessage({ type: 'start', context: 'x', hunk: { text: 'x', lines: [{ label: 1 }] } });
+    expect(second.explain.mock.calls[0]![0]).not.toHaveProperty('hunk');
+  });
+
   it('Stop disconnects the port, which aborts the request in the service worker', async () => {
     const { runtime, workerPorts } = fakeRuntime();
     const model = controllableExplain();

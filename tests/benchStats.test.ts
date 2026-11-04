@@ -9,6 +9,8 @@ import {
   appendReport,
   formatAheadReport,
   formatAheadTable,
+  formatByHunkReport,
+  formatByHunkTable,
   formatDate,
   formatGpuShare,
   formatMs,
@@ -30,6 +32,8 @@ import {
   slowest,
   summarize,
   summarizeAhead,
+  summarizeByHunk,
+  type HunkBenchResult,
   tokensPerSecond,
   type AheadLineResult,
   type BenchReport,
@@ -287,7 +291,13 @@ describe('appendReport', () => {
 
 describe('parseBenchArgs', () => {
   it('defaults to 3 runs, the first installed model, and saving', () => {
-    expect(parseBenchArgs([])).toEqual({ models: [], runs: 3, save: true, ahead: false });
+    expect(parseBenchArgs([])).toEqual({
+      models: [],
+      runs: 3,
+      save: true,
+      ahead: false,
+      byHunk: false,
+    });
   });
 
   it('reads models, --runs, --url and --no-save in either form', () => {
@@ -306,6 +316,7 @@ describe('parseBenchArgs', () => {
       llmUrl: 'http://127.0.0.1:1234',
       save: false,
       ahead: false,
+      byHunk: false,
     });
   });
 
@@ -530,6 +541,96 @@ describe('the lines the ahead mode explains', () => {
       /^File: tests\/manifest\.test\.ts \(TypeScript\)\nClicked line: added, line 48 of the new file\n/,
     );
     expect(lines[0]!.context).toContain('Surrounding diff (the clicked line starts with >):');
+  });
+});
+
+describe('by hunk (PR 10.5)', () => {
+  const answer = (what: string) => ({ what, why: 'Why.', concerns: 'None found.' });
+  const hunks: HunkBenchResult[] = [
+    {
+      label: 'a.ts: lines 1, 2, 3',
+      single: [
+        { line: 'a.ts:1', run: ok(4000), answer: answer('One alone.') },
+        { line: 'a.ts:2', run: ok(5000), answer: answer('Two alone.') },
+        { line: 'a.ts:3', run: failed('Ollama stopped') },
+      ],
+      hunk: ok(6000),
+      byHunk: [answer('One by hunk.'), undefined, answer('Three by hunk.')],
+    },
+    {
+      label: 'b.ts: lines 9, 10',
+      single: [
+        { line: 'b.ts:9', run: ok(3000), answer: answer('Nine.') },
+        { line: 'b.ts:10', run: ok(4000), answer: answer('Ten.') },
+      ],
+      hunk: failed('Ollama stopped'),
+      byHunk: [undefined, undefined],
+    },
+  ];
+
+  it('compares the time per line one at a time with the time per line answered by hunk', () => {
+    expect(summarizeByHunk(hunks)).toEqual({
+      lines: 5,
+      singleAnswered: 4,
+      singlePerLineMs: 4000,
+      // 6 s for the 2 lines its answer had; the failed hunk adds nothing.
+      hunkAnswered: 2,
+      hunkPerLineMs: 3000,
+      speedup: 4000 / 3000,
+      hunkFailed: 1,
+    });
+    expect(summarizeByHunk([])).toEqual({
+      lines: 0,
+      singleAnswered: 0,
+      hunkAnswered: 0,
+      hunkFailed: 0,
+    });
+  });
+
+  it('writes a table and both answers for every line, to read by hand', () => {
+    const results = [{ model: 'm', page: 'page.html', hunks, ranOn: '100% CPU' }];
+    expect(formatByHunkTable(results)).toContain(
+      '| m (100% CPU) | 5 | 4.0 s | 3.0 s | 1.3× | 2 of 5 (1 failed) |',
+    );
+    const text = formatByHunkReport({
+      startedAt: new Date(2026, 10, 4, 7, 5),
+      machine: {
+        os: 'Windows 11 Pro',
+        cpu: 'CPU (16 threads)',
+        ramBytes: 16 * 1024 ** 3,
+        gpus: [],
+      },
+      llmUrl: 'http://localhost:11434',
+      temperature: 0.2,
+      maxResponseTokens: 120,
+      results,
+    });
+    expect(text).toMatch(/^## 2026-11-04 07:05 · By hunk · m\n/);
+    expect(text).toContain('each added line of `page.html` is explained on its own');
+    expect(text).toContain(
+      [
+        '- **a.ts:1**',
+        '  - One at a time: One alone. Why. Concerns: None found.',
+        '  - By hunk: One by hunk. Why. Concerns: None found.',
+        '- **a.ts:2**',
+        '  - One at a time: Two alone. Why. Concerns: None found.',
+        '  - By hunk: (missing)',
+        '- **a.ts:3**',
+        '  - One at a time: failed: Ollama stopped',
+      ].join('\n'),
+    );
+    expect(text).toContain(
+      '- **b.ts:9**\n  - One at a time: Nine. Why. Concerns: None found.\n  - By hunk: failed: Ollama stopped',
+    );
+  });
+
+  it('asks about the hunks of the saved diff page, as Explain ahead would', async () => {
+    const { hunkRequests, AHEAD_PAGE } = await import('../scripts/benchExplain.ts');
+    const requests = hunkRequests(readFileSync(AHEAD_PAGE, 'utf8'));
+    expect(requests.map((r) => r.label)).toEqual([
+      'tests/manifest.test.ts: lines 48, 50',
+      'tests/manifest.test.ts: lines 59, 60, 61, 62, 63',
+    ]);
   });
 });
 

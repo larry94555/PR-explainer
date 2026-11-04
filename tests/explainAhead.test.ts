@@ -3,7 +3,11 @@ import { resolve } from 'node:path';
 import type { ClickHandlerDeps } from '../src/clickHandler';
 import type { StorageChange } from '../src/enabledState';
 import type { ExplainResult } from '../src/explain/explainHandler';
+import type { HunkResult } from '../src/explain/hunkHandler';
+import { MAX_HUNK_LINES } from '../src/explain/hunkPrompt';
+import type { DiffHunk } from '../src/diffDom';
 import {
+  AHEAD_HUNK_MAX_LINES,
   AHEAD_IDLE_MS,
   AHEAD_MAX_PER_PAGE,
   AHEAD_RETRY_MS,
@@ -15,8 +19,10 @@ import {
   type AheadEvent,
   type AheadLine,
   type ExplainAheadDeps,
+  type HunkRequest,
+  hunkRequest,
 } from '../src/explainAhead';
-import type { ExplainStream } from '../src/messaging/client';
+import type { ExplainStream, PortStream } from '../src/messaging/client';
 import { storageKey } from '../src/settings';
 
 const DONE: ExplainResult = {
@@ -391,6 +397,171 @@ describe('the lines on screen, from a saved GitHub diff', () => {
     vi.advanceTimersByTime(AHEAD_IDLE_MS);
     expect(env.ahead.running()).toBe('tests/manifest.test.ts:added:48');
     expect(env.streams[0]!.options.code).toMatchObject({ startLine: 48, endLine: 48 });
+  });
+});
+
+describe('one request per hunk (PR 10.5)', () => {
+  /** Lines `numbers` of one hunk of src/a.ts, which the page shows as `id`. */
+  const hunkLines = (id: string, numbers: number[]): AheadLine[] => {
+    const hunk: DiffHunk = {
+      header: `@@ ${id} @@`,
+      index: 0,
+      lines: [
+        { filePath: 'src/a.ts', lineNumber: 1, side: 'context', text: 'start' },
+        ...numbers.map((n) => ({
+          filePath: 'src/a.ts',
+          lineNumber: n,
+          side: 'added' as const,
+          text: `line ${n}`,
+        })),
+      ],
+    };
+    return numbers.map((n) => ({
+      key: `src/a.ts:added:${n}`,
+      text: `line ${n}`,
+      request: () => ({ text: `context of ${n}`, subject: { filePath: 'src/a.ts', startLine: n } }),
+      hunk: { id, read: () => hunk },
+    }));
+  };
+
+  function hunkSetup(lines: AheadLine[], overrides: Partial<ExplainAheadDeps> = {}) {
+    const sent: { request: HunkRequest; finish(result: HunkResult): void; stopped: boolean }[] = [];
+    const explainHunk = vi.fn((request: HunkRequest): PortStream<HunkResult> => {
+      let settle!: (result: HunkResult) => void;
+      let fail!: (error: unknown) => void;
+      const result = new Promise<HunkResult>((res, rej) => {
+        settle = res;
+        fail = rej;
+      });
+      result.catch(() => {});
+      const entry = { request, finish: settle, stopped: false };
+      sent.push(entry);
+      return {
+        result,
+        stop: () => {
+          entry.stopped = true;
+          fail(Object.assign(new Error('Stopped'), { name: 'AbortError' }));
+        },
+      };
+    });
+    const env = setup({ explainHunk, lines: () => lines, ...overrides });
+    env.ahead.restart();
+    vi.advanceTimersByTime(AHEAD_IDLE_MS);
+    return { ...env, sent, explainHunk };
+  }
+
+  const answered = (
+    request: HunkRequest,
+    statuses: ('done' | 'cached' | 'missing')[],
+  ): HunkResult => ({
+    status: 'hunk',
+    lines: request.lines.map((l, i) => ({ label: l.label, status: statuses[i] ?? 'done' })),
+  });
+
+  it('keeps the same limit as the service worker', () => {
+    expect(AHEAD_HUNK_MAX_LINES).toBe(MAX_HUNK_LINES);
+  });
+
+  it('sends the lines of one hunk together, then the next hunk', async () => {
+    const env = hunkSetup([...hunkLines('h1', [2, 3, 5]), ...hunkLines('h2', [9, 10])]);
+    expect(env.sent).toHaveLength(1);
+    const first = env.sent[0]!.request;
+    expect(first.label).toBe('src/a.ts: lines 2, 3, 5');
+    expect(first.lines.map((l) => [l.label, l.line, l.code])).toEqual([
+      ['src/a.ts:added:2', 2, '+line 2'],
+      ['src/a.ts:added:3', 3, '+line 3'],
+      ['src/a.ts:added:5', 5, '+line 5'],
+    ]);
+    expect(first.lines[0]!.request.text).toBe('context of 2');
+    expect(first.text).toBe(
+      ['File: src/a.ts (TypeScript)', '@@ h1 @@', ' start', '+line 2', '+line 3', '+line 5'].join(
+        '\n',
+      ),
+    );
+    expect(env.ahead.running()).toBe('src/a.ts: lines 2, 3, 5');
+    expect(env.explain).not.toHaveBeenCalled();
+    env.sent[0]!.finish(answered(first, ['done', 'done', 'done']));
+    await settle();
+    expect(env.sent[1]!.request.label).toBe('src/a.ts: lines 9, 10');
+    expect(env.events.find((e) => e.type === 'finished')).toMatchObject({
+      key: 'src/a.ts: lines 2, 3, 5',
+      status: 'done',
+      cached: false,
+    });
+  });
+
+  it(`sends at most ${AHEAD_HUNK_MAX_LINES} lines at a time, and a lone line on its own`, async () => {
+    const big = hunkLines(
+      'h1',
+      Array.from({ length: 17 }, (_, i) => i + 2),
+    );
+    const env = hunkSetup([...big, ...hunkLines('h2', [40])]);
+    expect(env.sent[0]!.request.lines).toHaveLength(AHEAD_HUNK_MAX_LINES);
+    env.sent[0]!.finish(answered(env.sent[0]!.request, []));
+    await settle();
+    expect(env.sent[1]!.request.lines.map((l) => l.line)).toEqual([17, 18]);
+    env.sent[1]!.finish(answered(env.sent[1]!.request, []));
+    await settle();
+    // One line left in its hunk: the usual single-line request.
+    expect(env.texts()).toEqual(['context of 40']);
+  });
+
+  it('counts each line toward the page limit, and lines from the cache do not', async () => {
+    const env = hunkSetup(hunkLines('h1', [2, 3, 4, 5]), { maxPerPage: 3 });
+    expect(env.sent[0]!.request.lines.map((l) => l.line)).toEqual([2, 3, 4]);
+    env.sent[0]!.finish(answered(env.sent[0]!.request, ['cached', 'cached', 'done']));
+    await settle();
+    // Two came from the cache, so there is room for the fourth line.
+    expect(env.texts()).toEqual(['context of 5']);
+  });
+
+  it('asks again after a scroll for the lines the answer left out', async () => {
+    const lines = hunkLines('h1', [2, 3]);
+    const env = hunkSetup(lines);
+    env.sent[0]!.finish(answered(env.sent[0]!.request, ['done', 'missing']));
+    await settle();
+    expect(env.sent).toHaveLength(1);
+    env.ahead.restart();
+    vi.advanceTimersByTime(AHEAD_IDLE_MS);
+    expect(env.texts()).toEqual(['context of 3']);
+  });
+
+  it('puts every line of a stopped hunk back, and a failed hunk ends the pass', async () => {
+    const env = hunkSetup(hunkLines('h1', [2, 3]));
+    env.ahead.cancel();
+    expect(env.sent[0]!.stopped).toBe(true);
+    expect(env.events.at(-1)).toEqual({ type: 'cancelled', key: 'src/a.ts: lines 2, 3' });
+    env.ahead.restart();
+    vi.advanceTimersByTime(AHEAD_IDLE_MS);
+    expect(env.sent[1]!.request.lines).toHaveLength(2);
+    env.sent[1]!.finish({ status: 'failed', message: 'down', fix: 'start it' });
+    await settle();
+    expect(env.sent).toHaveLength(2);
+    expect(env.explain).not.toHaveBeenCalled();
+  });
+
+  it('builds the hunks of a saved GitHub diff from the page', () => {
+    document.body.innerHTML = readFileSync(
+      resolve(import.meta.dirname, 'fixtures', 'github-diff-new-split.html'),
+      'utf8',
+    );
+    const lines = visibleAddedLines(document, () => true);
+    const groups = new Map<string, AheadLine[]>();
+    for (const l of lines) groups.set(l.hunk!.id, [...(groups.get(l.hunk!.id) ?? []), l]);
+    expect([...groups.values()].map((g) => g.map((l) => l.key.replace(/.*:/, '')))).toEqual([
+      ['48', '50'],
+      ['59', '60', '61', '62', '63'],
+    ]);
+    const request = hunkRequest([...groups.values()][1]!)!;
+    expect(request.label).toBe('tests/manifest.test.ts: lines 59, 60, 61, 62, 63');
+    expect(request.text.split('\n')[0]).toBe('File: tests/manifest.test.ts (TypeScript)');
+    expect(request.text).toMatch(/^@@ /m);
+    // Each line carries exactly the request a click on it sends.
+    request.lines.forEach((l, i) => {
+      const own = [...groups.values()][1]![i]!.request()!;
+      expect(l.request).toEqual(own);
+      expect(request.text).toContain(l.code);
+    });
   });
 });
 

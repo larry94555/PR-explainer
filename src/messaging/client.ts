@@ -3,6 +3,7 @@
 
 import type { ChatPayload, ChatResult } from '../chat/chatHandler';
 import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
+import type { HunkPayload, HunkResult } from '../explain/hunkHandler';
 import type {
   ChatPortName,
   ChatPortRequest,
@@ -117,6 +118,19 @@ export function openExplainStream(
 ): ExplainStream {
   const request: ExplainPortRequest = { type: 'start', ...payload };
   return openStream<ExplainResult>(EXPLAIN_PORT, request, onChunk, runtime);
+}
+
+/**
+ * Asks the service worker to explain every line of `payload.hunk` in one
+ * request (PR 10.5), over the same port as one line. The answers go to the
+ * cache; the result says which lines were answered.
+ */
+export function openHunkStream(
+  payload: ExplainPayload & { hunk: HunkPayload },
+  runtime: PortRuntime = chrome.runtime,
+): PortStream<HunkResult> {
+  const request: ExplainPortRequest = { type: 'start', ...payload };
+  return openStream<HunkResult>(EXPLAIN_PORT, request, () => {}, runtime);
 }
 
 /**
