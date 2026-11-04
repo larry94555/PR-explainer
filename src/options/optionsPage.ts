@@ -436,7 +436,9 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     const ranked = rankResults(results);
     const fastest = ranked[0];
     if (stopped) return 'Stopped.';
-    if (fastest?.status !== 'done') return 'No model answered. See the table for why.';
+    // Every model failed, often out of memory on a laptop: a small model may still fit.
+    if (fastest?.status !== 'done')
+      return `No model answered. See the table for why. ${smallModelSuggestion(results)}`;
     const time = `${(fastest.totalMs / 1000).toFixed(1)} s`;
     if (fastest.totalMs < LATENCY_GOAL_MS)
       return `Fastest under ${LATENCY_GOAL_SECONDS} seconds: ${fastest.model} (${time}).`;

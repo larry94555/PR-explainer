@@ -684,6 +684,33 @@ describe('options page Speed section (PR 8.6)', () => {
     ]);
   });
 
+  it('suggests a small model when every model fails, keeping the reasons in the table', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:7b': 1, 'codellama:7b': 1 });
+    vi.mocked(client.loadModel).mockRejectedValue(new LlmError('http', 'out of memory'));
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    await page.speedTest();
+    expect(rows().map((r) => r[1])).toEqual(['Failed: out of memory', 'Failed: out of memory']);
+    expect(text('speed-status')).toBe(
+      'No model answered. See the table for why. ' +
+        'A small coding model is much faster: run ollama pull qwen2.5-coder:1.5b ' +
+        '(or ollama pull qwen2.5-coder:0.5b on a slow CPU), then run the Speed test again.',
+    );
+    expect([...$('speed-status').querySelectorAll('code')].map((c) => c.textContent)).toEqual([
+      'ollama pull qwen2.5-coder:1.5b',
+      'ollama pull qwen2.5-coder:0.5b',
+    ]);
+  });
+
+  it('suggests the GPU when every model fails and both small models were tried', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:1.5b': 1, 'qwen2.5-coder:0.5b': 1 });
+    vi.mocked(client.loadModel).mockRejectedValue(new LlmError('http', 'out of memory'));
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    await page.speedTest();
+    expect(text('speed-status')).toBe(
+      'No model answered. See the table for why. A model fully on the GPU would be faster.',
+    );
+  });
+
   it('suggests only the smaller model once the small one has been timed', async () => {
     const { client, now } = timedClient({
       'qwen2.5-coder:7b': 14_000,
