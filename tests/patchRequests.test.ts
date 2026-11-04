@@ -4,7 +4,9 @@ import { lineRequest } from '../src/clickHandler';
 import { addedLineCells, locateHunk, type DiffHunk } from '../src/diffDom';
 import { explainCacheKey } from '../src/explain/explainCache';
 import { buildExplainPrompt } from '../src/explain/explainPrompt';
+import { hunkRequest } from '../src/explainAhead';
 import {
+  aheadLines,
   createPatchRequestLoader,
   describePatchResult,
   filesUrl,
@@ -122,6 +124,25 @@ describe.each(PAGES)('the patch against the saved page %s', (page, files) => {
         continue;
       }
       expect(built.get(key)?.request, key).toEqual(click);
+    }
+  });
+
+  it('gives Whole PR (PR 10.6) every line, in order, with its hunk for one request per hunk', () => {
+    const built = requestsFromFiles(files);
+    const lines = aheadLines(built);
+    expect(lines.map((l) => l.key)).toEqual(built.lines.map((l) => l.key));
+    expect(lines.map((l) => l.order)).toEqual(built.lines.map((_, i) => i));
+    lines.forEach((line, i) => {
+      expect(line.filePath).toBe(built.lines[i]!.filePath);
+      expect(line.request()).toBe(built.lines[i]!.request);
+      expect(line.hunk!.id).toBe(`patch:${built.lines[i]!.hunk}`);
+    });
+    // Each hunk's lines make one request, which names every one of them.
+    for (const id of new Set(lines.map((l) => l.hunk!.id))) {
+      const ofHunk = lines.filter((l) => l.hunk!.id === id);
+      const request = hunkRequest(ofHunk)!;
+      expect(request.lines.map((l) => l.label)).toEqual(ofHunk.map((l) => l.key));
+      expect(request.lines.map((l) => l.request)).toEqual(ofHunk.map((l) => l.request()));
     }
   });
 

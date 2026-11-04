@@ -5,6 +5,9 @@ import {
   chatSettings,
   hasOwnChatModel,
   DEFAULT_SETTINGS,
+  followRequestsAtOnce,
+  REQUESTS_AT_ONCE_RANGE,
+  requestsAtOnceOf,
   getSettings,
   saveSettings,
   storageKey,
@@ -14,7 +17,12 @@ import {
   type StorageAreaLike,
 } from '../src/settings';
 import { STREAM_SETTING_KEY, trackStreamSetting } from '../src/streamSetting';
-import { AHEAD_SETTING_KEY } from '../src/explainAhead';
+import {
+  AHEAD_SETTING_KEY,
+  REQUESTS_AT_ONCE,
+  REQUESTS_SETTING_KEY,
+  requestsAtOnceOf as contentRequestsAtOnceOf,
+} from '../src/explainAhead';
 import type { StorageChangedEvent } from '../src/enabledState';
 
 // An in-memory stand-in for chrome.storage.sync. Like Chrome, it copies values
@@ -123,8 +131,10 @@ describe('settings', () => {
         keepAliveMinutes: 30,
         // Explain on hover uses the model for lines never clicked (PR 8.7).
         explainOnHover: false,
-        // Explain ahead keeps the model busy and uses battery (PR 9.10).
-        explainAhead: false,
+        // Explain ahead keeps the model busy and uses battery (PR 9.10, PR 10.6).
+        explainAhead: 'off',
+        // On a CPU, requests at once share the same cores (PR 10.6).
+        requestsAtOnce: 1,
         // Thinking was most of the wait on a reasoning model (PR 9.5).
         letModelThink: false,
         // The answer appears whole, so the sections do not jump around (PR 9.6).
@@ -170,7 +180,8 @@ describe('settings', () => {
         contextTokens: 8192,
         keepAliveMinutes: 90,
         explainOnHover: true,
-        explainAhead: true,
+        explainAhead: 'pr' as const,
+        requestsAtOnce: 2,
         letModelThink: true,
         streamAnswers: true,
         showPrompt: true,
@@ -329,13 +340,75 @@ describe('settings', () => {
       await expect(promise).rejects.toThrow('Explain on hover must be on or off.');
     });
 
-    it('accepts Explain ahead on or off and nothing else (PR 9.10)', async () => {
-      await expect(saveSettings({ explainAhead: true }, fakeStorage())).resolves.toMatchObject({
-        explainAhead: true,
+    it('accepts Off, Lines on screen or Whole PR for Explain ahead and nothing else (PR 10.6)', async () => {
+      for (const mode of ['off', 'screen', 'pr'] as const) {
+        await expect(saveSettings({ explainAhead: mode }, fakeStorage())).resolves.toMatchObject({
+          explainAhead: mode,
+        });
+      }
+      for (const bad of [true, 'yes']) {
+        const promise = saveSettings({ explainAhead: bad as unknown as 'off' }, fakeStorage());
+        await expectRejectedFields(promise, ['explainAhead']);
+        await expect(promise).rejects.toThrow(
+          'Explain ahead must be Off, Lines on screen or Whole PR.',
+        );
+      }
+    });
+
+    it('reads an Explain ahead on or off saved before PR 10.6 as Lines on screen or Off', async () => {
+      const key = storageKey('explainAhead');
+      expect((await getSettings(fakeStorage({ [key]: true }))).explainAhead).toBe('screen');
+      expect((await getSettings(fakeStorage({ [key]: false }))).explainAhead).toBe('off');
+      expect((await getSettings(fakeStorage({ [key]: 'fast' }))).explainAhead).toBe('off');
+    });
+
+    it('accepts Requests at once as a whole number from 1 to 4 (PR 10.6)', async () => {
+      for (const n of [1, 2, 3, 4]) {
+        await expect(saveSettings({ requestsAtOnce: n }, fakeStorage())).resolves.toMatchObject({
+          requestsAtOnce: n,
+        });
+      }
+      for (const bad of [0, 5, 1.5, NaN, '2' as unknown as number]) {
+        const promise = saveSettings({ requestsAtOnce: bad }, fakeStorage());
+        await expectRejectedFields(promise, ['requestsAtOnce']);
+        await expect(promise).rejects.toThrow(
+          'Requests at once must be a whole number from 1 to 4.',
+        );
+      }
+      expect(requestsAtOnceOf(3)).toBe(3);
+      expect(requestsAtOnceOf(9)).toBe(1);
+      expect(requestsAtOnceOf(undefined)).toBe(1);
+    });
+
+    it('follows Requests at once in the service worker: 1 until read, then each save (PR 10.6)', async () => {
+      const key = storageKey('requestsAtOnce');
+      let listener: (
+        changes: Record<string, { newValue?: unknown }>,
+        area: string,
+      ) => void = () => {};
+      const followed = followRequestsAtOnce(fakeStorage({ [key]: 2 }), {
+        addListener: (l) => void (listener = l),
       });
-      const promise = saveSettings({ explainAhead: 'yes' as unknown as boolean }, fakeStorage());
-      await expectRejectedFields(promise, ['explainAhead']);
-      await expect(promise).rejects.toThrow('Explain ahead must be on or off.');
+      expect(followed.current()).toBe(1);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(followed.current()).toBe(2);
+      listener({ [key]: { newValue: 4 } }, 'local');
+      expect(followed.current()).toBe(2);
+      listener({ [key]: { newValue: 4 } }, 'sync');
+      expect(followed.current()).toBe(4);
+      listener({ [key]: { newValue: 7 } }, 'sync');
+      expect(followed.current()).toBe(1);
+    });
+
+    it('the content script reads Requests at once under its key, with the same limits (PR 10.6)', () => {
+      expect(REQUESTS_SETTING_KEY).toBe(storageKey('requestsAtOnce'));
+      expect(REQUESTS_AT_ONCE).toEqual({
+        ...REQUESTS_AT_ONCE_RANGE,
+        default: DEFAULT_SETTINGS.requestsAtOnce,
+      });
+      expect([0, 1, 4, 5, 2.5].map(contentRequestsAtOnceOf)).toEqual(
+        [0, 1, 4, 5, 2.5].map(requestsAtOnceOf),
+      );
     });
 
     it('the content script reads Explain ahead under its key (PR 9.10)', () => {

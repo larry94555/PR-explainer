@@ -20,7 +20,8 @@ const SAVED: Settings = {
   contextTokens: 0,
   keepAliveMinutes: 30,
   explainOnHover: false,
-  explainAhead: false,
+  explainAhead: 'off',
+  requestsAtOnce: 1,
   letModelThink: false,
   streamAnswers: false,
   showPrompt: false,
@@ -104,19 +105,59 @@ describe('options page', () => {
     expect(await deps.getSettings()).toMatchObject({ explainOnHover: true });
   });
 
-  it('loads and saves Explain ahead, off by default (PR 9.10)', async () => {
+  it('loads and saves Explain ahead: Off by default, Lines on screen or Whole PR (PR 10.6)', async () => {
     const deps = fakeDeps(fakeClient());
     const page = await initOptionsPage(document, deps);
-    const box = $<HTMLInputElement>('explainAhead');
-    expect(box.checked).toBe(false);
-    expect(box.closest('label')!.textContent!.trim()).toBe('Explain ahead');
-    expect(box.closest('.field')!.querySelector('.hint')!.textContent).toMatch(/at most 30 lines/i);
+    const select = $<HTMLSelectElement>('explainAhead');
+    expect(select.value).toBe('off');
+    expect([...select.options].map((o) => [o.value, o.textContent])).toEqual([
+      ['off', 'Off'],
+      ['screen', 'Lines on screen'],
+      ['pr', 'Whole PR'],
+    ]);
+    expect(document.querySelector('label[for="explainAhead"]')!.textContent!.trim()).toBe(
+      'Explain ahead',
+    );
+    const hint = select.closest('.field')!.querySelector('.hint')!.textContent!;
+    expect(hint).toMatch(/at most 30 lines\s+per\s+page/i);
+    expect(hint).toMatch(/at most 500 lines\s+per\s+PR/i);
 
-    box.checked = true;
+    select.value = 'pr';
     await page.save();
-    expect(await deps.getSettings()).toMatchObject({ explainAhead: true });
+    expect(await deps.getSettings()).toMatchObject({ explainAhead: 'pr' });
     await initOptionsPage(document, deps);
-    expect($<HTMLInputElement>('explainAhead').checked).toBe(true);
+    expect($<HTMLSelectElement>('explainAhead').value).toBe('pr');
+
+    $<HTMLSelectElement>('explainAhead').value = 'screen';
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ explainAhead: 'screen' });
+  });
+
+  it('loads and saves Requests at once, 1 by default, and rejects other values (PR 10.6)', async () => {
+    const deps = fakeDeps(fakeClient());
+    const page = await initOptionsPage(document, deps);
+    const input = $<HTMLInputElement>('requestsAtOnce');
+    expect(input.value).toBe('1');
+    expect([input.min, input.max, input.step]).toEqual(['1', '4', '1']);
+    expect(input.closest('.field')!.querySelector('.hint')!.textContent).toMatch(
+      /only helps when Ollama is\s+set to run several.*GPU/s,
+    );
+
+    input.value = '2';
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ requestsAtOnce: 2 });
+    await initOptionsPage(document, deps);
+    expect($<HTMLInputElement>('requestsAtOnce').value).toBe('2');
+
+    for (const bad of ['5', '0', '1.5', '']) {
+      $<HTMLInputElement>('requestsAtOnce').value = bad;
+      await page.save();
+      expect(text('save-status')).not.toBe('Saved.');
+      expect(document.querySelector('[data-error-for="requestsAtOnce"]')!.textContent).toBe(
+        'Requests at once must be a whole number from 1 to 4.',
+      );
+    }
+    expect(await deps.getSettings()).toMatchObject({ requestsAtOnce: 2 });
   });
 
   it('loads and saves Let the model think (PR 9.5)', async () => {
@@ -489,7 +530,8 @@ describe('options page', () => {
       contextTokens: 0,
       keepAliveMinutes: 30,
       explainOnHover: false,
-      explainAhead: false,
+      explainAhead: 'off',
+      requestsAtOnce: 1,
       letModelThink: false,
       streamAnswers: false,
       showPrompt: false,
