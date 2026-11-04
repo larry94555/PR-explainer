@@ -286,6 +286,10 @@ describe('entries for the debug log (PR 9.3)', () => {
         trip: github,
       },
     ]);
+    // Explain ahead keeps its own cause (PR 9.10).
+    expect(
+      pageEntries({ group: 'g', cause: 'ahead', at: 1, roundTrips: [github], tasks: [] })[0]!.cause,
+    ).toBe('ahead');
     // Any other cause is a click's.
     expect(
       pageEntries({ group: 'g', cause: 'chat', at: 1, roundTrips: [github], tasks: [] })[0]!.cause,

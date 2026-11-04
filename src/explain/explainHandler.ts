@@ -90,8 +90,8 @@ export interface ExplainPayload {
   prInfo?: PrInfo;
   /** The block around the code in the full file (PR 6.3), added to the prompt. */
   fileContext?: FileContext;
-  /** Why it was asked: a click (the default), or Explain on hover (PR 8.7). */
-  cause?: 'click' | 'hover';
+  /** Why it was asked: a click (the default), Explain on hover (PR 8.7) or Explain ahead (PR 9.10). */
+  cause?: 'click' | 'hover' | 'ahead';
   /** Groups this request's round trips with the click's in the debug log (PR 9.3). */
   debugId?: string;
 }
@@ -295,7 +295,8 @@ export function createExplainHandler(deps: ExplainDeps) {
     }
     const now = deps.now ?? Date.now;
     const tasks = createTaskRecorder(now);
-    const roundTrips = createRoundTripLog(payload.cause === 'hover' ? 'hover' : 'click', now, {
+    const cause = payload.cause === 'hover' || payload.cause === 'ahead' ? payload.cause : 'click';
+    const roundTrips = createRoundTripLog(cause, now, {
       ...(typeof payload.debugId === 'string' && { group: payload.debugId.slice(0, 100) }),
       onUpdate: deps.onRoundTrip,
     });

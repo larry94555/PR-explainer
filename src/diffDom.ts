@@ -153,6 +153,19 @@ export function locateRange(
   };
 }
 
+// The code cell of every added line on the page, in page order, for Explain
+// ahead (PR 9.10). A changed line is a removed line followed by an added one,
+// so its new version is here too. Each cell, given to locateLine or
+// lineRequest (src/clickHandler.ts), reads as its added line, in a unified or
+// a split view, as a click on it would.
+export function addedLineCells(root: ParentNode): Element[] {
+  return Array.from(
+    root.querySelectorAll(
+      'table.diff-table tr td.blob-code-addition, table[data-diff-anchor] tr.diff-line-row td.diff-text-cell',
+    ),
+  ).filter((cell) => locateLine(cell)?.side === 'added');
+}
+
 // The left (old file) or right (new file) half of a split view row.
 type Column = 'left' | 'right';
 

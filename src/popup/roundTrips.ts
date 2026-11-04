@@ -1,7 +1,7 @@
 // The words for a click's round trips in the popup's Details (PR 9.2): the
 // count line ("4 round trips: GitHub 1, Ollama 3") and the line for each one.
 // Only the click's own round trips count; ones made when the page opened,
-// by Explain on hover, or by the warm-up are listed with their cause.
+// by Explain on hover or Explain ahead, or by the warm-up are listed with their cause.
 
 import { formatMs } from '../trace/clickTrace';
 import type { RoundTrip, RoundTripCause } from '../trace/types';
@@ -11,6 +11,7 @@ const TARGET: Record<RoundTrip['target'], string> = { github: 'GitHub', ollama: 
 const CAUSE: Record<Exclude<RoundTripCause, 'click'>, string> = {
   page: 'when the page opened',
   hover: 'by Explain on hover',
+  ahead: 'by Explain ahead',
   warmup: 'by the warm-up',
   chat: 'by the chat',
 };
@@ -34,7 +35,7 @@ export function roundTripSummary(trips: readonly RoundTrip[]): string {
       ? 'No round trips for this click'
       : `${own.length} round trip${own.length === 1 ? '' : 's'}: ${counts.join(', ')}`,
   ];
-  for (const cause of ['page', 'hover', 'warmup'] as const) {
+  for (const cause of ['page', 'hover', 'ahead', 'warmup'] as const) {
     const n = trips.filter((t) => t.cause === cause).length;
     if (n > 0) parts.push(`${n} more ${CAUSE[cause]}, not counted`);
   }

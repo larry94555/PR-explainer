@@ -19,6 +19,7 @@ const SAVED: Settings = {
   contextTokens: 0,
   keepAliveMinutes: 30,
   explainOnHover: false,
+  explainAhead: false,
   letModelThink: false,
   streamAnswers: false,
   showPrompt: false,
@@ -100,6 +101,21 @@ describe('options page', () => {
     $<HTMLInputElement>('explainOnHover').checked = true;
     await page.save();
     expect(await deps.getSettings()).toMatchObject({ explainOnHover: true });
+  });
+
+  it('loads and saves Explain ahead, off by default (PR 9.10)', async () => {
+    const deps = fakeDeps(fakeClient());
+    const page = await initOptionsPage(document, deps);
+    const box = $<HTMLInputElement>('explainAhead');
+    expect(box.checked).toBe(false);
+    expect(box.closest('label')!.textContent!.trim()).toBe('Explain ahead');
+    expect(box.closest('.field')!.querySelector('.hint')!.textContent).toMatch(/at most 30 lines/i);
+
+    box.checked = true;
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ explainAhead: true });
+    await initOptionsPage(document, deps);
+    expect($<HTMLInputElement>('explainAhead').checked).toBe(true);
   });
 
   it('loads and saves Let the model think (PR 9.5)', async () => {
@@ -404,6 +420,7 @@ describe('options page', () => {
       contextTokens: 0,
       keepAliveMinutes: 30,
       explainOnHover: false,
+      explainAhead: false,
       letModelThink: false,
       streamAnswers: false,
       showPrompt: false,

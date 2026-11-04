@@ -184,6 +184,24 @@ describe('debug window (PR 9.4)', () => {
     expect(w.q('.empty').hidden).toBe(true);
   });
 
+  it('shows the lines explained ahead of a page as one "Explain ahead" group (PR 9.10)', () => {
+    const w = setup();
+    const ahead = { cause: 'ahead' as const };
+    w.port().send({
+      type: 'snapshot',
+      entries: [
+        entry('ahead-1', T0, { cause: 'ahead', durationMs: 1_500 }, ahead),
+        entry('ahead-1', T0 + 2_000, { cause: 'ahead', durationMs: 1_400 }, ahead),
+      ],
+      running: [],
+    });
+    w.port().send({
+      type: 'running',
+      entry: { ...runningEntry('ahead-1:3', T0 + 4_000), cause: 'ahead' },
+    });
+    expect(w.groupTitles()).toEqual([expect.stringMatching(/^Explain ahead.*3 round trips$/)]);
+  });
+
   it('says how to fill it when the log is empty', () => {
     const w = setup();
     w.port().send({ type: 'snapshot', entries: [], running: [] });

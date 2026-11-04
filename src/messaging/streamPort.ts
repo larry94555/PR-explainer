@@ -103,8 +103,15 @@ export function serveExplainPort(port: PortLike, explain: StreamingExplain): voi
       context: message.context as string,
       pr: typeof message.pr === 'string' ? message.pr : undefined,
       fresh: message.fresh === true,
-      // Explain on hover (PR 8.7) says so, for its round trips (PR 9.2).
-      cause: message.cause === 'hover' ? ('hover' as const) : ('click' as const),
+      // Explain on hover (PR 8.7) and Explain ahead (PR 9.10) say so, for
+      // their round trips (PR 9.2).
+      cause:
+        message.cause === 'hover' || message.cause === 'ahead'
+          ? (message.cause as 'hover' | 'ahead')
+          : ('click' as const),
+      // Groups the request's round trips in the debug log (PR 9.3); the
+      // handler shortens it.
+      ...(typeof message.debugId === 'string' && { debugId: message.debugId }),
     }),
     explain,
   );

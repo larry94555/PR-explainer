@@ -183,6 +183,24 @@ describe('explain stream over a port', () => {
     );
   });
 
+  it('passes on that Explain ahead asked, and its debug log group (PR 9.10)', async () => {
+    const { runtime, workerPorts } = fakeRuntime();
+    const model = controllableExplain();
+    listenForExplainPorts(runtime, model.explain);
+    runtime.connect({ name: EXPLAIN_PORT });
+    await flush();
+    workerPorts[0]!.emitMessage({
+      type: 'start',
+      context: 'ctx',
+      cause: 'ahead',
+      debugId: 'ahead-1',
+    });
+    expect(model.explain).toHaveBeenCalledWith(
+      { context: 'ctx', fresh: false, cause: 'ahead', debugId: 'ahead-1' },
+      expect.anything(),
+    );
+  });
+
   it('Stop disconnects the port, which aborts the request in the service worker', async () => {
     const { runtime, workerPorts } = fakeRuntime();
     const model = controllableExplain();

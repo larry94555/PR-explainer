@@ -117,6 +117,8 @@ export interface ChatPanelOptions {
 export interface ChatPanel {
   readonly host: HTMLElement;
   readonly isOpen: boolean;
+  /** True while an answer is being written (setBusy). */
+  readonly isBusy: boolean;
   /** The messages in the list, oldest first. */
   readonly messages: readonly ChatMessageView[];
   /** Adds a message at the bottom of the list. */
@@ -417,6 +419,9 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
     host,
     get isOpen() {
       return open;
+    },
+    get isBusy() {
+      return busy;
     },
     get messages() {
       return [...views];
