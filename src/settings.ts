@@ -72,6 +72,13 @@ export interface Settings {
    */
   requestsAtOnce: number;
   /**
+   * Keep answers for, in days (PR 10.9): how long explanations are kept on
+   * this computer after Chrome closes, in IndexedDB
+   * (src/explain/persistentCache.ts). An answer not used for this long is
+   * removed. 0 keeps them only until Chrome closes, as before.
+   */
+  keepAnswersDays: number;
+  /**
    * Let a reasoning model, such as deepseek-r1, think before it answers
    * (PR 9.5). Off by default: explaining a few lines does not need it, and
    * thinking was most of the wait. Other models are not affected.
@@ -112,6 +119,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   explainOnHover: false,
   explainAhead: 'off',
   requestsAtOnce: 1,
+  keepAnswersDays: 7,
   letModelThink: false,
   streamAnswers: false,
   showPrompt: false,
@@ -167,6 +175,8 @@ export const KEEP_ALIVE_MINUTES_RANGE = { min: 0, max: 1440 } as const;
 export const CONTEXT_TOKENS_RANGE = { min: 512, max: 131072 } as const;
 /** Requests at once (PR 10.6). */
 export const REQUESTS_AT_ONCE_RANGE = { min: 1, max: 4 } as const;
+/** Keep answers for (PR 10.9): up to a year; 0 keeps them only until Chrome closes. */
+export const KEEP_ANSWERS_DAYS_RANGE = { min: 0, max: 365 } as const;
 
 // Code never leaves the laptop, so only loopback addresses are accepted.
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -230,6 +240,8 @@ function checkField(field: SettingsField, value: unknown): string | null {
         : 'Explain ahead must be Off, Lines on screen or Whole PR.';
     case 'requestsAtOnce':
       return checkNumber(value, REQUESTS_AT_ONCE_RANGE, true, 'Requests at once');
+    case 'keepAnswersDays':
+      return checkNumber(value, KEEP_ANSWERS_DAYS_RANGE, true, 'Keep answers for');
     case 'letModelThink':
       return typeof value === 'boolean' ? null : 'Let the model think must be on or off.';
     case 'streamAnswers':

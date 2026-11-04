@@ -135,6 +135,8 @@ describe('settings', () => {
         explainAhead: 'off',
         // On a CPU, requests at once share the same cores (PR 10.6).
         requestsAtOnce: 1,
+        // A whole PR prefetched once stays done for a week (PR 10.9).
+        keepAnswersDays: 7,
         // Thinking was most of the wait on a reasoning model (PR 9.5).
         letModelThink: false,
         // The answer appears whole, so the sections do not jump around (PR 9.6).
@@ -182,6 +184,7 @@ describe('settings', () => {
         explainOnHover: true,
         explainAhead: 'pr' as const,
         requestsAtOnce: 2,
+        keepAnswersDays: 30,
         letModelThink: true,
         streamAnswers: true,
         showPrompt: true,
@@ -378,6 +381,24 @@ describe('settings', () => {
       expect(requestsAtOnceOf(3)).toBe(3);
       expect(requestsAtOnceOf(9)).toBe(1);
       expect(requestsAtOnceOf(undefined)).toBe(1);
+    });
+
+    it('accepts Keep answers for as a whole number of days from 0 to 365 (PR 10.9)', async () => {
+      for (const n of [0, 1, 7, 365]) {
+        await expect(saveSettings({ keepAnswersDays: n }, fakeStorage())).resolves.toMatchObject({
+          keepAnswersDays: n,
+        });
+      }
+      for (const bad of [-1, 366, 2.5, NaN, '7' as unknown as number]) {
+        const promise = saveSettings({ keepAnswersDays: bad }, fakeStorage());
+        await expectRejectedFields(promise, ['keepAnswersDays']);
+        await expect(promise).rejects.toThrow(
+          'Keep answers for must be a whole number from 0 to 365.',
+        );
+      }
+      // A bad stored value falls back to the default.
+      const stored = fakeStorage({ [storageKey('keepAnswersDays')]: -3 });
+      expect((await getSettings(stored)).keepAnswersDays).toBe(7);
     });
 
     it('follows Requests at once in the service worker: 1 until read, then each save (PR 10.6)', async () => {

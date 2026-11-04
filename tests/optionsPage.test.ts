@@ -22,6 +22,7 @@ const SAVED: Settings = {
   explainOnHover: false,
   explainAhead: 'off',
   requestsAtOnce: 1,
+  keepAnswersDays: 7,
   letModelThink: false,
   streamAnswers: false,
   showPrompt: false,
@@ -59,6 +60,7 @@ function fakeDeps(client: LlmClient, saved: Settings = SAVED) {
     }),
     createClient: vi.fn<OptionsPageDeps['createClient']>(() => client),
     now: vi.fn().mockReturnValueOnce(1000).mockReturnValueOnce(1250),
+    clearSavedAnswers: vi.fn<OptionsPageDeps['clearSavedAnswers']>(async () => {}),
   } satisfies OptionsPageDeps;
   return deps;
 }
@@ -158,6 +160,65 @@ describe('options page', () => {
       );
     }
     expect(await deps.getSettings()).toMatchObject({ requestsAtOnce: 2 });
+  });
+
+  it('loads and saves Keep answers for, 7 days by default, and rejects other values (PR 10.9)', async () => {
+    const deps = fakeDeps(fakeClient());
+    const page = await initOptionsPage(document, deps);
+    const input = $<HTMLInputElement>('keepAnswersDays');
+    expect(input.value).toBe('7');
+    expect([input.min, input.max, input.step]).toEqual(['0', '365', '1']);
+    expect(document.querySelector('label[for="keepAnswersDays"]')!.textContent!.trim()).toBe(
+      'Keep answers for (days)',
+    );
+    const hint = input.closest('.field')!.querySelector('.hint')!.textContent!;
+    expect(hint).toMatch(/after Chrome closes/);
+    expect(hint).toMatch(/0 keeps them only until Chrome closes/);
+
+    input.value = '0';
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ keepAnswersDays: 0 });
+    await initOptionsPage(document, deps);
+    expect($<HTMLInputElement>('keepAnswersDays').value).toBe('0');
+
+    for (const bad of ['-1', '366', '2.5', '']) {
+      $<HTMLInputElement>('keepAnswersDays').value = bad;
+      await page.save();
+      expect(text('save-status')).not.toBe('Saved.');
+      expect(errorFor('keepAnswersDays')).toBe(
+        'Keep answers for must be a whole number from 0 to 365.',
+      );
+    }
+    expect(await deps.getSettings()).toMatchObject({ keepAnswersDays: 0 });
+  });
+
+  it('Clear saved answers asks the service worker to empty the caches and says so (PR 10.9)', async () => {
+    const deps = fakeDeps(fakeClient());
+    await initOptionsPage(document, deps);
+    const button = $<HTMLButtonElement>('clear-answers');
+    expect(button.textContent).toBe('Clear saved answers');
+    expect(button.type).toBe('button');
+
+    let finish!: () => void;
+    deps.clearSavedAnswers.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    button.click();
+    expect(button.disabled).toBe(true);
+    expect(text('clear-status')).toBe('Clearing…');
+    finish();
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(deps.clearSavedAnswers).toHaveBeenCalledTimes(1);
+    expect(text('clear-status')).toBe(
+      'Saved answers cleared. The next click on a line asks the model.',
+    );
+    // It does not save the form.
+    expect(deps.saveSettings).not.toHaveBeenCalled();
+
+    deps.clearSavedAnswers.mockRejectedValueOnce(new Error('No answer from the extension.'));
+    button.click();
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(text('clear-status')).toBe(
+      'Could not clear saved answers: No answer from the extension.',
+    );
   });
 
   it('loads and saves Let the model think (PR 9.5)', async () => {
@@ -532,6 +593,7 @@ describe('options page', () => {
       explainOnHover: false,
       explainAhead: 'off',
       requestsAtOnce: 1,
+      keepAnswersDays: 7,
       letModelThink: false,
       streamAnswers: false,
       showPrompt: false,

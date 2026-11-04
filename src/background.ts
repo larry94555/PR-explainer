@@ -14,6 +14,7 @@ import {
   setupDebugMenu,
 } from './debug/debugWindowOpener';
 import { createExplainCache } from './explain/explainCache';
+import { createLayeredCache, createPersistentCache } from './explain/persistentCache';
 import {
   createExplainHandler,
   type ExplainDeps,
@@ -32,7 +33,13 @@ import { createWarmup } from './llm/warmup';
 import { MessageRouter } from './messaging/router';
 import { listenForChatPorts, listenForExplainPorts } from './messaging/streamPort';
 import type { RoundTripSink } from './net/roundTrips';
-import { DEFAULT_SETTINGS, followRequestsAtOnce, getSettings, saveSettings } from './settings';
+import {
+  DEFAULT_SETTINGS,
+  followRequestsAtOnce,
+  getSettings,
+  saveSettings,
+  storageKey,
+} from './settings';
 import { setupToolbarToggle } from './toolbarToggle';
 
 console.info('[PR Explainer] service worker started');
@@ -93,15 +100,30 @@ const warmup = createWarmup({
   },
 });
 
-// Finished explanations, each under its own key (src/explain/explainCache.ts).
-const explainCache = createExplainCache(chrome.storage.session);
+// Finished explanations, each under its own key (src/explain/explainCache.ts),
+// and a copy on disk that outlives Chrome for Keep answers for days (PR 10.9,
+// src/explain/persistentCache.ts). Reads try the session cache first.
+const sessionCache = createExplainCache(chrome.storage.session);
+const savedAnswers = createPersistentCache({
+  indexedDB,
+  keepDays: async () => (await getSettings()).keepAnswersDays,
+});
+const explainCache = createLayeredCache(sessionCache, savedAnswers);
+// Old answers go when the worker starts, and at once when the setting is
+// lowered (0 removes them all).
+void savedAnswers.prune();
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'sync' && Object.hasOwn(changes, storageKey('keepAnswersDays'))) {
+    void savedAnswers.prune();
+  }
+});
 
 const explainDeps: ExplainDeps = {
   getSettings,
   createClient: createLlmClient,
   platform: detectPlatform(navigator.userAgent),
-  // Finished explanations are kept for the browser session, so clicking the
-  // same line again answers at once (src/explain/explainCache.ts).
+  // Finished explanations are kept, so clicking the same line again answers
+  // at once, even after Chrome restarts (PR 10.9).
   cache: explainCache,
   contextTokens,
   thinking,
@@ -184,6 +206,11 @@ new MessageRouter()
     await debugLog.clear();
     return { cleared: true as const };
   })
+  // The settings page's Clear saved answers button (PR 10.9).
+  .on('clearSavedAnswers', async () => {
+    await explainCache.clear();
+    return { cleared: true as const };
+  })
   .on('openDebugWindow', async () => ({ window: await debugWindow.open() }))
   .on('aheadProgress', async (payload, sender) => {
     const tabId = sender.tab?.id;
@@ -256,7 +283,8 @@ if (import.meta.env.MODE === 'development') {
       },
       // Runs the same code as an `explain` request from a GitHub page.
       explain: (context: string) => explain({ context }),
-      // Lists what the explanation cache holds, least recently used first (cleared when Chrome closes).
+      // Lists what the session cache holds, least recently used first (cleared when Chrome
+      // closes; the copy on disk, PR 10.9, is in IndexedDB "pr-explainer").
       cache: () => explainCache.list(),
       explainSample: () => explain({ context: SAMPLE_CONTEXT }),
       // Lists the debug log (PR 9.3), oldest first.

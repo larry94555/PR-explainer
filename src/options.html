@@ -172,6 +172,28 @@
           <p class="error" data-error-for="streamAnswers" role="alert"></p>
         </div>
 
+        <div class="field">
+          <label for="keepAnswersDays">Keep answers for (days)</label>
+          <input
+            id="keepAnswersDays"
+            name="keepAnswersDays"
+            type="number"
+            min="0"
+            max="365"
+            step="1"
+          />
+          <p class="hint">
+            Keeps explanations on this computer after Chrome closes, so a PR explained once is still
+            instant the next day. An answer not used for this many days is removed, and at most 50
+            MB is kept. 0 keeps them only until Chrome closes.
+          </p>
+          <p class="error" data-error-for="keepAnswersDays" role="alert"></p>
+          <div class="row">
+            <button id="clear-answers" type="button">Clear saved answers</button>
+          </div>
+          <p id="clear-status" role="status"></p>
+        </div>
+
         <fieldset id="debug" class="debug">
           <legend>Debug</legend>
           <div class="field">
