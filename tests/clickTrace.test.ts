@@ -57,6 +57,20 @@ describe('createClickTrace', () => {
     ]);
   });
 
+  it('marks a moment as a task of no length, such as the click after a press (PR 11.1)', () => {
+    const clock = fakeClock();
+    const trace = createClickTrace(clock.now);
+    const pressed = trace.start('press', 'Pressed');
+    clock.advance(140);
+    pressed();
+    trace.mark('click', 'Clicked');
+    expect(trace.tasks()).toEqual([
+      { key: 'press', label: 'Pressed', source: 'page', startMs: 0, durationMs: 140 },
+      { key: 'click', label: 'Clicked', source: 'page', startMs: 140, durationMs: 0 },
+    ]);
+    expect(traceLine(trace.tasks())).toBe('Pressed 140 ms, Clicked 0 ms');
+  });
+
   it('marks a task that failed or was skipped', async () => {
     const clock = fakeClock();
     const trace = createClickTrace(clock.now);

@@ -86,6 +86,14 @@ const TASKS: TraceTask[] = [
   worker('cache-save', 'Save to the cache', 14_022, 6),
   page('show', 'Show answer', 14_028, 172),
 ];
+// The same click started on the mouse press (PR 11.1): the button was held
+// 160 ms, and the request had been running all that time when the click came.
+const PRESSED_TASKS: TraceTask[] = [
+  page('press', 'Pressed', 0, 160),
+  ...TASKS.filter((t) => t.key !== 'show'),
+  page('click', 'Clicked', 160, 0),
+  page('show', 'Show answer', 14_028, 12),
+];
 const THINKING_REPLY =
   `<think>${'The loop retries fetch with a growing delay. '.repeat(9)}</think>\n` +
   `## What it does\n${'Retries the fetch call up to three times. '.repeat(9)}`;
@@ -424,7 +432,7 @@ function explainRow(row: Element): void {
   const popup = openPopup(row, {
     facts: factsOf(row),
     streamAnswers: streamAnswers(),
-    ...(['done', 'failed', 'prompt', 'file', 'short'].includes(chosen()) && {
+    ...(['done', 'pressed', 'failed', 'prompt', 'file', 'short'].includes(chosen()) && {
       now: () => fakeTime,
     }),
     onClose: () => (status.textContent = 'Last event: closed'),
@@ -466,6 +474,17 @@ function explainRow(row: Element): void {
         `[PR Explainer] explained in 14.2 s (${MODEL}, first text after 6.0 s, tasks: ` +
           `${traceLine(buildWaterfall(TASKS, TIMINGS, THINKING_REPLY).rows)})`,
       );
+      break;
+    case 'pressed':
+      // Shown 160 ms sooner than the same click in Explanation.
+      fakeTime = 14_040;
+      popup.showExplanation(SAMPLE, MODEL);
+      popup.showTrace({
+        tasks: PRESSED_TASKS,
+        timings: TIMINGS,
+        reply: THINKING_REPLY,
+        roundTrips: demoRoundTrips(demoPrompt(row).messages),
+      });
       break;
     case 'cached':
     case 'prefetched':

@@ -12,7 +12,7 @@ import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
 import { chatSessionFor, CurrentChat, startChat } from './chat/chatFlow';
 import { currentChatPanel, openChatPanel } from './chat/chatPanel';
 import { ChatSessions } from './chat/chatSession';
-import { createClickHandler, type ClickHandlerDeps } from './clickHandler';
+import { createClickHandler, listenForClicks, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
 import {
   openAfter,
@@ -170,6 +170,7 @@ const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (va
     currentPopup()?.close();
     currentChatPanel()?.close();
     prefetcher.cancel();
+    onClick.cancelPress();
     ahead.cancel();
   } else if (features.attached) {
     ahead.restart();
@@ -476,6 +477,8 @@ const streamSetting = trackStreamSetting(chrome.storage.sync, chrome.storage.onC
 
 const explainDeps: ClickHandlerDeps = {
   isEnabled: () => enabled.current() === true,
+  // A press sends nothing while the chat is open: the click goes to the chat (PR 11.1).
+  isChatOpen: () => currentChatPanel() !== null,
   // A click joins a running prefetch of the same line instead of asking again.
   explain: prefetcher.explain,
   // With the Debug window setting on, the popup's Debug button opens the
@@ -557,12 +560,14 @@ const explainDeps: ClickHandlerDeps = {
     );
   },
 };
+// The request starts when the mouse goes down on a line, and the popup opens
+// on the click (PR 11.1).
 const onClick = createClickHandler(explainDeps);
 // Click-to-explain is attached only while a PR's diffs are shown, once
 // however often GitHub re-renders the page, and taken off when the user
 // moves elsewhere (PR 7.1).
 const features = new DiffPageFeatures(() => {
-  document.addEventListener('click', onClick);
+  const removeClicks = listenForClicks(onClick);
   document.addEventListener('mouseover', prefetcher.onMouseOver);
   document.addEventListener('mousedown', prefetcher.onMouseDown);
   // Scrolling starts Explain ahead's wait again, for the lines then on screen.
@@ -572,7 +577,7 @@ const features = new DiffPageFeatures(() => {
   // block as a whole (src/selection.ts).
   const removeSelection = installSelection(explainDeps);
   return () => {
-    document.removeEventListener('click', onClick);
+    removeClicks();
     document.removeEventListener('mouseover', prefetcher.onMouseOver);
     document.removeEventListener('mousedown', prefetcher.onMouseDown);
     window.removeEventListener('scroll', ahead.restart);
@@ -610,6 +615,7 @@ function onPageChanged(url: string): void {
   patchRequests.forget();
   // A prefetch or wait from before the move is for code that may be gone.
   prefetcher.pageChanged();
+  onClick.cancelPress();
   ahead.pageChanged();
   if (features.attached) ahead.restart();
   readDescriptionAhead();
