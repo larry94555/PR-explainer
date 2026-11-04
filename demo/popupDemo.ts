@@ -35,6 +35,16 @@ const SAMPLE: Explanation = {
     '2. `attempt` is never reset, so:\n\n```ts\nawait retry(fn); // second call starts at attempt 3\n```',
 };
 
+// An answer to the one-sentence prompt (PR 9.8): one sentence on what and why,
+// and short concerns, so it fits in 120 tokens.
+const ONE_SENTENCE: Explanation = {
+  what: 'Retries the `fetch` call up to three times, waiting twice as long before each retry.',
+  why: 'The first request often fails while Ollama is still loading the model.',
+  concerns:
+    '- A real failure, such as a bad URL, now takes 1.4 s to report.\n' +
+    '- `attempt` is never reset, so a second call starts at its last retry.',
+};
+
 // What Ollama reports for a 7B model that had to be loaded first (PR 8.1).
 const TIMINGS: LlmTimings = {
   totalMs: 13_900,
@@ -392,14 +402,16 @@ function explainRow(row: Element): void {
   let fakeTime = 0;
   const popup = openPopup(row, {
     streamAnswers: streamAnswers(),
-    ...(['done', 'failed', 'prompt', 'file'].includes(chosen()) && { now: () => fakeTime }),
+    ...(['done', 'failed', 'prompt', 'file', 'short'].includes(chosen()) && {
+      now: () => fakeTime,
+    }),
     onClose: () => (status.textContent = 'Last event: closed'),
     // As with the Debug window setting on (PR 9.4); `npm run demo:debug` shows the window.
     onDebug: () => (status.textContent = 'Last event: Debug (opens the debug window)'),
     onAsk: () => {
       const session = new ChatSession({
         context: LINES.map(([marker, code]) => marker + code).join('\n'),
-        explanation: chosen() === 'unsafe' ? UNSAFE : SAMPLE,
+        explanation: chosen() === 'unsafe' ? UNSAFE : chosen() === 'short' ? ONE_SENTENCE : SAMPLE,
       });
       activeChat = startChat(
         {
@@ -535,6 +547,21 @@ function explainRow(row: Element): void {
       break;
     case 'cutoff':
       popup.showExplanation(CUT_OFF, MODEL);
+      break;
+    case 'short':
+      // A loaded model that does not think, writing about 70 tokens.
+      fakeTime = 2_400;
+      popup.showExplanation(ONE_SENTENCE, MODEL);
+      popup.showTrace({
+        tasks: [
+          page('find-code', 'Find the code', 0, 2),
+          page('send', 'Send the request', 2, 1),
+          worker('fit-prompt', 'Build the prompt', 4, 10),
+          { ...worker('model', 'Wait for the model', 14, 2_300), firstChunkMs: 420 },
+          page('show', 'Show answer', 2_314, 86),
+        ],
+        roundTrips: [],
+      });
       break;
   }
 }

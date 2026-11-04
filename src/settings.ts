@@ -21,8 +21,9 @@ export interface Settings {
   /** Sampling temperature, 0 to 2. Low values give steadier explanations. */
   temperature: number;
   /**
-   * Upper limit on the length of an explanation, in tokens. Kept low (PR 8.4)
-   * because writing the answer is usually the slowest part. Chat answers may
+   * Upper limit on the length of an explanation, in tokens. Kept low (PR 8.4,
+   * and 120 from PR 9.8, for one-sentence answers) because writing the answer
+   * is usually the slowest part. Chat answers may
    * use up to CHAT_MIN_RESPONSE_TOKENS even when this is lower.
    */
   maxResponseTokens: number;
@@ -75,7 +76,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   llmUrl: 'http://localhost:11434',
   model: '',
   temperature: 0.2,
-  maxResponseTokens: 300,
+  maxResponseTokens: 120,
   contextTokens: 0,
   keepAliveMinutes: 30,
   explainOnHover: false,
@@ -100,6 +101,37 @@ export const CHAT_MIN_RESPONSE_TOKENS = 1024;
 /** The answer limit for a chat question: the setting, but at least CHAT_MIN_RESPONSE_TOKENS. */
 export function chatResponseTokens(settings: Pick<Settings, 'maxResponseTokens'>): number {
   return Math.max(settings.maxResponseTokens, CHAT_MIN_RESPONSE_TOKENS);
+}
+
+/**
+ * The answer limit before PR 9.8. The settings page saves every field, so
+ * anyone who ever pressed Save has it stored even if they never touched it.
+ */
+export const OLD_DEFAULT_RESPONSE_TOKENS = 300;
+/** Set once the stored old default has been cleared, so it is only done once. */
+export const RESPONSE_TOKENS_MIGRATION_KEY = 'migrations.maxResponseTokens120';
+
+/** The part of chrome.storage.StorageArea the one-time clean-up needs. */
+export interface RemovableStorageAreaLike extends StorageAreaLike {
+  remove(keys: string[]): Promise<void>;
+}
+
+/**
+ * Moves users on the old default answer limit to the new one (PR 9.8): a
+ * stored 300 is cleared, so the default of 120 applies. It runs once; after
+ * that, a 300 typed in on purpose is kept. Another stored value is left as it
+ * is. Returns whether the stored value was cleared.
+ */
+export async function clearOldResponseTokensDefault(
+  storage: RemovableStorageAreaLike = chrome.storage.sync,
+): Promise<boolean> {
+  const key = storageKey('maxResponseTokens');
+  const raw = await storage.get([key, RESPONSE_TOKENS_MIGRATION_KEY]);
+  if (raw[RESPONSE_TOKENS_MIGRATION_KEY] === true) return false;
+  const clear = raw[key] === OLD_DEFAULT_RESPONSE_TOKENS;
+  if (clear) await storage.remove([key]);
+  await storage.set({ [RESPONSE_TOKENS_MIGRATION_KEY]: true });
+  return clear;
 }
 
 export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;

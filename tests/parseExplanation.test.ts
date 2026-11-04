@@ -26,6 +26,24 @@ describe('parseExplanation', () => {
     });
   });
 
+  it('parses a one-sentence answer per section (PR 9.8)', () => {
+    const reply = [
+      '## What it does',
+      'Lists the host names that count as this computer.',
+      "## Why it's needed",
+      'Settings reject LLM servers on other machines.',
+      '## Concerns',
+      '- `0.0.0.0` is not accepted.',
+    ].join('\n');
+    expect(parseExplanation(reply, { cutOff: false })).toEqual({
+      what: 'Lists the host names that count as this computer.',
+      why: 'Settings reject LLM servers on other machines.',
+      concerns: '- `0.0.0.0` is not accepted.',
+    });
+    const none = reply.replace(/## Concerns[\s\S]*/, '## Concerns\nNone found.');
+    expect(parseExplanation(none).concerns).toBe(NO_CONCERNS);
+  });
+
   it('says "None found." when Concerns is missing or empty', () => {
     expect(parseExplanation('## What it does\nA.\n## Why it’s needed\nB.').concerns).toBe(
       NO_CONCERNS,
