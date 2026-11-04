@@ -111,6 +111,18 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 11.11 | Rate an answer | Small | Not started |
 | 11.12 | Ratings next to speed in the Speed test and report | Small | Not started |
 | 11.13 | Chrome's built-in model as an optional fallback | Medium | Not started |
+| 12.0 | Plan Milestone 12 | Small | ✅ Done ([#69](https://github.com/larry94555/PR-explainer/pull/69)) |
+| 12.1 | Host skeleton | Small | Not started |
+| 12.2 | Accounts and the sign-up API | Medium | Not started |
+| 12.3 | One way to send email, with a test outbox | Small | Not started |
+| 12.4 | Email verification | Medium | Not started |
+| 12.5 | Sign in, sessions and sign out | Medium | Not started |
+| 12.6 | Sign-up, sign-in and account pages | Medium | Not started |
+| 12.7 | Admin accounts | Small | Not started |
+| 12.8 | The admin settings file and its `test-email` property | Small | Not started |
+| 12.9 | Sign up with "-admin" while signed in as admin | Medium | Not started |
+| 12.10 | Send a test account's email to the test email | Small | Not started |
+| 12.11 | Test accounts work only while an admin is signed in | Medium | Not started |
 
 ## Milestone overview
 
@@ -127,6 +139,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 9 | Two-second answers | Click a line and the whole explanation appears at once within 2 seconds, and a debug window shows every round trip to the local LLM with its prompt, reply and time |
 | 10 | Answers ready before you click | Open a PR, keep reading, and the lines you click are already explained: the toolbar badge shows how much of the PR is done, and a click on a done line is answered at once from the cache |
 | 11 | Snappy and dependable | A request starts as the mouse goes down, background work pauses on battery and skips generated files, a stopped Ollama shows one banner and recovers by itself, the chat sits in Chrome's side panel, and each answer can be copied, pinned and rated |
+| 12 | Admin Settings | Signed in as admin, sign up as `joe.smith@gmail.com-admin`: the account is `joe.smith@gmail.com`, its verification email goes to the test email from the admin settings file, and it stops working with "this account is no longer active." once the admin signs out |
 
 ---
 
@@ -1317,9 +1330,153 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
 
 ---
 
+## Milestone 12: Admin Settings
+
+**Goal:** an admin can go through the whole sign-up process, including email verification, as many times as they like with any email address, without owning those addresses. While signed in as admin, the admin signs up with an address that ends in `-admin`, for example `joe.smith@gmail.com-admin`. The account is created as `joe.smith@gmail.com` and behaves like any other account, but every email the host sends for it goes to the **test email** set in the admin settings file. These test accounts work only while an admin is signed in.
+
+**Demo:** Put `test-email=you@example.com` in `admin/admin-settings` on the host. Sign in as admin, open the sign-up page and sign up as `joe.smith@gmail.com-admin`. The page never shows `-admin`, and the verification email arrives at `you@example.com`, not at Joe's address. Verify, sign in as `joe.smith@gmail.com`, and use the account. Sign the admin out, and the next thing the test account does gets "this account is no longer active." Sign up as `joe.smith@gmail.com-admin` again and get an error, because that address is taken. Sign the admin out and try `-admin` once more: "invalid email".
+
+**What has to be built first.** PR Explainer today is only a Chrome extension that talks to GitHub and to a local LLM. It has no host (server), no accounts, no sign-up, no sign-in, no admin and no email sending; a search of `src/` and the docs finds none of them. So this milestone first adds those pieces (PRs 12.1 to 12.7) and then the test mode that uses them (PRs 12.8 to 12.11). The host lives in a new `host/` folder with its own tests and is a separate program from the extension. The extension does not talk to it, so the extension's privacy rule (requests only to GitHub and the local LLM, PR 7.4) and its test are unchanged. If a later milestone has the extension use accounts, that milestone changes the privacy rule on purpose.
+
+**Rules for test mode** (the behaviour PRs 12.8 to 12.11 must have, in one place):
+1. The `-admin` ending is recognised only on the sign-up page, and only when the person signing up is signed in as admin. Everywhere else (sign in, password reset, a sign-up by anyone else) an address ending in `-admin` is just an invalid address.
+2. When the person is not signed in as admin, or the `test-email` property is not set, a sign-up with `-admin` fails with exactly "invalid email".
+3. The account's address is the one without `-admin`. It is used for sign-in and everything else, and it must be unique: if any account (test or real) already has it, the sign-up fails as a normal sign-up with a taken address does.
+4. `-admin` is never stored and never shown: not on any page, in any email, in the account list or in a log.
+5. Every email the host sends for a test account (the verification email and any later one) goes to the `test-email` address read at the moment of sending, not to the account's address. Verifying through that email verifies the account.
+6. A test account can be used only while at least one admin is signed in. When no admin is signed in, signing in to it (with the right password) and every request from an existing session of it get exactly "this account is no longer active." and nothing else. A wrong password gets the normal wrong-password message, so a stranger cannot find out which accounts are test accounts. When an admin signs in again, the test account works again.
+
+**Open questions for review** (the plan follows the assumption in brackets until told otherwise):
+- Is this milestone meant for PR Explainer? [Yes, as asked; the host is built here.]
+- Which admin must be signed in for a test account to work: the one who created it, or any admin? [Any admin.]
+- Does a test account work again when an admin signs back in? [Yes.]
+- Should the admin be able to delete test accounts, so an address can be reused? [Not in this milestone; listed under Ideas after 1.0.]
+
+**Order.** The PRs go in number order. 12.1 to 12.6 build the host, accounts, email, sign-in and pages. 12.7 adds admins, 12.8 the settings file, and 12.9 to 12.11 test mode itself. Each PR is opened only after the one before it merges.
+
+### PR 12.0: Plan Milestone 12 (Small) ✅ Done
+- **Status:** Done ([#69](https://github.com/larry94555/PR-explainer/pull/69)).
+- **Why it's needed:** Testing sign-up and email verification needs a fresh email address each time, and an admin does not own enough real addresses to do that again and again.
+- **Problem it solves:** Adds this milestone to the roadmap and the matching feature to `features.md`: its goal, demo, what has to be built first, the test mode rules, open questions, order and PRs 12.1 to 12.11. No code changes.
+- **Unit tests added:** None (documentation only).
+- **How to test:** Read this section, the milestone overview and the PR status table, and confirm each PR is Small or Medium and lists why it is needed, the problem it solves, its unit tests and how to test it. Confirm the test mode rules match what you asked for.
+
+### Setup used by every Milestone 12 "How to test" section
+1. Do steps 1 and 5 of the setup at the top of this page (`npm install`, `npm test`). The extension, Ollama and Chrome are not needed for these PRs.
+2. Run `npm run host` to start the host at `http://localhost:8787`. Press **Ctrl+C** to stop it.
+3. Emails are written to `host/data/outbox/` as files instead of being sent (PR 12.3), so no mail server is needed.
+4. To start again from nothing, stop the host and delete the `host/data/` folder.
+
+### PR 12.1: Host skeleton (Small)
+- **Why it's needed:** Sign-up, verification and admin settings all live on a host, and the project has none.
+- **Problem it solves:** A new `host/` folder with a small Node HTTP server (`host/src/server.ts`), built and tested with the same TypeScript, Vitest and lint setup as the extension. `npm run host` starts it on port 8787 (changeable with `HOST_PORT`). It has one route, `GET /health`, which answers `ok`, and it creates `host/data/` (kept out of git) and `host/admin/` on start. `host/admin/` is the admin directory used by PR 12.8. `docs/developer.md` gets a short "The host" section.
+- **Unit tests added:** `server.test.ts` starts the server on a free port and checks `/health`, that an unknown route gets 404, and that the data and admin folders are created.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install`, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run host`. Open `http://localhost:8787/health` in a browser and confirm it shows `ok`.
+  3. Confirm `host\data` and `host\admin` now exist, and `git status` does not list `host\data`.
+
+### PR 12.2: Accounts and the sign-up API (Medium)
+- **Why it's needed:** There are no accounts to sign up for.
+- **Problem it solves:** An account store in `host/src/accounts.ts`, saved as a JSON file in `host/data/`, with an email address, a password hash (Node's `scrypt` with a salt), whether the address is verified, and a role (`user` for now). `POST /api/sign-up` takes an email and a password. Addresses are trimmed and compared without regard to case. An address that is not a valid email gets "invalid email"; an address that already has an account gets "this email is already registered"; a password under 8 characters gets "password must be at least 8 characters". A new account starts unverified.
+- **Unit tests added:** `accounts.test.ts` checks create, find by email in any case, the unique address rule, that the password is never stored in plain text, and that the file survives a restart. `signUp.test.ts` checks each error message and a successful sign-up.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`, `npm run lint` and `npm run build` and confirm all succeed.
+  2. Run `npm run host`. In a second Command Prompt run `curl -X POST http://localhost:8787/api/sign-up -H "Content-Type: application/json" -d "{\"email\":\"a@example.com\",\"password\":\"password1\"}"` and confirm it succeeds.
+  3. Run the same command again and confirm "this email is already registered". Change the email to `not-an-email` and confirm "invalid email".
+  4. Open `host\data\accounts.json` and confirm the password is not in it.
+
+### PR 12.3: One way to send email, with a test outbox (Small)
+- **Why it's needed:** Verification needs to send email, and test mode (PR 12.10) needs to change where a test account's email goes. If every email goes through one function, that change is made in one place.
+- **Problem it solves:** A `Mailer` interface with one function, `sendEmail(account, subject, body)`, in `host/src/mail/`. Two mailers: an **outbox** mailer (the default) that writes each email as a file in `host/data/outbox/` with its address, subject and body, and an **SMTP** mailer used when `SMTP_URL` is set. `sendEmail` takes the account, not a bare address, and picks the address itself, so no caller can send email around it.
+- **Unit tests added:** `outboxMailer.test.ts` checks the file's name and contents. `smtpMailer.test.ts` (fake SMTP transport) checks the message sent and that a failure is reported. `mailer.test.ts` checks the outbox is used when `SMTP_URL` is not set.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`, `npm run lint` and `npm run build` and confirm all succeed.
+  2. Run `npm run host:send-test-email -- a@example.com` and confirm a new file in `host\data\outbox\` is addressed to `a@example.com`.
+
+### PR 12.4: Email verification (Medium)
+- **Why it's needed:** Without verification, anyone can sign up with someone else's address.
+- **Problem it solves:** After sign-up, the host sends a verification email through `sendEmail` with a link to `/verify?token=…`. The token is random, stored only as a hash, used once, and expires after 24 hours. Opening the link marks the account verified. `POST /api/resend-verification` sends a new link and makes the old one stop working. An unverified account cannot sign in (PR 12.5 enforces this) and gets "please verify your email first".
+- **Unit tests added:** `verification.test.ts` (fake clock) checks the email is sent, the link verifies once and only once, an expired or replaced token is refused, and only the token's hash is stored.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`, `npm run lint` and `npm run build` and confirm all succeed.
+  2. Start from nothing (setup step 4), run `npm run host`, and sign up as in PR 12.2.
+  3. Open the newest file in `host\data\outbox\`, open its link in a browser, and confirm it says the email is verified. Open the link again and confirm it is refused.
+
+### PR 12.5: Sign in, sessions and sign out (Medium)
+- **Why it's needed:** An account is no use without a way to sign in, and test mode depends on knowing who is signed in.
+- **Problem it solves:** `POST /api/sign-in` checks the email and password and starts a session: a random id in an `HttpOnly`, `SameSite=Strict` cookie, stored on the host with the account and an expiry (7 days). `POST /api/sign-out` ends it. `GET /api/me` returns the signed-in account's email. Every route that needs an account goes through one `requireAccount` check, which PR 12.11 extends. A wrong email or password gets "wrong email or password" (the same message for both); an unverified account gets "please verify your email first".
+- **Unit tests added:** `sessions.test.ts` (fake clock) checks sign-in, the cookie's flags, expiry, sign-out, and that a session from before sign-out is refused. `signIn.test.ts` checks each message, and that a wrong email and a wrong password get the same one.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`, `npm run lint` and `npm run build` and confirm all succeed.
+  2. With a verified account from PR 12.4, run `curl -c cookies.txt -X POST http://localhost:8787/api/sign-in -H "Content-Type: application/json" -d "{\"email\":\"a@example.com\",\"password\":\"password1\"}"`, then `curl -b cookies.txt http://localhost:8787/api/me`, and confirm it shows `a@example.com`.
+  3. Run `curl -b cookies.txt -X POST http://localhost:8787/api/sign-out`, then the `/api/me` command again, and confirm it is refused.
+
+### PR 12.6: Sign-up, sign-in and account pages (Medium)
+- **Why it's needed:** Steps 12.2 to 12.5 can only be tried with `curl`. The admin needs pages to go through sign-up the way a user does.
+- **Problem it solves:** Plain HTML pages served by the host, with light and dark themes: **Sign up** (`/sign-up`), **Sign in** (`/sign-in`), **Check your email** (after sign-up, with **Resend**), **Verified** and **Account** (`/account`, showing the email and a **Sign out** button). Each page shows the API's error message as it is, so the exact messages in this milestone reach the user.
+- **Unit tests added:** `pages.test.ts` (jsdom) checks each form sends the right request and shows the returned message, and that **Sign out** returns to **Sign in**.
+- **Screenshots:** each page, and the sign-up page showing "invalid email", light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`, `npm run lint` and `npm run build` and confirm all succeed.
+  2. Start from nothing, run `npm run host`, open `http://localhost:8787/sign-up` and sign up.
+  3. Open the link from the newest outbox file, sign in at `/sign-in`, and confirm `/account` shows your email. Click **Sign out**.
+
+### PR 12.7: Admin accounts (Small)
+- **Why it's needed:** Test mode is only for an admin, and there is no admin.
+- **Problem it solves:** Accounts get a second role, `admin`. `npm run host:make-admin -- <email>` makes an existing, verified account an admin; there is no way to become admin from a page. `/api/me` and the **Account** page show "Signed in as admin" for an admin. The host can answer "is any admin signed in right now?" (any admin session that has not expired or signed out), which PR 12.11 uses.
+- **Unit tests added:** `admin.test.ts` checks the command, that an unknown or unverified account is refused, the role in `/api/me`, and "is any admin signed in" before sign-in, after sign-in, after sign-out and after expiry.
+- **Screenshots:** the **Account** page for an admin, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`, `npm run lint` and `npm run build` and confirm all succeed.
+  2. With a verified account, run `npm run host:make-admin -- a@example.com`, then sign in and confirm **Account** says "Signed in as admin".
+
+### PR 12.8: The admin settings file and its `test-email` property (Small)
+- **Why it's needed:** Test mode needs somewhere to say where a test account's email goes, which the admin can change without changing code or restarting the host.
+- **Problem it solves:** `host/src/adminSettings.ts` reads the file `admin-settings` in the host's admin directory (`host/admin/admin-settings`), one `name=value` per line, with `#` for comments. The first property is `test-email`. The file is read each time a value is needed, so an edit takes effect at once. A missing file, a missing `test-email` line, an empty value or a value that is not a valid email all mean "not set"; an invalid value is also logged once as a warning. The file is kept out of git, and `host/admin/admin-settings.example` shows the format.
+- **Unit tests added:** `adminSettings.test.ts` checks a set value, comments and spaces, each "not set" case, the warning, and that an edit is seen without a restart.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`, `npm run lint` and `npm run build` and confirm all succeed.
+  2. Copy `host\admin\admin-settings.example` to `host\admin\admin-settings` and set `test-email=` to an address of yours.
+  3. Run `npm run host:admin-settings` and confirm it prints that address. Clear the value, run it again, and confirm it prints "test-email is not set".
+
+### PR 12.9: Sign up with "-admin" while signed in as admin (Medium)
+- **Why it's needed:** This is how the admin asks for a test account: by adding `-admin` to the end of any address on the sign-up page.
+- **Problem it solves:** `POST /api/sign-up` recognises an address that ends in `-admin` (in any case, after trimming). If the request comes from an admin's session and `test-email` is set (PR 12.8), the account is created with the address without `-admin`, marked as a test account, and the rest of sign-up runs as normal. Otherwise the sign-up fails with exactly "invalid email". The address without `-admin` must be a valid email and must be unique, as in PR 12.2, so `joe.smith@gmail.com-admin` fails when `joe.smith@gmail.com` exists. `-admin` is removed before anything is stored, logged or sent back, so it is never visible. Sign-in and every other form treat an address ending in `-admin` as invalid. Covers rules 1 to 4 above.
+- **Unit tests added:** `testSignUp.test.ts` checks an admin with `test-email` set gets a test account under the shorter address; "invalid email" for a signed-out person, a signed-in non-admin, and an admin with `test-email` not set; a taken address; `joe.smith@gmail.com-admin-admin` and `-admin` alone; that no stored data, reply or log line contains `-admin`; and that a normal sign-up by an admin is unchanged.
+- **Screenshots:** the sign-up page after a test sign-up (showing the address without `-admin`), and the "invalid email" message, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`, `npm run lint` and `npm run build` and confirm all succeed.
+  2. Set `test-email` (PR 12.8), sign in as admin, open `/sign-up` and sign up as `joe.smith@gmail.com-admin`. Confirm the next page shows `joe.smith@gmail.com`, and `host\data\accounts.json` has no `-admin` in it.
+  3. Sign up as `joe.smith@gmail.com-admin` again and confirm "this email is already registered".
+  4. Sign out, open `/sign-up`, try `jane@example.com-admin`, and confirm "invalid email". Sign in as admin, clear `test-email`, try again, and confirm "invalid email".
+
+### PR 12.10: Send a test account's email to the test email (Small)
+- **Why it's needed:** The admin does not own `joe.smith@gmail.com`, so its verification email would never be seen, and a real person could get it.
+- **Problem it solves:** `sendEmail` (PR 12.3) sends a test account's email to the `test-email` address read at the moment of sending, instead of the account's address. Because every email goes through `sendEmail`, this covers verification, resends and any email added later. The email's text still names the account's address (`joe.smith@gmail.com`), never `-admin`. If `test-email` has been cleared since sign-up, nothing is sent and the admin sees "test-email is not set" on the **Check your email** page; the email never falls back to the account's own address. Covers rule 5 above.
+- **Unit tests added:** `mailer.test.ts` checks a test account's email goes to `test-email`, a normal account's email is unchanged, a changed `test-email` is used at once, and nothing is sent when it is not set. `verification.test.ts` checks the link from the redirected email verifies the test account.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`, `npm run lint` and `npm run build` and confirm all succeed.
+  2. Do step 2 of PR 12.9. Open the newest outbox file and confirm it is addressed to your `test-email`, not to `joe.smith@gmail.com`.
+  3. Open its link and confirm the account is verified. Sign in as `joe.smith@gmail.com` in a private window and confirm **Account** shows it.
+
+### PR 12.11: Test accounts work only while an admin is signed in (Medium)
+- **Why it's needed:** Test accounts use addresses that belong to other people. They must not stay usable after the admin's test is over.
+- **Problem it solves:** `requireAccount` (PR 12.5) and sign-in check, for a test account, whether any admin is signed in (PR 12.7). If none is, sign-in with the right password and every request from an existing session get exactly "this account is no longer active." with no other detail, and the pages show only that message. A wrong password still gets "wrong email or password", so nobody can tell a test account from a real one. When an admin signs in again, the test account works again. Normal accounts are never affected. Covers rule 6 above.
+- **Unit tests added:** `testAccountAccess.test.ts` checks a test account works while an admin is signed in; after the admin signs out (or the admin session expires), sign-in and an existing session get exactly the message; a wrong password gets the normal message; it works again when an admin signs back in; and a normal account is unaffected throughout.
+- **Screenshots:** the "this account is no longer active." page, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm test`, `npm run lint` and `npm run build` and confirm all succeed.
+  2. With the verified test account from PR 12.10, keep the admin signed in in one window and sign in as `joe.smith@gmail.com` in a private window. Confirm **Account** works.
+  3. Sign the admin out. Reload **Account** in the private window and confirm it shows only "this account is no longer active." Sign out there and sign in again with the right password: same message. Try a wrong password and confirm "wrong email or password".
+  4. Sign the admin back in and confirm the test account can sign in again.
+
+---
+
 ## Ideas after 1.0
 These are not planned yet and would each get their own milestone:
 - Support other local servers (LM Studio, llama.cpp server) through the `LlmClient` interface.
 - "Explain this whole file" and "Summarize this PR" buttons.
 - Turn a concern into a draft GitHub review comment with one click.
 - Firefox support.
+- Let an admin delete test accounts (Milestone 12), so a test address can be used again.

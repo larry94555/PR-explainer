@@ -54,3 +54,6 @@ Background work (hover, Explain ahead, whole-PR prefetch) pauses while the lapto
 
 ## 16. Chrome's built-in model as a fallback (planned, PR 11.13)
 On machines that support it, Chrome's own on-device model can be used instead of Ollama, so the extension works before Ollama is installed. Code still stays on the laptop.
+
+## 17. Admin test mode for sign-up (planned, Milestone 12)
+A host (server) with sign-up, email verification, sign-in and admin accounts, which the project does not have yet, so Milestone 12 adds it. While signed in as admin, adding `-admin` to the end of any address on the sign-up page (for example `joe.smith@gmail.com-admin`) creates a test account as `joe.smith@gmail.com`. `-admin` is never stored or shown, and the address must not already have an account. Every email for a test account, including verification, goes to the `test-email` property in the `admin-settings` file in the host's admin directory. Without an admin signed in, or with `test-email` not set, `-admin` gets "invalid email". A test account works only while an admin is signed in; otherwise it gets "this account is no longer active." and nothing more. This lets an admin go through sign-up as many times as they like with any address.
