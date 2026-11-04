@@ -3,12 +3,18 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  AHEAD_SHARE_GOAL,
+  AHEAD_TABLE_HEADER,
+  aheadFailures,
   appendReport,
+  formatAheadReport,
+  formatAheadTable,
   formatDate,
   formatGpuShare,
   formatMs,
   formatReport,
   formatRuns,
+  formatShare,
   goalVerdicts,
   formatTable,
   LATENCY_DOC_INTRO,
@@ -17,7 +23,9 @@ import {
   parseSample,
   slowest,
   summarize,
+  summarizeAhead,
   tokensPerSecond,
+  type AheadLineResult,
   type BenchReport,
   type BenchRun,
 } from '../scripts/benchStats.ts';
@@ -269,7 +277,7 @@ describe('appendReport', () => {
 
 describe('parseBenchArgs', () => {
   it('defaults to 3 runs, the first installed model, and saving', () => {
-    expect(parseBenchArgs([])).toEqual({ models: [], runs: 3, save: true });
+    expect(parseBenchArgs([])).toEqual({ models: [], runs: 3, save: true, ahead: false });
   });
 
   it('reads models, --runs, --url and --no-save in either form', () => {
@@ -287,7 +295,12 @@ describe('parseBenchArgs', () => {
       runs: 5,
       llmUrl: 'http://127.0.0.1:1234',
       save: false,
+      ahead: false,
     });
+  });
+
+  it('reads --ahead (PR 9.11)', () => {
+    expect(parseBenchArgs(['m', '--ahead'])).toMatchObject({ models: ['m'], ahead: true });
   });
 
   it('refuses unknown options and bad run counts', () => {
@@ -351,5 +364,161 @@ describe('goalVerdicts (PR 9.9)', () => {
       'flaky did not finish every run (median 900 ms of those that did).',
     );
     expect(goalVerdicts([model('down', 'failed')])).toBe('down has no finished runs.');
+  });
+});
+
+// PR 9.11: the ahead mode explains each line ahead, then times a click on each.
+describe('the ahead mode', () => {
+  const line = (
+    name: string,
+    aheadMs: number | string,
+    clickMs: number | string,
+    fromCache = true,
+  ): AheadLineResult => ({
+    line: name,
+    ahead: typeof aheadMs === 'number' ? ok(aheadMs) : { ok: false, error: aheadMs },
+    click: typeof clickMs === 'number' ? ok(clickMs) : { ok: false, error: clickMs },
+    fromCache,
+  });
+  const lines = [
+    line('a.ts:1', 3000, 4),
+    line('a.ts:2', 5000, 6),
+    line('a.ts:3', 4000, 5),
+    line('a.ts:4', 'Ollama stopped', 4200, false),
+  ];
+
+  it('sums up the time ahead and the share of clicks within 2 seconds', () => {
+    const s = summarizeAhead(lines);
+    expect(s).toEqual({
+      lines: 4,
+      aheadFailed: 1,
+      aheadSkipped: 0,
+      aheadMedianMs: 4000,
+      aheadTotalMs: 12_000,
+      clicksWithinGoal: 3,
+      share: 0.75,
+      clickMedianMs: 5.5,
+      clickSlowestMs: 4200,
+      fromCache: 3,
+    });
+    expect(formatShare(s)).toBe('3 of 4 (75%)');
+  });
+
+  it('counts a failed click as not within the goal, and a click of exactly 2 s as too slow', () => {
+    const s = summarizeAhead([line('a', 3000, 'boom'), line('b', 3000, 2000), line('c', 1, 1999)]);
+    expect(s.clicksWithinGoal).toBe(1);
+    expect(s.share).toBeCloseTo(1 / 3);
+    expect(summarizeAhead([])).toMatchObject({ lines: 0, share: 0, aheadTotalMs: 0 });
+    expect(AHEAD_SHARE_GOAL).toBe(0.9);
+  });
+
+  it('counts lines not tried ahead apart from those that failed', () => {
+    const notTried: AheadLineResult = { line: 'a.ts:5', click: ok(4100), fromCache: false };
+    const s = summarizeAhead([...lines, notTried]);
+    expect(s).toMatchObject({ lines: 5, aheadFailed: 1, aheadSkipped: 1, clicksWithinGoal: 3 });
+    expect(formatAheadTable([{ model: 'm', page: 'p', lines: [...lines, notTried] }])).toContain(
+      '| m | 5 (1 failed ahead, 1 not tried) |',
+    );
+    expect(aheadFailures([{ model: 'm', page: 'p', lines: [notTried] }])).toEqual([]);
+  });
+
+  it('writes a row per model and lists the lines that failed', () => {
+    const results = [{ model: 'm', page: 'page.html', ranOn: '100% CPU', lines }];
+    const table = formatAheadTable(results);
+    expect(table.split('\n')[0]).toBe(`| ${AHEAD_TABLE_HEADER.join(' | ')} |`);
+    expect(table).toContain('| Clicks within 2 s |');
+    expect(table).toContain(
+      '| m (100% CPU) | 4 (1 failed ahead) | 4.0 s | 12.0 s | 3 of 4 (75%) | 6 ms | 4.2 s | 3 of 4 |',
+    );
+    expect(aheadFailures(results)).toEqual(['- m, a.ts:4, ahead: Ollama stopped']);
+  });
+
+  it('writes the section npm run bench -- --ahead adds to docs/latency.md', () => {
+    const text = formatAheadReport({
+      startedAt: new Date(2026, 10, 4, 7, 5),
+      machine: {
+        os: 'Windows 11 Pro',
+        cpu: 'CPU (16 threads)',
+        ramBytes: 16 * 1024 ** 3,
+        gpus: [],
+      },
+      llmUrl: 'http://localhost:11434',
+      temperature: 0.2,
+      maxResponseTokens: 300,
+      results: [{ model: 'm', page: 'page.html', lines }],
+    });
+    expect(text).toMatch(/^## 2026-11-04 07:05 · Explain ahead · m\n/);
+    expect(text).toContain('- **Machine:** Windows 11 Pro; CPU (16 threads); 16.0 GB RAM');
+    expect(text).toContain('each added line of `page.html` is explained ahead');
+    expect(text).toContain('| m | 4 (1 failed ahead) |');
+    expect(text).toContain('Failed lines:\n\n- m, a.ts:4, ahead: Ollama stopped\n');
+  });
+});
+
+describe('explaining ahead, then clicking (review on #56)', () => {
+  // A fake model behind a cache, as in the service worker: an answer explained
+  // ahead is in the cache when its line is clicked.
+  function fakeModel(failOn: string) {
+    const cache = new Set<string>();
+    const asked: string[] = [];
+    const ask = async (line: { key: string; context: string }, cause: 'ahead' | 'click') => {
+      asked.push(`${cause} ${line.key}`);
+      if (cache.has(line.key)) return { run: ok(2), fromCache: true };
+      if (cause === 'ahead' && line.key === failOn) {
+        return { run: { ok: false as const, error: 'Ollama stopped' }, fromCache: false };
+      }
+      cache.add(line.key);
+      return { run: ok(cause === 'ahead' ? 3000 : 3100), fromCache: false };
+    };
+    return { ask, asked };
+  }
+  const lines = ['l1', 'l2', 'l3', 'l4'].map((key) => ({ key, context: key }));
+
+  it('stops explaining ahead at the first failed line, as Explain ahead does', async () => {
+    const { explainAheadThenClick } = await import('../scripts/benchExplain.ts');
+    const model = fakeModel('l2');
+    const results = await explainAheadThenClick(lines, model.ask);
+    expect(model.asked).toEqual([
+      'ahead l1',
+      'ahead l2',
+      'click l1',
+      'click l2',
+      'click l3',
+      'click l4',
+    ]);
+    expect(results.map((r) => [r.line, r.ahead?.ok, r.fromCache])).toEqual([
+      ['l1', true, true],
+      ['l2', false, false],
+      ['l3', undefined, false],
+      ['l4', undefined, false],
+    ]);
+    const s = summarizeAhead(results);
+    expect(s).toMatchObject({ aheadFailed: 1, aheadSkipped: 2, clicksWithinGoal: 1, share: 0.25 });
+  });
+
+  it('explains every line ahead when none fails', async () => {
+    const { explainAheadThenClick } = await import('../scripts/benchExplain.ts');
+    const results = await explainAheadThenClick(lines, fakeModel('none').ask);
+    expect(results.every((r) => r.ahead?.ok && r.fromCache)).toBe(true);
+  });
+});
+
+describe('the lines the ahead mode explains', () => {
+  it('are the added lines of the saved diff page, each with the request a click sends', async () => {
+    const { aheadLines, AHEAD_PAGE } = await import('../scripts/benchExplain.ts');
+    const lines = aheadLines(readFileSync(AHEAD_PAGE, 'utf8'));
+    expect(lines.map((l) => l.key)).toEqual([
+      'tests/manifest.test.ts:48',
+      'tests/manifest.test.ts:50',
+      'tests/manifest.test.ts:59',
+      'tests/manifest.test.ts:60',
+      'tests/manifest.test.ts:61',
+      'tests/manifest.test.ts:62',
+      'tests/manifest.test.ts:63',
+    ]);
+    expect(lines[0]!.context).toMatch(
+      /^File: tests\/manifest\.test\.ts \(TypeScript\)\nClicked line: added, line 48 of the new file\n/,
+    );
+    expect(lines[0]!.context).toContain('Surrounding diff (the clicked line starts with >):');
   });
 });

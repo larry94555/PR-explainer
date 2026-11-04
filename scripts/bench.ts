@@ -1,7 +1,7 @@
 // `npm run bench` (PR 8.2): times explanations on the local Ollama, so each
 // latency change in Milestone 8 has a repeatable before and after.
 //
-//   npm run bench -- [model ...] [--runs N] [--url URL] [--no-save]
+//   npm run bench -- [model ...] [--runs N] [--url URL] [--no-save] [--ahead]
 //
 // Sends the real explain prompt for each sample in bench/ to each model named
 // (or the first installed model when none is), N times each (3 by default),
@@ -9,6 +9,11 @@
 // details, to the end of docs/latency.md. Node cannot read the extension's
 // settings, so the model comes from the command line and every other setting
 // is the extension's default.
+//
+// With --ahead (PR 9.11) it runs the ahead mode instead: each added line of a
+// saved GitHub diff page is explained ahead, as Explain ahead does, and then a
+// click on each line is timed, to show how many clicks are answered within
+// 2 seconds once Explain ahead has run.
 import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -18,6 +23,7 @@ import { runnerImport } from 'vite';
 import type * as BenchExplain from './benchExplain.ts';
 import {
   appendReport,
+  formatAheadReport,
   formatMs,
   formatReport,
   parseBenchArgs,
@@ -144,6 +150,30 @@ async function main(): Promise<number> {
   const samples = loadSamples();
   const startedAt = new Date();
   const machine = await machineInfo(llmUrl);
+
+  if (args.ahead) {
+    console.log(`Explain ahead with ${models.join(', ')} at ${llmUrl}, on ${bench.AHEAD_PAGE}`);
+    const aheadResults = await bench.runAhead(explainer, models, samples[0]!);
+    const section = formatAheadReport({
+      startedAt,
+      machine,
+      llmUrl,
+      temperature: settings.temperature,
+      maxResponseTokens: settings.maxResponseTokens,
+      results: aheadResults,
+    });
+    console.log(`\n${section}`);
+    if (!aheadResults.some((r) => r.lines.some((l) => l.click.ok))) {
+      console.error('Every click failed, so docs/latency.md was not changed.');
+      return 1;
+    }
+    if (args.save) {
+      const existing = existsSync(LATENCY_DOC) ? readFileSync(LATENCY_DOC, 'utf8') : null;
+      writeFileSync(LATENCY_DOC, appendReport(existing, section));
+      console.log('Added to docs/latency.md');
+    }
+    return 0;
+  }
   console.log(
     `Benchmarking ${models.join(', ')} at ${llmUrl}: ${samples.length} samples × ${args.runs} runs`,
   );

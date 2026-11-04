@@ -1,13 +1,21 @@
 // PR 8.8: the latency report behind `npm run bench:history`. The script
 // itself runs git and a real Ollama and is tested by hand.
 import { execFileSync } from 'node:child_process';
-import { formatReport, type BenchReport, type BenchRun } from '../scripts/benchStats.ts';
 import {
+  formatReport,
+  type AheadResult,
+  type BenchReport,
+  type BenchRun,
+} from '../scripts/benchStats.ts';
+import {
+  aheadMeetsGoal,
+  bestAheadModel,
   conclusion,
   demote,
   dominantTerm,
   fastest,
   formatHistoryReport,
+  freshStep,
   GOAL_MS,
   HISTORY_STEPS,
   lastSection,
@@ -68,6 +76,29 @@ describe('history steps', () => {
         isAncestor = false;
       }
       expect(isAncestor, `${step.label} (${step.ref}) is in this branch's history`).toBe(true);
+    }
+  });
+
+  it('adds the Milestone 9 steps after the Milestone 8 ones (PR 9.11)', () => {
+    expect(HISTORY_STEPS.map((s) => s.label)).toEqual([
+      'Baseline (8.2)',
+      'Model kept loaded (8.3)',
+      'Shorter answers (8.4)',
+      'Smaller prompts (8.5)',
+      'End of Milestone 8 (8.6 to 8.8)',
+      'Thinking off (9.5)',
+      'Fewer round trips (9.7)',
+      'One-sentence answers (9.8)',
+      'Now (9.9 to 9.11)',
+    ]);
+    // Each step comes after the one before it.
+    const refs = HISTORY_STEPS.slice(0, -1).map((s) => s.ref);
+    for (let i = 1; i < refs.length; i++) {
+      expect(() =>
+        execFileSync('git', ['merge-base', '--is-ancestor', refs[i - 1]!, refs[i]!], {
+          stdio: 'ignore',
+        }),
+      ).not.toThrow();
     }
   });
 });
@@ -283,11 +314,12 @@ describe('the conclusion', () => {
 });
 
 describe('the report section', () => {
+  const last = HISTORY_STEPS.length - 1;
+  // From 20 s at the baseline down to 1.6 s now.
+  const at = (i: number, ms: number) => Math.round(ms - (i * 18_400) / last);
   const steps = HISTORY_STEPS.map((step, i) => ({
     step,
-    section: benchSection([
-      { model: 'm', totals: [20_000 - i * 4600, 21_000 - i * 4600, 19_000 - i * 4600] },
-    ]),
+    section: benchSection([{ model: 'm', totals: [at(i, 20_000), at(i, 21_000), at(i, 19_000)] }]),
   }));
   const report: HistoryReport = {
     startedAt: '2026-11-02 09:30',
@@ -301,7 +333,7 @@ describe('the report section', () => {
     expect(text).toMatch(/^## Latency report 2026-11-02 09:30\n/);
     expect(text).toContain('| Step | m median | m slowest |');
     expect(text).toContain('| Baseline (8.2) | 20.0 s | 21.0 s |');
-    expect(text).toContain('| Now (8.6 to 8.8) | 1.6 s | 2.6 s |');
+    expect(text).toContain('| Now (9.9 to 9.11) | 1.6 s | 2.6 s |');
     expect(text).toContain(
       '### Conclusion\n\n**Goal met.** With the default settings, m explains in 1.6 s',
     );
@@ -324,5 +356,159 @@ describe('the report section', () => {
 
   it('demotes headings by one level', () => {
     expect(demote('## a\n### b\ntext ## c')).toBe('### a\n#### b\ntext ## c');
+  });
+});
+
+// PR 9.11: fresh answers with the model warm, and clicks after Explain ahead.
+describe('fresh answers and Explain ahead', () => {
+  const aheadLines = (clickMs: number[]): AheadResult['lines'] =>
+    clickMs.map((ms, i) => ({
+      line: `a.ts:${i + 1}`,
+      ahead: run(4000),
+      click: run(ms),
+      fromCache: ms < 100,
+    }));
+  const ahead = (model: string, clickMs: number[]): AheadResult => ({
+    model,
+    page: 'page.html',
+    lines: aheadLines(clickMs),
+  });
+  const floor: FloorResult = {
+    model: 'm',
+    sample: 'Short TypeScript line',
+    ranOn: '100% CPU',
+    runs: [run(3000, { totalMs: 2900, loadMs: 5, promptMs: 400, answerMs: 2495 })],
+  };
+
+  it('sums up fresh runs the way a step is read', () => {
+    expect(
+      freshStep({ model: 'm', ranOn: '100% GPU', runs: [run(1000), run(3000), run(2000)] }),
+    ).toEqual({
+      model: 'm',
+      runs: 3,
+      failed: 0,
+      medianMs: 2000,
+      slowestMs: 3000,
+      ranOn: '100% GPU',
+    });
+    expect(freshStep({ model: 'm', runs: [run(1000), { ok: false, error: 'x' }] })).toMatchObject({
+      runs: 2,
+      failed: 1,
+    });
+  });
+
+  it('meets the goal after ahead when at least 90% of clicks are within 2 s', () => {
+    expect(aheadMeetsGoal(ahead('m', [5, 5, 5, 5, 5, 5, 5, 5, 5, 3000]))).toBe(true);
+    expect(aheadMeetsGoal(ahead('m', [5, 5, 5, 5, 5, 5, 5, 5, 3000, 3000]))).toBe(false);
+    expect(aheadMeetsGoal(ahead('m', []))).toBe(false);
+  });
+
+  it('says the goal is met for fresh answers, picking the model from the warm runs', () => {
+    const text = conclusion(
+      // The last step's first run included loading the model, so it looks slow.
+      [{ model: 'm', medianMs: 6000, failed: 0 }],
+      [],
+      {
+        fresh: [{ model: 'm', medianMs: 1500, slowestMs: 1900, ranOn: '100% GPU', failed: 0 }],
+        ahead: [ahead('m', [4, 6, 5])],
+      },
+    );
+    expect(text).toMatch(
+      /^\*\*Goal met\.\*\* With the default settings and the model warm, m writes a fresh answer in 1\.5 s \(median of every sample, on 100% GPU\)\./,
+    );
+    expect(text).toContain(
+      'After Explain ahead had explained the 3 lines of `page.html` (4.0 s per line, 12.0 s in all with m), 3 of 3 (100%) clicks were answered within 2.0 s, median 5 ms.',
+    );
+  });
+
+  it('says the goal is met only after Explain ahead, with the floor for fresh answers', () => {
+    const text = conclusion([{ model: 'm', medianMs: 9000, failed: 0 }], [floor], {
+      fresh: [{ model: 'm', medianMs: 4500, ranOn: '100% CPU', failed: 0 }],
+      ahead: [ahead('m', [4, 6, 5, 7, 5, 5, 5, 5, 5, 5])],
+    });
+    expect(text).toMatch(
+      /^\*\*Goal met only after Explain ahead, with m\.\*\* m takes 4\.5 s \(median of every sample, on 100% CPU\) for a fresh answer\./,
+    );
+    expect(text).toContain('10 of 10 (100%) clicks were answered within 2.0 s');
+    expect(text).toContain(
+      'a fresh answer, such as a selection or a line the work has not reached, is not',
+    );
+    expect(text).toMatch(/The floor on this laptop is \*\*3\.0 s\*\*/);
+    expect(text).toMatch(/writing the answer limits it/);
+  });
+
+  it('says the goal is met for neither, with the share after ahead and the floor', () => {
+    const text = conclusion([{ model: 'm', medianMs: 9000, failed: 0 }], [floor], {
+      fresh: [{ model: 'm', medianMs: 4500, failed: 0 }],
+      ahead: [ahead('m', [5, 5, 3000, 3000])],
+    });
+    expect(text).toMatch(/^\*\*Goal not met\.\*\* The fastest model, m, takes 4\.5 s/);
+    expect(text).toContain('2 of 4 (50%) clicks were answered within 2.0 s');
+    expect(text).toMatch(/Next step: The model runs on 100% CPU/);
+  });
+
+  it('picks a model that meets the goal after ahead even when another is fastest fresh (review on #56)', () => {
+    // a is faster fresh but only 5 of 7 clicks come in time; b gets all 7.
+    const text = conclusion([], [floor], {
+      fresh: [
+        { model: 'a', medianMs: 3000, failed: 0 },
+        { model: 'b', medianMs: 5000, failed: 0 },
+      ],
+      ahead: [ahead('a', [5, 5, 5, 5, 5, 3000, 3000]), ahead('b', [5, 5, 5, 5, 5, 5, 5])],
+    });
+    expect(text).toMatch(
+      /^\*\*Goal met only after Explain ahead, with b\.\*\* The fastest model for fresh answers, a, takes 3\.0 s/,
+    );
+    expect(text).toContain('7 of 7 (100%) clicks were answered within 2.0 s');
+    expect(text).toContain('in all with b)');
+  });
+
+  it('prefers the most clicks in time, then the quickest ahead, among models that meet it', () => {
+    const quick: AheadResult = { ...ahead('quick', [5, 5]), lines: aheadLines([5, 5]) };
+    quick.lines.forEach((l) => (l.ahead = run(1000)));
+    expect(bestAheadModel([ahead('slow', [5, 5]), quick, ahead('short', [5, 3000])])?.model).toBe(
+      'quick',
+    );
+    expect(bestAheadModel([ahead('x', [3000])])).toBeUndefined();
+  });
+
+  it('reports a goal met after ahead even when no model finished every fresh run', () => {
+    const text = conclusion([], [], {
+      fresh: [{ model: 'm', runs: 3, failed: 1, medianMs: 4000 }],
+      ahead: [ahead('m', [5, 5, 5])],
+    });
+    expect(text).toMatch(
+      /^\*\*Goal met only after Explain ahead, with m\.\*\* No model finished every fresh run \(m \(1 of 3 runs failed\)\), so fresh answers are not judged\./,
+    );
+  });
+
+  it('gives no conclusion when no model finished every fresh run', () => {
+    expect(
+      conclusion([{ model: 'm', medianMs: 1000, failed: 0 }], [], {
+        fresh: [{ model: 'm', runs: 3, failed: 3 }],
+      }),
+    ).toMatch(/^\*\*No conclusion\.\*\* No model finished every run in the fresh answers: m/);
+  });
+
+  it('adds the fresh and after-ahead tables to the report, before the conclusion', () => {
+    const text = formatHistoryReport({
+      startedAt: '2026-11-04 07:05',
+      runsPerSample: 3,
+      steps: [],
+      floors: [floor],
+      fresh: [{ model: 'm', ranOn: '100% CPU', runs: [run(4000), run(5000), run(4500)] }],
+      ahead: [ahead('m', [4, 6, 5, 7, 5, 5, 5, 5, 5, 5])],
+    });
+    expect(text).toContain('### Fresh answers, model warm');
+    expect(text).toContain('| m (100% CPU) | 4.5 s | 5.0 s | 3 |');
+    expect(text).toContain('### Clicks after Explain ahead');
+    expect(text).toContain('Each added line of `page.html` explained ahead');
+    expect(text).toContain(
+      '| m | 10 | 4.0 s | 40.0 s | 10 of 10 (100%) | 5 ms | 7 ms | 10 of 10 |',
+    );
+    expect(text.indexOf('### Clicks after Explain ahead')).toBeLessThan(
+      text.indexOf('### Conclusion'),
+    );
+    expect(text).toContain('**Goal met only after Explain ahead, with m.**');
   });
 });

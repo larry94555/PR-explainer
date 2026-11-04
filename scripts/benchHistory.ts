@@ -10,6 +10,11 @@
 // model already loaded. It adds one section to docs/latency.md: a row per
 // step, the conclusion (goal met, or the floor and what limits it), and each
 // step's full tables.
+//
+// Since PR 9.11 it also times fresh answers with the current code and the
+// model warm (every sample, no cache), and runs the ahead mode of
+// `npm run bench -- --ahead`, so the conclusion can say whether 2 seconds is
+// met for fresh answers, only for clicks after Explain ahead, or for neither.
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
@@ -31,6 +36,7 @@ import {
   HISTORY_STEPS,
   lastSection,
   type FloorResult,
+  type FreshResult,
   type HistoryReport,
 } from './latencyReport.ts';
 
@@ -93,6 +99,8 @@ async function main(): Promise<number> {
     runsPerSample: args.runs,
     steps: [],
     floors: [],
+    fresh: [],
+    ahead: [],
   };
 
   for (const step of HISTORY_STEPS) {
@@ -133,6 +141,30 @@ async function main(): Promise<number> {
     if (ranOn) floor.ranOn = ranOn;
     report.floors.push(floor);
   }
+
+  // Fresh answers: every sample with the current code, the model loaded first.
+  const samplesInOrder = [...samples].sort((a, b) => a.name.localeCompare(b.name));
+  console.log('\n=== Fresh answers, model warm (HEAD) ===');
+  for (const model of models) {
+    await now.explain(shortest, model); // loads the model; not counted
+    const fresh: FreshResult = { model, runs: [] };
+    for (const sample of samplesInOrder) {
+      for (let i = 1; i <= args.runs; i++) {
+        const run = await now.explain(sample, model);
+        fresh.runs.push(run);
+        console.log(
+          `  ${model} · ${sample.name} · run ${i}/${args.runs} … ${run.ok ? formatMs(run.totalMs) : run.error}`,
+        );
+      }
+    }
+    const ranOn = await now.ranOn(model);
+    if (ranOn) fresh.ranOn = ranOn;
+    report.fresh!.push(fresh);
+  }
+
+  // Clicks after Explain ahead, as `npm run bench -- --ahead` measures them.
+  console.log(`\n=== Clicks after Explain ahead (${bench.AHEAD_PAGE}) ===`);
+  report.ahead = await bench.runAhead(now, models, shortest);
 
   const section = formatHistoryReport(report);
   console.log(`\n${section}`);
