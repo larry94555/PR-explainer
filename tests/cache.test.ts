@@ -446,6 +446,25 @@ describe('explain handler with the cache', () => {
     expect(keys).not.toContain('model');
   });
 
+  it("marks an answer Explain ahead wrote as prefetched, and a click's not (PR 10.7)", async () => {
+    const { handler, chatStream } = setup();
+    await handler({ ...payload, cause: 'ahead' });
+    const click = await handler(payload);
+    expect(chatStream).toHaveBeenCalledTimes(1);
+    expect(click).toMatchObject({ cached: { elapsedMs: 9800, prefetched: true } });
+    // Regenerate writes it again for the click, so it is no longer prefetched.
+    await handler({ ...payload, fresh: true });
+    const again = await handler(payload);
+    expect(again.status === 'done' && again.cached).toEqual({
+      elapsedMs: expect.any(Number),
+      savedAt: expect.any(Number),
+    });
+    // Explain on hover is not background work.
+    await handler({ ...payload, context: 'File: a.ts\n+y', cause: 'hover' });
+    const hovered = await handler({ ...payload, context: 'File: a.ts\n+y' });
+    expect(hovered.status === 'done' && hovered.cached).not.toHaveProperty('prefetched');
+  });
+
   it("saves the answer under the request's PR, so it is the open PR's (PR 10.2)", async () => {
     const { handler, storage } = setup();
     await handler(payload);

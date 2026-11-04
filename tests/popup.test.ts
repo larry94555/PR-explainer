@@ -1164,6 +1164,13 @@ describe('elapsed time', () => {
     expect(popup.elapsedMs).toBe(30);
   });
 
+  it('says "Prefetched" for an answer Explain ahead wrote in the background (PR 10.7)', () => {
+    const popup = openPopup(ANCHOR, { now });
+    popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b', { elapsedMs: 4200, prefetched: true });
+    expect(elapsedText()).toBe('Prefetched · took 4.2 s');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('starts the timer again from zero on Regenerate', () => {
     const popup = openPopup(ANCHOR, { now });
     popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b', { elapsedMs: 9800 });

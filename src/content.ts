@@ -444,6 +444,10 @@ const ahead = createExplainAhead({
   },
   lines: () => visibleAddedLines(document),
   onEvent: (event) => console.info(`[PR Explainer] ${describeAhead(event)}`),
+  // Whole PR's progress on the toolbar icon, for this tab (PR 10.7).
+  onProgress: (progress) => {
+    sendRequest('aheadProgress', progress).catch(() => {});
+  },
 });
 
 const prefetcher = createPrefetcher({

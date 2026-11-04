@@ -177,6 +177,15 @@ input:focus-visible {
   border-top: 1px solid var(--border);
 }
 
+/* A Queue group's counts (PR 10.7), above its events. */
+.queue-counts {
+  margin: 0;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* A Queue group's events (PR 10.3): one line each, oldest first. */
 .queue-events {
   list-style: none;

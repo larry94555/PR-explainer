@@ -158,8 +158,12 @@ const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult | HunkRes
     }
   },
 });
+// The toolbar button turns click-to-explain on and off for every tab, and
+// shows Whole PR's progress in a tab (PR 10.7).
+const toolbar = setupToolbarToggle({ action: chrome.action, storage: chrome.storage.local });
 chrome.tabs.onRemoved.addListener((tabId) => {
   warmup.forgetTab(tabId);
+  toolbar.forgetTab(tabId);
   // Only that tab's callers: a job shared with another tab keeps going.
   explainQueue.dropTab(tabId);
 });
@@ -181,6 +185,12 @@ new MessageRouter()
     return { cleared: true as const };
   })
   .on('openDebugWindow', async () => ({ window: await debugWindow.open() }))
+  .on('aheadProgress', async (payload, sender) => {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) return { shown: false };
+    await toolbar.showProgress(tabId, payload);
+    return { shown: true };
+  })
   .listen();
 // The debug window follows the log live over its own port.
 listenForDebugLogPorts(chrome.runtime, debugLog);
@@ -208,8 +218,6 @@ listenForChatPorts(
   }),
 );
 
-// The toolbar button turns click-to-explain on and off for every tab.
-setupToolbarToggle({ action: chrome.action, storage: chrome.storage.local });
 // Chrome clears the icon badge when the browser restarts. Having a startup
 // listener makes Chrome start this worker then, which redraws the badge above.
 chrome.runtime.onStartup.addListener(() => {});

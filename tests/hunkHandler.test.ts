@@ -106,7 +106,8 @@ describe('explaining a whole hunk in one request', () => {
       const click = await env.explain({ context: line.context, pr: PR });
       expect(click).toMatchObject({
         status: 'done',
-        cached: expect.any(Object),
+        // Background work wrote it, so the popup says "Prefetched" (PR 10.7).
+        cached: expect.objectContaining({ prefetched: true }),
         explanation: { what: `Line ${i + 1}.`, why: `Why ${i + 1}.` },
       });
     }

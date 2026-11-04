@@ -48,6 +48,12 @@
 // cannot be read (a private repository), it explains the lines on screen as
 // you scroll, up to the same limit.
 //
+// While Whole PR works, `onProgress` hears how many of the PR's changed lines
+// are done (answered by the model or found in the cache) out of how many
+// (PR 10.7), for the toolbar badge. When every line is done it is told once,
+// then cleared after AHEAD_DONE_SHOWN_MS; it is cleared too when Whole PR is
+// off or stops (leaving the PR, click-to-explain off, the diff unreadable).
+//
 // Up to `concurrency` requests are sent at once (the Requests at once
 // setting, 1 by default), each still one line or one hunk.
 //
@@ -88,6 +94,9 @@ export const REQUESTS_SETTING_KEY = 'settings.requestsAtOnce';
 
 /** Requests at once's limits and default, as in src/settings.ts. */
 export const REQUESTS_AT_ONCE = { min: 1, max: 4, default: 1 } as const;
+
+/** How long the toolbar badge shows its tick once Whole PR is done (PR 10.7). */
+export const AHEAD_DONE_SHOWN_MS = 5_000;
 
 /** While busy (a click, a chat answer, a hover, a hidden tab), how often to check again. */
 export const AHEAD_RETRY_MS = 500;
@@ -304,6 +313,16 @@ export type AheadEvent =
     }
   | { type: 'limit'; count: number; wholePr: boolean };
 
+/**
+ * How far Whole PR has got (PR 10.7): `done` of the PR's `total` changed
+ * lines are answered. `limited` is set once it stopped at the per-PR limit.
+ */
+export interface AheadProgress {
+  done: number;
+  total: number;
+  limited?: number;
+}
+
 export interface ExplainAheadDeps {
   /** The explain a click uses (it reaches the service worker and its cache). */
   explain: ClickHandlerDeps['explain'];
@@ -349,6 +368,13 @@ export interface ExplainAheadDeps {
   now?(): number;
   /** Called as lines start, end or are cancelled (logging). */
   onEvent?(event: AheadEvent): void;
+  /**
+   * Whole PR's progress as it changes, or null to clear it (PR 10.7). Only
+   * called when it changes.
+   */
+  onProgress?(progress: AheadProgress | null): void;
+  /** How long a finished PR's progress is shown before it is cleared. */
+  doneShownMs?: number;
 }
 
 export interface ExplainAhead {
@@ -401,6 +427,7 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
   const maxPerPr = deps.maxPerPr ?? AHEAD_MAX_PER_PR;
   const now = deps.now ?? (() => performance.now());
   const newGroupId = deps.newGroupId ?? (() => crypto.randomUUID());
+  const doneShownMs = deps.doneShownMs ?? AHEAD_DONE_SHOWN_MS;
 
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -415,6 +442,13 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
   let pageKey = deps.pageKey?.();
   // Each wait gets a number, so a PR diff read for an older one is ignored.
   let build = 0;
+  // Whole PR's lines worth explaining (PR 10.7), once the diff is read.
+  let prKeys: Set<string> | undefined;
+  // What onProgress was last told, so it hears only changes.
+  let shown: string | undefined;
+  // The PR was seen done, so its tick is shown once.
+  let finished = false;
+  let doneTimer: ReturnType<typeof setTimeout> | undefined;
 
   const active = () => deps.isOn() && deps.isEnabled?.() !== false;
   const wholePr = () => deps.wholePr?.() === true;
@@ -422,6 +456,35 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
   const limit = () => {
     const value = Math.floor(deps.concurrency?.() ?? 1);
     return Math.min(REQUESTS_AT_ONCE.max, Math.max(1, value || 1));
+  };
+
+  const tell = (progress: AheadProgress | null) => {
+    const text = JSON.stringify(progress);
+    if (text === shown) return;
+    shown = text;
+    deps.onProgress?.(progress);
+  };
+
+  /** Tells onProgress how far Whole PR has got, or clears it. */
+  const report = () => {
+    if (!deps.onProgress) return;
+    if (!prKeys || prKeys.size === 0 || !active() || !wholePr()) {
+      tell(null);
+      return;
+    }
+    let count = 0;
+    for (const key of prKeys) if (done.has(key)) count += 1;
+    const total = prKeys.size;
+    if (count < total) {
+      const stopped = asked >= cap() && running.length === 0 && queue.length === 0;
+      tell({ done: count, total, ...(stopped && { limited: cap() }) });
+      return;
+    }
+    if (finished) return;
+    finished = true;
+    tell({ done: total, total });
+    clearTimeout(doneTimer);
+    doneTimer = setTimeout(() => tell(null), doneShownMs);
   };
 
   const clearTimers = () => {
@@ -471,6 +534,7 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
     if (asked >= cap()) {
       queue = [];
       deps.onEvent?.({ type: 'limit', count: asked, wholePr: wholePr() });
+      report();
       return false;
     }
     if (deps.isBusy?.() === true) {
@@ -548,6 +612,7 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
         cached: answered.cached === request.lines.length,
       });
       pump();
+      report();
     };
     request.stream.result.then(
       (result) => (result.status === 'failed' ? finish('failed') : finish('done', outcome(result))),
@@ -611,17 +676,20 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
       (line) => !busy.has(line.key) && !done.has(line.key) && worthExplaining(line.text),
     );
     pump();
+    report();
   };
 
   const restart = () => {
     clearTimers();
     queue = [];
     const mine = ++build;
+    report();
     if (!active()) return;
     idleTimer = setTimeout(() => {
       idleTimer = undefined;
       const onScreen = deps.lines();
       if (!wholePr() || !deps.prLines) {
+        prKeys = undefined;
         fill(onScreen);
         return;
       }
@@ -630,10 +698,15 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
       deps.prLines().then(
         (prLines) => {
           if (mine !== build || !active()) return;
+          prKeys = prLines
+            ? new Set(prLines.filter((l) => worthExplaining(l.text)).map((l) => l.key))
+            : undefined;
           fill(prLines ? orderWholePr(prLines, onScreen) : onScreen);
         },
         () => {
-          if (mine === build && active()) fill(onScreen);
+          if (mine !== build || !active()) return;
+          prKeys = undefined;
+          fill(onScreen);
         },
       );
     }, idleMs);
@@ -644,6 +717,8 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
     clearTimers();
     cancelRunning();
     queue = [];
+    clearTimeout(doneTimer);
+    tell(null);
   };
 
   return {
@@ -660,6 +735,8 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
         done.clear();
         asked = 0;
         pageKey = page;
+        prKeys = undefined;
+        finished = false;
       }
       group = newGroupId();
     },

@@ -28,7 +28,8 @@
 // The header shows how long the request has taken: a live timer while
 // loading and streaming, then "Answered in …", "Failed after …", or
 // "Stopped after …", so the local model's
-// latency is always visible. An answer from the cache says "From cache" and
+// latency is always visible. An answer from the cache says "From cache" (or
+// "Prefetched" when Explain ahead wrote it in the background, PR 10.7) and
 // how long the model took when it first wrote it. Only one popup
 // is open at a time: opening a new one closes the old one.
 //
@@ -232,8 +233,15 @@ export interface Popup {
    * whole (PR 9.13), and the rest is kept, shown only if Stop is pressed.
    */
   showPartial(markdown: string): void;
-  /** `cached` is set when the answer came from the cache. */
-  showExplanation(explanation: Explanation, model?: string, cached?: { elapsedMs: number }): void;
+  /**
+   * `cached` is set when the answer came from the cache; `prefetched` when
+   * background work wrote it (PR 10.7).
+   */
+  showExplanation(
+    explanation: Explanation,
+    model?: string,
+    cached?: { elapsedMs: number; prefetched?: boolean },
+  ): void;
   showError(message: string, fix: string): void;
   /**
    * Opens Details on the explanation's round trip, with the prompt's size
@@ -532,11 +540,12 @@ export function openPopup(
   };
   // A cached answer arrives at once, so the time worth showing is how long
   // the model took the first time.
-  const showCached = (ms: number) => {
+  // "Prefetched" when Explain ahead wrote it in the background (PR 10.7).
+  const showCached = (ms: number, prefetched: boolean) => {
     clearInterval(ticker);
     ticker = undefined;
     finishedAt ??= now();
-    elapsedLabel.textContent = `From cache · took ${formatElapsed(ms)}`;
+    elapsedLabel.textContent = `${prefetched ? 'Prefetched' : 'From cache'} · took ${formatElapsed(ms)}`;
   };
 
   const place = () => {
@@ -677,7 +686,7 @@ export function openPopup(
     showExplanation(explanation, model, cached) {
       if (state === 'closed' || state === 'stopped') return;
       setModel(model);
-      if (cached) showCached(cached.elapsedMs);
+      if (cached) showCached(cached.elapsedMs, cached.prefetched === true);
       else stopTicking('Answered in ');
       const keys = Object.keys(SECTION_TITLES) as SectionKey[];
       const notes: HTMLElement[] = [];
