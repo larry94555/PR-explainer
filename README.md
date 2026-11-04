@@ -70,8 +70,11 @@ The extension is not in the Chrome Web Store yet. You build it from source and l
 2. Pull a coding model. Pick one that suits your hardware:
 
    ```sh
-   # A laptop without a supported GPU: small and fast
+   # Recommended: small and fast enough to aim at a 2-second answer
    ollama pull qwen2.5-coder:1.5b
+
+   # A slow CPU: even smaller
+   ollama pull qwen2.5-coder:0.5b
 
    # A laptop with a GPU, or more patience: better answers
    ollama pull qwen2.5-coder:7b
@@ -79,7 +82,7 @@ The extension is not in the Chrome Web Store yet. You build it from source and l
 
 3. Check that it answers: `ollama run qwen2.5-coder:1.5b "Say hello"`.
 
-Model size and whether it runs on the GPU make the biggest difference to how fast explanations appear. The settings page has a **Speed test** that times each installed model and picks the fastest one for you.
+Model size and whether it runs on the GPU make the biggest difference to how fast explanations appear. The settings page has a **Speed test** that times each installed coding model, marks the fastest one under 2 seconds, and suggests a smaller model to pull when none makes it. Reasoning models such as `deepseek-r1` are slower even with thinking off. Pick the fastest model whose answers you still find useful.
 
 ### 2. Build the extension
 

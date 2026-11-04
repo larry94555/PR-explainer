@@ -9,6 +9,7 @@ import {
   type SpeedTestOptions,
 } from '../src/llm/speedTest';
 import { LlmError, type ChatOptions, type LlmClient, type RunningModel } from '../src/llm/types';
+import { LATENCY_GOAL_MS } from '../src/llm/latencyGoal';
 
 // Each model answers after `ms` on a fake clock, with `tokens` answer tokens.
 interface FakeModel {
@@ -247,10 +248,13 @@ describe('ranking (PR 8.6)', () => {
     ]);
   });
 
-  it('picks the fastest model only when it answered in under 10 seconds', () => {
-    expect(fastestUnderGoal(results)).toBe('fast');
+  it('picks the fastest model only when it answered in under 2 seconds (PR 9.9)', () => {
+    expect(LATENCY_GOAL_MS).toBe(2000);
+    expect(fastestUnderGoal([done('quick', 1900), done('slow', 14000)])).toBe('quick');
+    expect(fastestUnderGoal(results)).toBeUndefined();
     expect(fastestUnderGoal([done('slow', 14000), done('slower', 20000)])).toBeUndefined();
-    expect(fastestUnderGoal([done('edge', 10000)])).toBeUndefined();
+    expect(fastestUnderGoal([done('edge', 2000)])).toBeUndefined();
+    expect(fastestUnderGoal([done('just under', 1999)])).toBe('just under');
     expect(fastestUnderGoal([{ model: 'x', status: 'failed', message: 'x' }])).toBeUndefined();
     expect(fastestUnderGoal([])).toBeUndefined();
   });

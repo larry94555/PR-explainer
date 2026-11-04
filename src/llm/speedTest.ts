@@ -13,11 +13,9 @@
 import { SAMPLE_CONTEXT } from '../explain/sampleContext';
 import { buildExplainPrompt } from '../explain/explainPrompt';
 import { gpuStatus, type GpuStatus } from './gpuStatus';
+import { LATENCY_GOAL_MS } from './latencyGoal';
 import { MIN_NUM_CTX } from './numCtx';
 import { isSameModel, LlmError, type LlmClient, type ModelInfo } from './types';
-
-/** The goal from Milestone 8: an explanation in under 10 seconds. */
-export const SPEED_GOAL_MS = 10_000;
 
 // Names of models made for code: qwen2.5-coder, codellama, codegemma,
 // deepseek-coder, starcoder2, codestral, devstral, granite-code, and so on.
@@ -153,10 +151,10 @@ export function rankResults(results: readonly SpeedResult[]): SpeedResult[] {
   return [...done.sort((a, b) => a.totalMs - b.totalMs), ...rest];
 }
 
-/** The fastest model that answered under SPEED_GOAL_MS, if any. */
+/** The fastest model that answered under LATENCY_GOAL_MS (PR 9.9), if any. */
 export function fastestUnderGoal(results: readonly SpeedResult[]): string | undefined {
   const [first] = rankResults(results);
-  return first?.status === 'done' && first.totalMs < SPEED_GOAL_MS ? first.model : undefined;
+  return first?.status === 'done' && first.totalMs < LATENCY_GOAL_MS ? first.model : undefined;
 }
 
 function errorMessage(error: unknown): string {

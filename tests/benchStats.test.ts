@@ -9,6 +9,7 @@ import {
   formatMs,
   formatReport,
   formatRuns,
+  goalVerdicts,
   formatTable,
   LATENCY_DOC_INTRO,
   median,
@@ -207,6 +208,12 @@ describe('formatReport', () => {
     ],
   };
 
+  it('says how each model did against the 2 s goal (PR 9.9)', () => {
+    expect(formatReport(report)).toContain(
+      '- **Against the 2 s goal:** qwen2.5-coder:7b did not finish every run (median 11.0 s of those that did).\n',
+    );
+  });
+
   it('puts the date, models, machine and settings above a table per model', () => {
     const text = formatReport(report);
     expect(text).toContain('## 2026-11-02 14:05 · qwen2.5-coder:7b\n');
@@ -320,5 +327,29 @@ describe('the samples in bench/', () => {
     expect(() => parseSample({ name: 'x', context: ['y'], pr: { title: 't' } }, 'c.json')).toThrow(
       '"pr" needs',
     );
+  });
+});
+
+describe('goalVerdicts (PR 9.9)', () => {
+  const model = (name: string, ...totals: (number | 'failed')[]) => ({
+    model: name,
+    rows: [{ sample: 'Short line', runs: totals.map((t) => (t === 'failed' ? failed() : ok(t))) }],
+  });
+
+  it('compares each model with 2 seconds by the median of every sample', () => {
+    expect(
+      goalVerdicts([model('qwen2.5-coder:1.5b', 1500, 1700, 2600), model('deepseek-r1:7b', 9000)]),
+    ).toBe('qwen2.5-coder:1.5b met it (median 1.7 s); deepseek-r1:7b did not (median 9.0 s).');
+  });
+
+  it('does not count exactly 2 seconds as met', () => {
+    expect(goalVerdicts([model('m', 2000)])).toBe('m did not (median 2.0 s).');
+  });
+
+  it('does not call a model with failed runs met, and says when none finished', () => {
+    expect(goalVerdicts([model('flaky', 900, 'failed')])).toBe(
+      'flaky did not finish every run (median 900 ms of those that did).',
+    );
+    expect(goalVerdicts([model('down', 'failed')])).toBe('down has no finished runs.');
   });
 });

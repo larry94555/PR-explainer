@@ -2,10 +2,11 @@
 // functions only: scripts/benchHistory.ts runs the benchmark at each step and
 // writes the file, so everything here can be unit tested without a model.
 
+import { LATENCY_GOAL_MS } from '../src/llm/latencyGoal.ts';
 import { formatMs, median, type BenchRun } from './benchStats.ts';
 
-/** The milestone's goal: an explanation in under 10 seconds. */
-export const GOAL_MS = 10_000;
+/** The goal the report is measured against (PR 9.9): the same one as the Speed test. */
+export const GOAL_MS = LATENCY_GOAL_MS;
 
 /** The answer length the floor is measured with (roadmap, Milestone 8). */
 export const FLOOR_ANSWER_TOKENS = 150;
@@ -219,7 +220,7 @@ export function conclusion(now: readonly StepResult[], floors: readonly FloorRes
   if (best.medianMs! < GOAL_MS) {
     const slow =
       best.slowestMs !== undefined && best.slowestMs >= GOAL_MS
-        ? ` The slowest run took ${fmt(best.slowestMs)}, so a long selection can still pass 10 s.`
+        ? ` The slowest run took ${fmt(best.slowestMs)}, so a long selection can still pass ${fmt(GOAL_MS)}.`
         : '';
     return (
       `**Goal met.** With the default settings, ${best.model} explains in ${fmt(best.medianMs)} ` +
