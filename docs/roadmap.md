@@ -81,7 +81,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 9.6 | Show the whole answer at once | Small | ✅ Done ([#49](https://github.com/larry94555/PR-explainer/pull/49)) |
 | 9.7 | Fewer round trips per click | Small | ✅ Done ([#51](https://github.com/larry94555/PR-explainer/pull/51)) |
 | 9.8 | One-sentence answers | Small | ✅ Done ([#52](https://github.com/larry94555/PR-explainer/pull/52)) |
-| 9.9 | Aim the Speed test and benchmark at 2 seconds | Small | ✅ Done ([#PRNUM](https://github.com/larry94555/PR-explainer/pull/PRNUM)) |
+| 9.9 | Aim the Speed test and benchmark at 2 seconds | Small | ✅ Done ([#54](https://github.com/larry94555/PR-explainer/pull/54)) |
 | 9.10 | Explain changed lines ahead of time | Medium | Not started |
 | 9.11 | Latency report against 2 seconds | Small | Not started |
 | 9.12 | Facts that need no model, shown at once | Small | Not started |
@@ -908,7 +908,7 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
   5. Click 5 lines on a real PR and confirm each answer is one sentence per section, still says what the code does and why, and names real concerns.
 
 ### PR 9.9: Aim the Speed test and benchmark at 2 seconds (Small) ✅ Done
-- **Status:** Done ([#PRNUM](https://github.com/larry94555/PR-explainer/pull/PRNUM)).
+- **Status:** Done ([#54](https://github.com/larry94555/PR-explainer/pull/54)).
 - **Why it's needed:** The model is the biggest lever left. The Speed test (PR 8.6) and the latency report (PR 8.8) are aimed at 10 seconds, so they cannot tell you which model meets 2.
 - **Problem it solves:** The goal becomes one constant, `LATENCY_GOAL_MS = 2000` in `src/llm/latencyGoal.ts`, used by the Speed test's mark (**Fastest under 2 s**), its summary line and hint, the conclusion in `scripts/latencyReport.ts` (`npm run bench:history`), and a new **Against the 2 s goal** line at the top of each `npm run bench` section in `docs/latency.md`, which says for each model whether the median of every sample met it (a model with failed runs never counts as met). When no installed model makes it, the Speed test suggests a small coding model by name with the command to get it (`ollama pull qwen2.5-coder:1.5b`, or `qwen2.5-coder:0.5b` on a slow CPU); once 1.5b has been timed it suggests only 0.5b, and once both have, the GPU. It also says when the model picked in the settings is a reasoning model, from the check the line under the model already made (PR 9.5), so no extra request. With no models installed it suggests `qwen2.5-coder:1.5b` too. The README and `docs/improvements.md` recommend the same. The fastest model is still picked from those whose answers you find useful.
 - **Unit tests added:** `speedTest.test.ts` checks the goal is 2000 ms and the mark goes to the fastest model under 2 seconds and to none at 2 seconds or more. `optionsPage.test.ts` checks the new wording (mark, summary, no models installed), the suggestion with its two commands when none made it, only 0.5b once 1.5b was timed, the GPU once both were, the reasoning model note for a picked `deepseek-r1:7b`, and no note for a model that does not think. `latencyReport.test.ts` checks the conclusion uses the shared goal, warns when the slowest run passes 2 s, and does not call 2 s or 8 s met. `benchStats.test.ts` checks the **Against the 2 s goal** line: met, not met, exactly 2 s, failed runs and no finished runs.
