@@ -9,7 +9,9 @@
 // Speed test times each coding model and lets the user pick the fastest
 // (src/llm/speedTest.ts). Chat model (PR 9.14) picks another model for chat
 // questions, "Same as explanations" by default, with a note on the memory two
-// loaded models need when another one is picked.
+// loaded models need when another one is picked. Keep answers for (PR 10.9)
+// sets how long answers are kept after Chrome closes, and Clear saved answers
+// asks the service worker to empty them.
 //
 // All page logic lives here and takes its dependencies as parameters, so the
 // tests can run it against options.html in jsdom with fakes. main.ts wires in
@@ -57,6 +59,11 @@ export interface OptionsPageDeps {
   now?: () => number;
   /** Picks the right commands in error fixes. Defaults to "other". */
   platform?: Platform;
+  /**
+   * Empties the explanation cache and the answers saved on disk (PR 10.9),
+   * in the service worker, which owns both.
+   */
+  clearSavedAnswers(): Promise<void>;
 }
 
 export const TEST_PROMPT = 'Reply with OK';
@@ -77,6 +84,8 @@ export interface OptionsPage {
   speedTest(): Promise<void>;
   /** Stops a running Speed test. */
   stopSpeedTest(): void;
+  /** Clear saved answers (PR 10.9). */
+  clearSavedAnswers(): Promise<void>;
 }
 
 function el<T extends HTMLElement>(doc: Document, id: string): T {
@@ -101,6 +110,9 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const hoverInput = el<HTMLInputElement>(doc, 'explainOnHover');
   const aheadSelect = el<HTMLSelectElement>(doc, 'explainAhead');
   const requestsInput = el<HTMLInputElement>(doc, 'requestsAtOnce');
+  const keepAnswersInput = el<HTMLInputElement>(doc, 'keepAnswersDays');
+  const clearButton = el<HTMLButtonElement>(doc, 'clear-answers');
+  const clearStatus = el(doc, 'clear-status');
   const thinkInput = el<HTMLInputElement>(doc, 'letModelThink');
   const streamInput = el<HTMLInputElement>(doc, 'streamAnswers');
   const thinkingLine = el(doc, 'thinking-status');
@@ -133,6 +145,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     hoverInput.checked = settings.explainOnHover;
     aheadSelect.value = settings.explainAhead;
     requestsInput.value = String(settings.requestsAtOnce);
+    keepAnswersInput.value = String(settings.keepAnswersDays);
     thinkInput.checked = settings.letModelThink;
     streamInput.checked = settings.streamAnswers;
     showPromptInput.checked = settings.showPrompt;
@@ -144,6 +157,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     const contextTokens = contextInput.value.trim();
     const keepAlive = keepAliveInput.value.trim();
     const requests = requestsInput.value.trim();
+    const keepAnswers = keepAnswersInput.value.trim();
     return {
       llmUrl: urlInput.value.trim().replace(/\/+$/, ''),
       model: modelSelect.value,
@@ -157,6 +171,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       explainOnHover: hoverInput.checked,
       explainAhead: aheadSelect.value as Settings['explainAhead'],
       requestsAtOnce: requests === '' ? NaN : Number(requests),
+      keepAnswersDays: keepAnswers === '' ? NaN : Number(keepAnswers),
       letModelThink: thinkInput.checked,
       streamAnswers: streamInput.checked,
       showPrompt: showPromptInput.checked,
@@ -283,6 +298,20 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       }
     } finally {
       saveButton.disabled = false;
+    }
+  }
+
+  // Empties both caches (PR 10.9). The next click on any line asks the model.
+  async function clearSavedAnswers(): Promise<void> {
+    clearButton.disabled = true;
+    clearStatus.textContent = 'Clearing…';
+    try {
+      await deps.clearSavedAnswers();
+      clearStatus.textContent = 'Saved answers cleared. The next click on a line asks the model.';
+    } catch (error) {
+      clearStatus.textContent = `Could not clear saved answers: ${errorMessage(error)}`;
+    } finally {
+      clearButton.disabled = false;
     }
   }
 
@@ -593,6 +622,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   thinkInput.addEventListener('change', () => void checkThinking());
   speedButton.addEventListener('click', () => void speedTest());
   stopButton.addEventListener('click', stopSpeedTest);
+  clearButton.addEventListener('click', () => void clearSavedAnswers());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     void save();
@@ -616,6 +646,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     checkThinking,
     speedTest,
     stopSpeedTest,
+    clearSavedAnswers,
   };
 }
 

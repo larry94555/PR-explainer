@@ -26,6 +26,9 @@ export interface RequestMap {
   // Whole PR's progress in the sending tab, for the toolbar icon, or null to
   // clear it (PR 10.7).
   aheadProgress: { payload: AheadProgress | null; result: { shown: boolean } };
+  // Empties the session cache and the answers saved on disk (the settings
+  // page's Clear saved answers button, PR 10.9).
+  clearSavedAnswers: { payload: undefined; result: { cleared: true } };
 }
 
 export type RequestType = keyof RequestMap;
