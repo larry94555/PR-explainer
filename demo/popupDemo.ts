@@ -13,6 +13,8 @@ import { describeLlmError } from '../src/llm/describeLlmError';
 import type { ChatMessage, LlmTimings } from '../src/llm/types';
 import { LlmError } from '../src/llm/types';
 import { openPopup } from '../src/popup/popup';
+import { factsFromHunk, type CodeFacts } from '../src/codeFacts';
+import type { DiffLine } from '../src/diffDom';
 import type { RoundTrip, TraceTask } from '../src/trace/types';
 import { traceLine } from '../src/trace/clickTrace';
 import { buildWaterfall } from '../src/popup/latencyBreakdown';
@@ -379,6 +381,25 @@ const subjectOf = (row: Element) => ({
 });
 let activeChat: ActiveChat | undefined;
 
+const SIDES = { '+': 'added', '-': 'removed', ' ': 'context' } as const;
+
+/** The facts line for a row of the fake diff (PR 9.12), as the content script reads it. */
+function factsOf(row: Element): CodeFacts {
+  const rows = [...row.closest('table')!.querySelectorAll('tr')];
+  const start = Number(rows[0]!.cells[0]!.textContent);
+  const lines: DiffLine[] = LINES.map(([marker, text], i) => ({
+    filePath: 'src/llm/retry.ts',
+    lineNumber: start + i,
+    side: SIDES[marker as keyof typeof SIDES],
+    text,
+  }));
+  return factsFromHunk({
+    header: `@@ -${start},3 +${start},10 @@ export class Client {`,
+    lines,
+    index: rows.indexOf(row as HTMLTableRowElement),
+  });
+}
+
 document.addEventListener('click', (event) => {
   const row = (event.target as Element).closest?.('table.diff tr');
   if (row) explainRow(row);
@@ -401,6 +422,7 @@ function explainRow(row: Element): void {
   // answer took 14.2 s, to match its Details (PR 8.1).
   let fakeTime = 0;
   const popup = openPopup(row, {
+    facts: factsOf(row),
     streamAnswers: streamAnswers(),
     ...(['done', 'failed', 'prompt', 'file', 'short'].includes(chosen()) && {
       now: () => fakeTime,

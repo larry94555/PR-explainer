@@ -66,6 +66,16 @@ export const POPUP_STYLE = `
   .details[hidden] { display: none; }
   .debug:hover, .debug:focus-visible { background: var(--pe-hover-bg); }
   .details:hover, .details:focus-visible, .details[aria-expanded='true'] { background: var(--pe-hover-bg); }
+  /* Facts known without the model (PR 9.12): one muted line under the header. */
+  .facts {
+    margin: 0;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--pe-border-muted);
+    color: var(--pe-muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+  .facts .where { color: var(--pe-fg); }
   /* Where the time went (PR 9.1): a waterfall under the header, one row per task. */
   .latency {
     margin: 0;

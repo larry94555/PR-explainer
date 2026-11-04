@@ -74,6 +74,65 @@ describe('popup', () => {
     expect(shadow().querySelector('.cut-off-note')).toBeNull();
   });
 
+  describe('facts known without the model (PR 9.12)', () => {
+    const FACTS = {
+      where: 'src/retry.ts, line 12',
+      scope: 'export async function retry<T>(',
+      change: 'Changed line, was:',
+      was: 'return fn();',
+    };
+    const factsLine = () => shadow().querySelector<HTMLElement>('.facts');
+
+    it('shows the facts line while loading, before anything else', () => {
+      const popup = openPopup(ANCHOR, { facts: FACTS });
+      expect(popup.state).toBe('loading');
+      expect(factsLine()?.textContent).toBe(
+        'src/retry.ts, line 12 · in export async function retry<T>( · Changed line, was: return fn();',
+      );
+      const codes = [...factsLine()!.querySelectorAll('code')].map((c) => c.textContent);
+      expect(codes).toEqual(['export async function retry<T>(', 'return fn();']);
+      // Above the answer, right under the header.
+      expect(factsLine()!.previousElementSibling?.className).toBe('header');
+    });
+
+    it('stays above the answer once it arrives, and through Regenerate', () => {
+      const popup = openPopup(ANCHOR, { facts: FACTS });
+      const line = factsLine();
+      popup.showExplanation(SAMPLE, 'llama3');
+      expect(factsLine()).toBe(line);
+      expect(line!.compareDocumentPosition(shadow().querySelector('.body')!)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+      popup.showLoading('llama3');
+      expect(factsLine()).toBe(line);
+    });
+
+    it('is the same for a cached answer', () => {
+      const popup = openPopup(ANCHOR, { facts: FACTS });
+      const text = factsLine()!.textContent;
+      popup.showExplanation(SAMPLE, 'llama3', { elapsedMs: 3000 });
+      expect(factsLine()!.textContent).toBe(text);
+    });
+
+    it('is read once by screen readers: the dialog description, outside the live region', () => {
+      openPopup(ANCHOR, { facts: { where: 'a.ts, line 3', change: 'Added line' } });
+      const dialog = shadow().querySelector('[role="dialog"]')!;
+      const id = dialog.getAttribute('aria-describedby');
+      expect(id).toBe(factsLine()!.id);
+      expect(shadow().getElementById(id!)).toBe(factsLine());
+      expect(factsLine()!.closest('[aria-live]')).toBeNull();
+      expect(factsLine()!.textContent).toBe('a.ts, line 3 · Added line');
+    });
+
+    it('is left out when there are no facts', () => {
+      openPopup(ANCHOR);
+      expect(factsLine()).toBeNull();
+      expect(shadow().querySelector('[role="dialog"]')!.hasAttribute('aria-describedby')).toBe(
+        false,
+      );
+    });
+  });
+
   it('says so under an answer that was cut off at the limit (PR 8.4)', () => {
     const popup = openPopup(ANCHOR);
     popup.showExplanation({ ...SAMPLE, why: 'The server is …', cutOff: true }, 'llama3');

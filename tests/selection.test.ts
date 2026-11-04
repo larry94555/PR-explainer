@@ -281,6 +281,18 @@ describe.each(layouts)('selecting lines on the $name layout', ({ code, file, add
     expect(highlighted()).toEqual([]);
   });
 
+  it('opens the popup with the counts of the selected lines (PR 9.12)', () => {
+    env = setup();
+    dragSelect(code('R42'), code('R45'));
+    mouse('mouseup', code('R45'));
+    uiButton()!.click();
+    expect(env.popups[0]!.hooks.facts).toEqual({
+      where: 'docs/roadmap.md, lines 42 to 45',
+      scope: "Update this table (and the PR's heading) when a roadmap PR merges.",
+      change: '5 lines selected, 1 added, 1 removed and 3 unchanged',
+    });
+  });
+
   it('gives the block to an open chat instead of a popup (PR 5.4)', () => {
     env = setup();
     const addToChat = vi.fn(() => true);
@@ -292,6 +304,7 @@ describe.each(layouts)('selecting lines on the $name layout', ({ code, file, add
       text: expect.stringContaining('Selection: 5 lines'),
       subject: expect.objectContaining({ startLine: 42, endLine: 45 }),
       code: expect.objectContaining({ filePath: 'docs/roadmap.md', startLine: 42, endLine: 45 }),
+      facts: expect.objectContaining({ where: 'docs/roadmap.md, lines 42 to 45' }),
     });
     expect(env.deps.explain).not.toHaveBeenCalled();
     expect(env.popups).toEqual([]);

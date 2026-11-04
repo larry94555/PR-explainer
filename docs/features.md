@@ -8,7 +8,7 @@ Open a pull request on github.com, go to the **Files changed** tab, and click an
 - **Why it's needed:** the role the change plays in the PR, inferred from the diff, the file, and the PR title and description.
 - **Concerns:** possible bugs, edge cases, security, performance, or style issues. It says "None found" when there are none.
 
-While the model works, a line at the top of the popup already shows facts that need no model: the file and line, the function from the diff, and what kind of change it is (added, removed, or changed with its old version) (planned, PR 9.12).
+While the model works, a line at the top of the popup already shows facts that need no model: the file and line, the function from the diff, and what kind of change it is (added, removed, or changed with its old version; for a selection, how many lines of each kind). It stays above the answer.
 
 ## 2. Multi-line selection
 Drag to select several lines (or a whole hunk) and get one explanation for the selection rather than for a single line. In split view, a selection down one side covers that side's lines (old or new).
