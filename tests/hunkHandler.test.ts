@@ -125,6 +125,26 @@ describe('explaining a whole hunk in one request', () => {
     expect(second.status === 'done' && second.cached).toBeUndefined();
   });
 
+  it('keeps a line missing when its save fails, so it goes back to the queue (review on #64)', async () => {
+    const env = setup([part(1), part(2), part(3)].join('\n'));
+    const cache = env.deps.cache!;
+    let saves = 0;
+    const failing = {
+      ...cache,
+      set: vi.fn((...args: Parameters<typeof cache.set>) =>
+        ++saves === 2
+          ? Promise.reject(new Error('QUOTA_BYTES quota exceeded'))
+          : cache.set(...args),
+      ),
+    };
+    const result = await createHunkExplainHandler({ ...env.deps, cache: failing })(ask());
+    expect(result.status === 'hunk' && result.lines.map((l) => l.status)).toEqual([
+      'done',
+      'missing',
+      'done',
+    ]);
+  });
+
   it('leaves the lines already cached out of the request', async () => {
     const env = setup(part(1) + part(2));
     // A click on the first line fills its key, through the same cache.

@@ -247,10 +247,12 @@ export function createHunkExplainHandler(deps: ExplainDeps) {
           todo.map(async ({ i, key }, n) => {
             const explanation = answers[n];
             if (!explanation) return;
-            statuses[i] = 'done';
-            await cache
-              .set(key, { explanation, model, elapsedMs, savedAt: now() }, pr)
-              .catch(() => {});
+            // Done only once saved: a failed save stays missing, so the line
+            // goes back to the queue on its own instead of being lost.
+            await cache.set(key, { explanation, model, elapsedMs, savedAt: now() }, pr).then(
+              () => (statuses[i] = 'done'),
+              () => {},
+            );
           }),
         ),
       );
