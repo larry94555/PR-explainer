@@ -18,6 +18,8 @@ An explanation that takes close to a minute breaks the flow of a code review. Mi
 | Smaller prompts (8.5) | 52.6 s | 85.7 s |
 | Now (8.6 to 8.8) | 53.3 s | 86.4 s |
 
+This table is from the Milestone 8 report. `npm run bench:history` now adds the Milestone 9 steps and also times fresh answers with the model warm and clicks after **Explain ahead** (PR 9.11); this page is updated once that report has been run on the laptop.
+
 **The goal was not met on that laptop.** The floor (shortest sample, an answer of at most 150 tokens, model already loaded) is **24.8 s**, and 24.0 s of that is the model writing the answer at about 6.4 tokens per second. Loading and reading the prompt take well under a second each. No prompt or setting change can get a 7B model on a CPU under 10 seconds.
 
 **What would help most, in order:**

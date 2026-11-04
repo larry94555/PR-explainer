@@ -234,15 +234,21 @@ export function goalVerdicts(models: readonly Pick<ModelResult, 'model' | 'rows'
   );
 }
 
+/** The machine, GPU and Ollama lines at the top of a section. */
+function machineLines({ machine, llmUrl }: Pick<BenchReport, 'machine' | 'llmUrl'>): string[] {
+  return [
+    `- **Machine:** ${machine.os}; ${machine.cpu}; ${formatGb(machine.ramBytes)} RAM`,
+    `- **GPU:** ${machine.gpus.length ? machine.gpus.join(', ') : 'none found'}`,
+    `- **Ollama:** ${machine.ollamaVersion ? `${machine.ollamaVersion} at ` : ''}${llmUrl}`,
+  ];
+}
+
 /** One dated section of docs/latency.md: the machine, the settings, and a table per model. */
 export function formatReport(report: BenchReport): string {
-  const { machine } = report;
   const out = [
     `## ${formatDate(report.startedAt)} · ${report.models.map((m) => m.model).join(', ')}`,
     '',
-    `- **Machine:** ${machine.os}; ${machine.cpu}; ${formatGb(machine.ramBytes)} RAM`,
-    `- **GPU:** ${machine.gpus.length ? machine.gpus.join(', ') : 'none found'}`,
-    `- **Ollama:** ${machine.ollamaVersion ? `${machine.ollamaVersion} at ` : ''}${report.llmUrl}`,
+    ...machineLines(report),
     `- **Settings:** temperature ${report.temperature}, answers up to ${report.maxResponseTokens} ` +
       `tokens, ${report.runsPerSample} ${report.runsPerSample === 1 ? 'run' : 'runs'} per sample`,
   ];
@@ -265,6 +271,156 @@ export function formatReport(report: BenchReport): string {
     );
     if (failures.length) out.push('', 'Failed runs:', '', ...failures);
   }
+  return out.join('\n') + '\n';
+}
+
+// --- The ahead mode (PR 9.11) ----------------------------------------------
+
+/**
+ * The share of clicks that must be answered within the goal for Explain
+ * ahead to count as meeting it. Not all, because a line the model failed on
+ * is then explained fresh; the report lists those.
+ */
+export const AHEAD_SHARE_GOAL = 0.9;
+
+/** One line of the ahead mode: explained ahead, then clicked. */
+export interface AheadLineResult {
+  /** Such as "src/a.ts:12". */
+  line: string;
+  /** Explaining it ahead, as Explain ahead does (PR 9.10). */
+  ahead: BenchRun;
+  /** The click on it afterwards. */
+  click: BenchRun;
+  /** Whether the click was answered from the cache. */
+  fromCache: boolean;
+}
+
+/** The ahead mode's results for one model. */
+export interface AheadResult {
+  model: string;
+  /** The saved diff page the lines came from. */
+  page: string;
+  lines: AheadLineResult[];
+  /** Where the model ran, worded like `ollama ps`. */
+  ranOn?: string;
+}
+
+export interface AheadSummary {
+  lines: number;
+  /** Lines the model failed on ahead of time. */
+  aheadFailed: number;
+  /** Median time to explain one line ahead. */
+  aheadMedianMs?: number;
+  /** Time to explain every line ahead, one after another. */
+  aheadTotalMs: number;
+  clicksWithinGoal: number;
+  /** clicksWithinGoal ÷ lines, 0 when there are no lines. */
+  share: number;
+  clickMedianMs?: number;
+  clickSlowestMs?: number;
+  fromCache: number;
+}
+
+/** The ahead mode's numbers. A failed click counts as not within the goal. */
+export function summarizeAhead(
+  lines: readonly AheadLineResult[],
+  goalMs: number = LATENCY_GOAL_MS,
+): AheadSummary {
+  const aheadDone = lines.flatMap((l) => (l.ahead.ok ? [l.ahead.totalMs] : []));
+  const clicks = lines.flatMap((l) => (l.click.ok ? [l.click.totalMs] : []));
+  const within = clicks.filter((ms) => ms < goalMs).length;
+  const summary: AheadSummary = {
+    lines: lines.length,
+    aheadFailed: lines.length - aheadDone.length,
+    aheadTotalMs: aheadDone.reduce((a, b) => a + b, 0),
+    clicksWithinGoal: within,
+    share: lines.length ? within / lines.length : 0,
+    fromCache: lines.filter((l) => l.fromCache).length,
+  };
+  const values = {
+    aheadMedianMs: median(aheadDone),
+    clickMedianMs: median(clicks),
+    clickSlowestMs: slowest(clicks),
+  };
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined) (summary as unknown as Record<string, number>)[key] = value;
+  }
+  return summary;
+}
+
+/** "9 of 10 (90%)". */
+export function formatShare(s: Pick<AheadSummary, 'clicksWithinGoal' | 'lines' | 'share'>): string {
+  return `${s.clicksWithinGoal} of ${s.lines} (${Math.round(s.share * 100)}%)`;
+}
+
+export const AHEAD_TABLE_HEADER = [
+  'Model',
+  'Lines',
+  'Ahead, per line',
+  'Ahead, all lines',
+  `Clicks within ${LATENCY_GOAL_MS / 1000} s`,
+  'Click median',
+  'Click slowest',
+  'From cache',
+] as const;
+
+/** A row per model: how long explaining ahead took, then how the clicks went. */
+export function formatAheadTable(results: readonly AheadResult[]): string {
+  const line = (cells: readonly string[]) => `| ${cells.map(cell).join(' | ')} |`;
+  return [
+    line(AHEAD_TABLE_HEADER),
+    line(AHEAD_TABLE_HEADER.map((_, i) => (i === 0 ? '---' : '---:'))),
+    ...results.map(({ model, lines, ranOn }) => {
+      const s = summarizeAhead(lines);
+      return line([
+        ranOn ? `${model} (${ranOn})` : model,
+        s.aheadFailed ? `${s.lines} (${s.aheadFailed} failed ahead)` : String(s.lines),
+        formatMs(s.aheadMedianMs),
+        formatMs(s.aheadTotalMs),
+        formatShare(s),
+        formatMs(s.clickMedianMs),
+        formatMs(s.clickSlowestMs),
+        `${s.fromCache} of ${s.lines}`,
+      ]);
+    }),
+  ].join('\n');
+}
+
+/** The lines that failed, ahead or on the click, as a list (empty when none did). */
+export function aheadFailures(results: readonly AheadResult[]): string[] {
+  return results.flatMap(({ model, lines }) =>
+    lines.flatMap((l) => [
+      ...(l.ahead.ok ? [] : [`- ${model}, ${l.line}, ahead: ${l.ahead.error}`]),
+      ...(l.click.ok ? [] : [`- ${model}, ${l.line}, click: ${l.click.error}`]),
+    ]),
+  );
+}
+
+export interface AheadReport {
+  startedAt: Date;
+  machine: MachineInfo;
+  llmUrl: string;
+  temperature: number;
+  maxResponseTokens: number;
+  results: AheadResult[];
+}
+
+/** The section `npm run bench -- --ahead` adds to docs/latency.md. */
+export function formatAheadReport(report: AheadReport): string {
+  const page = report.results[0]?.page;
+  const out = [
+    `## ${formatDate(report.startedAt)} · Explain ahead · ${report.results.map((r) => r.model).join(', ')}`,
+    '',
+    ...machineLines(report),
+    `- **Settings:** temperature ${report.temperature}, answers up to ${report.maxResponseTokens} tokens`,
+    `- **How:** each added line of ${page ? `\`${page}\`` : 'a saved diff page'} is explained ` +
+      'ahead, one at a time, as Explain ahead does; then a click on each line is timed. A click ' +
+      `counts when its whole answer came within ${LATENCY_GOAL_MS / 1000} s.`,
+    '',
+    formatAheadTable(report.results),
+  ];
+  const failures = aheadFailures(report.results);
+  if (failures.length) out.push('', 'Failed lines:', '', ...failures);
   return out.join('\n') + '\n';
 }
 
@@ -298,11 +454,13 @@ export interface BenchArgs {
   runs: number;
   llmUrl?: string;
   save: boolean;
+  /** Run the ahead mode (PR 9.11) instead of timing each sample. */
+  ahead: boolean;
 }
 
-/** Reads `[model ...] [--runs N] [--url URL] [--no-save]`. Throws on anything else. */
+/** Reads `[model ...] [--runs N] [--url URL] [--no-save] [--ahead]`. Throws on anything else. */
 export function parseBenchArgs(argv: readonly string[]): BenchArgs {
-  const args: BenchArgs = { models: [], runs: 3, save: true };
+  const args: BenchArgs = { models: [], runs: 3, save: true, ahead: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const [flag, inline] = arg.startsWith('--') ? arg.split(/=(.*)/s, 2) : [arg];
@@ -321,6 +479,8 @@ export function parseBenchArgs(argv: readonly string[]): BenchArgs {
       args.llmUrl = value();
     } else if (flag === '--no-save') {
       args.save = false;
+    } else if (flag === '--ahead') {
+      args.ahead = true;
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown option ${arg}`);
     } else {

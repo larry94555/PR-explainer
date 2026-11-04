@@ -1,9 +1,20 @@
-// The numbers and the markdown behind `npm run bench:history` (PR 8.8). Pure
+// The numbers and the markdown behind `npm run bench:history` (PR 8.8, with
+// the Milestone 9 steps, fresh answers and Explain ahead from PR 9.11). Pure
 // functions only: scripts/benchHistory.ts runs the benchmark at each step and
 // writes the file, so everything here can be unit tested without a model.
 
 import { LATENCY_GOAL_MS } from '../src/llm/latencyGoal.ts';
-import { formatMs, median, type BenchRun } from './benchStats.ts';
+import {
+  AHEAD_SHARE_GOAL,
+  formatAheadTable,
+  formatMs,
+  formatShare,
+  median,
+  summarize,
+  summarizeAhead,
+  type AheadResult,
+  type BenchRun,
+} from './benchStats.ts';
 
 /** The goal the report is measured against (PR 9.9): the same one as the Speed test. */
 export const GOAL_MS = LATENCY_GOAL_MS;
@@ -20,14 +31,21 @@ export interface HistoryStep {
 
 // The merge commit of each PR that changed what `npm run bench` measures.
 // 8.6 (the Speed test) and 8.7 (prefetch on hover) do not change the explain
-// request itself, so "Now" stands for them; prefetch hides time instead of
-// cutting it, and the report says so.
+// request itself, so the end of Milestone 8 stands for them; prefetch hides
+// time instead of cutting it, and the report says so. In Milestone 9, 9.1 to
+// 9.4 only measure and show, 9.6 changes how the popup shows the answer, and
+// 9.9 and 9.10 change the Speed test and add Explain ahead, which the report
+// measures on its own; "Now" stands for them.
 export const HISTORY_STEPS: readonly HistoryStep[] = [
   { label: 'Baseline (8.2)', ref: 'b03ff14' },
   { label: 'Model kept loaded (8.3)', ref: '4f464d6' },
   { label: 'Shorter answers (8.4)', ref: '1ebac10' },
   { label: 'Smaller prompts (8.5)', ref: '3821237' },
-  { label: 'Now (8.6 to 8.8)', ref: 'HEAD' },
+  { label: 'End of Milestone 8 (8.6 to 8.8)', ref: 'b7fc818' },
+  { label: 'Thinking off (9.5)', ref: 'f791407' },
+  { label: 'Fewer round trips (9.7)', ref: 'eb7d4d4' },
+  { label: 'One-sentence answers (9.8)', ref: '6716b55' },
+  { label: 'Now (9.9 to 9.11)', ref: 'HEAD' },
 ];
 
 /** The last dated section `npm run bench` added to docs/latency.md, or undefined when there is none. */
@@ -164,11 +182,36 @@ export interface FloorResult {
   ranOn?: string;
 }
 
+/** Fresh answers with the current code (PR 9.11): every sample, the model already loaded, no cache. */
+export interface FreshResult {
+  model: string;
+  runs: BenchRun[];
+  ranOn?: string;
+}
+
+/** A model's fresh answers in the shape the conclusion picks the fastest from. */
+export function freshStep({ model, runs, ranOn }: FreshResult): StepResult {
+  const s = summarize(runs);
+  return {
+    model,
+    runs: s.runs,
+    failed: s.failed,
+    ...(s.medianMs !== undefined && { medianMs: s.medianMs }),
+    ...(s.slowestMs !== undefined && { slowestMs: s.slowestMs }),
+    ...(s.tokensPerSecond !== undefined && { tokensPerSecond: s.tokensPerSecond }),
+    ...(ranOn && { ranOn }),
+  };
+}
+
 export interface HistoryReport {
   startedAt: string;
   runsPerSample: number;
   steps: { step: HistoryStep; section?: string; error?: string }[];
   floors: FloorResult[];
+  /** Fresh answers with the model warm (PR 9.11). */
+  fresh?: FreshResult[];
+  /** Clicks after Explain ahead (PR 9.11). */
+  ahead?: AheadResult[];
 }
 
 const fmt = (ms: number | undefined) => formatMs(ms);
@@ -204,49 +247,103 @@ function failedRuns(results: readonly StepResult[]): string {
     .join(', ');
 }
 
-/** The conclusion: goal met with which model, or the floor and what limits it. */
-export function conclusion(now: readonly StepResult[], floors: readonly FloorResult[]): string {
-  const best = fastest(now);
-  const unfinished = failedRuns(now);
+/** What the conclusion is drawn from besides the last step. */
+export interface ConclusionExtras {
+  /**
+   * Fresh answers with the model warm (PR 9.11). When given, the fastest
+   * model is picked from these instead of the last step, whose first run of
+   * each model includes loading it.
+   */
+  fresh?: readonly StepResult[];
+  /** Clicks after Explain ahead (PR 9.11). */
+  ahead?: readonly AheadResult[];
+}
+
+/** True when enough clicks after Explain ahead came within the goal. */
+export function aheadMeetsGoal(result: AheadResult): boolean {
+  const s = summarizeAhead(result.lines);
+  return s.lines > 0 && s.share >= AHEAD_SHARE_GOAL;
+}
+
+/** One sentence on the clicks after Explain ahead with `result`'s model. */
+function aheadSentence(result: AheadResult): string {
+  const s = summarizeAhead(result.lines);
+  return (
+    `After Explain ahead had explained the ${s.lines} lines of \`${result.page}\` ` +
+    `(${fmt(s.aheadMedianMs)} per line, ${fmt(s.aheadTotalMs)} in all with ${result.model}), ` +
+    `${formatShare(s)} clicks were answered within ${fmt(GOAL_MS)}` +
+    (s.clickMedianMs !== undefined ? `, median ${fmt(s.clickMedianMs)}.` : '.')
+  );
+}
+
+/** The floor for `best`, what limits it, and the next step; empty without a floor. */
+function floorLines(best: StepResult, floors: readonly FloorResult[]): string[] {
+  const floor = floors.find((f) => f.model === best.model);
+  const parts = floor && timeParts(floor.runs);
+  if (!floor || !parts) return [];
+  const total = median(floor.runs.flatMap((r) => (r.ok ? [r.totalMs] : [])));
+  const term = dominantTerm(parts);
+  return [
+    '',
+    `The floor on this laptop is **${fmt(total)}**: ${floor.sample}, an answer of at most ` +
+      `${FLOOR_ANSWER_TOKENS} tokens, model already loaded. Of that, ${fmt(parts.load)} is loading, ` +
+      `${fmt(parts.prompt)} reading the prompt, ${fmt(parts.answer)} writing the answer and ` +
+      `${fmt(parts.outside)} outside Ollama, so ${TERM_NAMES[term]} limits it.`,
+    '',
+    `Next step: ${nextStep(term, floor.ranOn ?? best.ranOn)}`,
+  ];
+}
+
+/**
+ * The conclusion: the goal met for fresh answers (with which model), met
+ * only for clicks after Explain ahead, or met for neither, with the floor and
+ * what limits it.
+ */
+export function conclusion(
+  now: readonly StepResult[],
+  floors: readonly FloorResult[],
+  { fresh, ahead = [] }: ConclusionExtras = {},
+): string {
+  const results = fresh ?? now;
+  const where = fresh ? 'in the fresh answers' : 'at the last step';
+  const best = fastest(results);
+  const unfinished = failedRuns(results);
   if (!best) {
-    return now.length
-      ? `**No conclusion.** No model finished every run at the last step: ${unfinished}. ` +
+    return results.length
+      ? `**No conclusion.** No model finished every run ${where}: ${unfinished}. ` +
           'Its times leave out the runs that failed, so they do not show whether the goal is met.'
-      : 'No run finished at the last step, so there is no conclusion.';
+      : `No run finished ${where}, so there is no conclusion.`;
   }
   const leftOut = unfinished
     ? ` Left out because some runs failed, so their times do not cover every sample: ${unfinished}.`
     : '';
+  const how = `(median of every sample${best.ranOn ? `, on ${best.ranOn}` : ''})`;
+  const aheadFor = ahead.find((a) => a.model === best.model) ?? ahead.find(aheadMeetsGoal);
+  const afterAhead = aheadFor ? ` ${aheadSentence(aheadFor)}` : '';
   if (best.medianMs! < GOAL_MS) {
     const slow =
       best.slowestMs !== undefined && best.slowestMs >= GOAL_MS
         ? ` The slowest run took ${fmt(best.slowestMs)}, so a long selection can still pass ${fmt(GOAL_MS)}.`
         : '';
-    return (
-      `**Goal met.** With the default settings, ${best.model} explains in ${fmt(best.medianMs)} ` +
-      `(median of every sample${best.ranOn ? `, on ${best.ranOn}` : ''}).${slow}${leftOut}`
-    );
+    const writes = fresh
+      ? `With the default settings and the model warm, ${best.model} writes a fresh answer in`
+      : `With the default settings, ${best.model} explains in`;
+    return `**Goal met.** ${writes} ${fmt(best.medianMs)} ${how}.${slow}${leftOut}${afterAhead}`;
   }
-  const floor = floors.find((f) => f.model === best.model);
-  const parts = floor && timeParts(floor.runs);
-  const lines = [
-    `**Goal not met.** The fastest model, ${best.model}, takes ${fmt(best.medianMs)} ` +
-      `(median of every sample${best.ranOn ? `, on ${best.ranOn}` : ''}).${leftOut}`,
-  ];
-  if (floor && parts) {
-    const total = median(floor.runs.flatMap((r) => (r.ok ? [r.totalMs] : [])));
-    const term = dominantTerm(parts);
-    lines.push(
-      '',
-      `The floor on this laptop is **${fmt(total)}**: ${floor.sample}, an answer of at most ` +
-        `${FLOOR_ANSWER_TOKENS} tokens, model already loaded. Of that, ${fmt(parts.load)} is loading, ` +
-        `${fmt(parts.prompt)} reading the prompt, ${fmt(parts.answer)} writing the answer and ` +
-        `${fmt(parts.outside)} outside Ollama, so ${TERM_NAMES[term]} limits it.`,
-      '',
-      `Next step: ${nextStep(term, floor.ranOn ?? best.ranOn)}`,
-    );
+  const fastestTakes = `The fastest model, ${best.model}, takes ${fmt(best.medianMs)} ${how}`;
+  if (aheadFor && aheadMeetsGoal(aheadFor)) {
+    return [
+      `**Goal met only after Explain ahead.** ${fastestTakes} for a fresh answer.${leftOut}` +
+        ` ${aheadSentence(aheadFor)} So a click on a changed line the page has had time to ` +
+        'explain is answered within the goal; a fresh answer, such as a selection or a line ' +
+        'the work has not reached, is not.',
+      ...floorLines(best, floors),
+    ].join('\n');
   }
-  return lines.join('\n');
+  return [
+    `**Goal not met.** ${fastestTakes}.${leftOut}${afterAhead}`,
+    ...floorLines(best, floors),
+  ].join('\n');
 }
 
 /** The section `npm run bench:history` adds to docs/latency.md. */
@@ -278,7 +375,52 @@ export function formatHistoryReport(report: HistoryReport): string {
       ]),
     );
   });
-  out.push('', '### Conclusion', '', conclusion(parsed.at(-1) ?? [], report.floors));
+  const fresh = report.fresh?.map(freshStep);
+  if (fresh?.length) {
+    out.push(
+      '',
+      '### Fresh answers, model warm',
+      '',
+      'The current code on every sample, with the model loaded before the first run and no ' +
+        'cache: what a click on a line nothing has explained yet takes.',
+      '',
+      line(['Model', 'Median', 'Slowest', 'Runs']),
+      line(['---', '---:', '---:', '---:']),
+      ...fresh.map((r) =>
+        line([
+          r.ranOn ? `${r.model} (${r.ranOn})` : r.model,
+          fmt(r.medianMs),
+          fmt(r.slowestMs),
+          r.failed
+            ? `${(r.runs ?? 0) - r.failed} of ${r.runs} (${r.failed} failed)`
+            : String(r.runs),
+        ]),
+      ),
+    );
+  }
+  if (report.ahead?.length) {
+    out.push(
+      '',
+      '### Clicks after Explain ahead',
+      '',
+      `Each added line of \`${report.ahead[0]!.page}\` explained ahead, one at a time, as ` +
+        'Explain ahead does, then a click on each timed. A click does not wait for the 2 seconds ' +
+        'of stillness or for lines not yet reached, so this is the best case once the page has ' +
+        `had time; at least ${Math.round(AHEAD_SHARE_GOAL * 100)}% of clicks within ` +
+        `${fmt(GOAL_MS)} counts as meeting the goal.`,
+      '',
+      formatAheadTable(report.ahead),
+    );
+  }
+  out.push(
+    '',
+    '### Conclusion',
+    '',
+    conclusion(parsed.at(-1) ?? [], report.floors, {
+      ...(fresh && { fresh }),
+      ...(report.ahead && { ahead: report.ahead }),
+    }),
+  );
   const failed = report.steps.filter((s) => s.error);
   if (failed.length) {
     out.push('', 'Steps that failed:', '', ...failed.map((s) => `- ${s.step.label}: ${s.error}`));
