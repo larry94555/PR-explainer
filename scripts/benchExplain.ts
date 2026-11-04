@@ -16,17 +16,26 @@ import {
   createExplainHandler,
   type ExplainDeps,
   type ExplainPayload,
+  type ExplainResult,
 } from '../src/explain/explainHandler';
 import {
   AHEAD_HUNK_MAX_LINES,
   AHEAD_MAX_PER_PAGE,
+  AHEAD_MAX_PER_PR,
+  REQUESTS_AT_ONCE,
   hunkRequest,
   visibleAddedLines,
   worthExplaining,
   type AheadLine,
   type HunkRequest,
 } from '../src/explainAhead';
-import { createHunkExplainHandler } from '../src/explain/hunkHandler';
+import { createHunkExplainHandler, linePayload, type HunkResult } from '../src/explain/hunkHandler';
+import { createPrefetchQueue, explainJob } from '../src/explain/prefetchQueue';
+import {
+  aheadLines as patchAheadLines,
+  requestsFromFiles,
+  type PrFile,
+} from '../src/patchRequests';
 import { splitHunkLines } from '../src/explain/hunkPrompt';
 import type { Explanation } from '../src/explain/parseExplanation';
 import { createModelLookup } from '../src/llm/contextSize';
@@ -43,6 +52,9 @@ import {
   summarizeAhead,
   summarizeByHunk,
   summarizeLevel,
+  summarizeWholePr,
+  formatCachedShare,
+  formatMinutes,
   type AheadLineResult,
   type AheadResult,
   type BenchAnswer,
@@ -53,9 +65,11 @@ import {
   type LevelResult,
   type ParallelResult,
   type TimedRun,
+  type WholePrClick,
+  type WholePrResult,
 } from './benchStats.ts';
 
-export { DEFAULT_SETTINGS };
+export { AHEAD_MAX_PER_PR, DEFAULT_SETTINGS, REQUESTS_AT_ONCE };
 
 /** The PR the ahead mode's answers are cached under (any name works; the cache needs one). */
 const AHEAD_PR = 'bench/ahead';
@@ -270,6 +284,29 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
         );
       }
       return { label: request.label, single, hunk, byHunk };
+    },
+
+    /** Explains `context` once with nothing cached, as a click on an idle model does. */
+    single: (context: string, model: string): Promise<BenchRun> =>
+      timed(handlerFor(model), { context, pr: AHEAD_PR }),
+
+    /**
+     * The whole-PR mode (PR 10.8): the explain and hunk handlers sharing one
+     * empty cache, as in the service worker, for prefetchWholePr.
+     */
+    wholePrAsk(model: string): WholePrAsk {
+      const deps: ExplainDeps = {
+        getSettings: async () => settingsFor(model),
+        createClient,
+        platform,
+        contextTokens: contextSizer,
+        thinking,
+        cache: createExplainCache(memoryStorage()),
+      };
+      const explain = createExplainHandler(deps);
+      const explainHunk = createHunkExplainHandler(deps);
+      return (payload, options) =>
+        payload.hunk ? explainHunk(payload, options) : explain(payload, options);
     },
   };
 }
@@ -525,6 +562,327 @@ export async function runByHunk(
     }
     const ranOn = await bench.ranOn(model);
     if (ranOn) result.ranOn = ranOn;
+    results.push(result);
+  }
+  return results;
+}
+
+// --- Whole PR (PR 10.8) ----------------------------------------------------
+
+/** The saved PR the whole-PR mode prefetches: the src/ files of #66 (PR 10.7), as GitHub's API lists them. */
+export const WHOLE_PR_SAMPLE = 'tests/fixtures/github-pr-66-src-files.json';
+
+/** How long the whole-PR mode lets one model run: past the last checkpoint (15 minutes). */
+export const WHOLE_PR_MAX_MS = 20 * 60_000;
+
+/** How many lines are asked one at a time first, for the time per line without hunks. */
+export const WHOLE_PR_SINGLE_LINES = 10;
+
+/** The requests Whole PR sends for a saved PR. */
+export interface WholePrPlan {
+  /** Changed lines worth explaining. */
+  lines: number;
+  /** Lines sent, at most `maxLines`. */
+  sent: number;
+  /** One per hunk, AHEAD_HUNK_MAX_LINES lines at most, in the PR's order. */
+  requests: HunkRequest[];
+}
+
+/**
+ * What Whole PR (PR 10.6) sends for `files` (the API's list of a PR's files):
+ * every changed line worth explaining, built as a click would build it
+ * (src/patchRequests.ts), up to the per-PR limit, grouped by hunk.
+ */
+export function wholePrPlan(files: readonly PrFile[], maxLines = AHEAD_MAX_PER_PR): WholePrPlan {
+  const all = patchAheadLines(requestsFromFiles(files));
+  const byHunk = new Map<string, AheadLine[]>();
+  for (const line of all.slice(0, maxLines)) {
+    const id = line.hunk?.id ?? line.key;
+    byHunk.set(id, [...(byHunk.get(id) ?? []), line]);
+  }
+  const requests = [...byHunk.values()]
+    .flatMap((group) => splitHunkLines(group, AHEAD_HUNK_MAX_LINES))
+    .flatMap((part) => {
+      const request = hunkRequest(part);
+      return request ? [request] : [];
+    });
+  return { lines: all.length, sent: requests.reduce((n, r) => n + r.lines.length, 0), requests };
+}
+
+/** What the service worker's queue runs: the explain handler, or the hunk handler for a hunk. */
+export type WholePrAsk = (
+  payload: ExplainPayload,
+  options: { signal: AbortSignal; onChunk(text: string): void },
+) => Promise<ExplainResult | HunkResult>;
+
+export interface WholePrOptions {
+  /** Requests at once. */
+  atOnce?: number;
+  /** Stops the run (dropping what is left) after this long. */
+  maxMs?: number;
+  now?: () => number;
+  /** Send a click on a line not reached yet once the first request is in. Default true. */
+  click?: boolean;
+}
+
+export type WholePrRun = Pick<WholePrResult, 'totalMs' | 'stopped' | 'answered' | 'failures'> & {
+  click?: WholePrClick;
+};
+
+/**
+ * Sends every request of `requests` through the service worker's queue
+ * (src/explain/prefetchQueue.ts), wired as src/background.ts wires it: a hunk
+ * request goes to the hunk handler, the lines its answer left out come back
+ * one by one, a failed request is tried once more. Records when each line is
+ * answered. Once the first request is in (the model is busy with the next),
+ * it clicks the last line of the PR, which the background work has not
+ * reached, and records how long the click waited and what it stopped.
+ */
+export async function prefetchWholePr(
+  requests: readonly HunkRequest[],
+  ask: WholePrAsk,
+  {
+    atOnce = 1,
+    maxMs = WHOLE_PR_MAX_MS,
+    now = () => performance.now(),
+    click = true,
+  }: WholePrOptions = {},
+): Promise<WholePrRun> {
+  const t0 = now();
+  const at = () => now() - t0;
+  const labelOf = new Map(requests.flatMap((r) => r.lines.map((l) => [l.request.text, l.label])));
+  const answered = new Map<string, number>();
+  const mark = (label: string) => {
+    if (!answered.has(label)) answered.set(label, at());
+  };
+  const lastError = new Map<string, string>();
+  const failures: string[] = [];
+  let clicked: (WholePrClick & { pending: boolean }) | undefined;
+  let stopped = false;
+  let sentAll = false;
+  let finishRun!: () => void;
+  const ran = new Promise<void>((resolve) => (finishRun = resolve));
+
+  const queue = createPrefetchQueue<ExplainPayload, ExplainResult | HunkResult>({
+    concurrency: atOnce,
+    now: at,
+    run: async (payload, options) => {
+      const result = await ask(payload, options);
+      const label = payload.job?.label ?? labelOf.get(payload.context) ?? payload.context;
+      if (result.status === 'failed') lastError.set(label, result.message);
+      else if (result.status === 'hunk') {
+        result.lines.forEach((line, i) => {
+          if (line.status !== 'missing') mark(payload.hunk?.lines[i]?.label ?? line.label);
+        });
+      } else mark(labelOf.get(payload.context) ?? label);
+      return result;
+    },
+    failed: (result) => result.status === 'failed',
+    cached: (result) =>
+      result.status === 'hunk'
+        ? result.lines.every((line) => line.status === 'cached')
+        : result.status === 'done' && result.cached !== undefined,
+    followUps: (spec, result) =>
+      result.status === 'hunk' && spec.payload.hunk
+        ? result.lines.flatMap((line, i) =>
+            line.status === 'missing'
+              ? [explainJob(linePayload(spec.payload, spec.payload.hunk!.lines[i]!))]
+              : [],
+          )
+        : [],
+    onEvent: (event) => {
+      if (event.priority === 'click') {
+        if (event.type === 'started' && clicked) clicked.startedAtMs ??= at();
+      } else {
+        const waiting = clicked && clicked.startedAtMs === undefined;
+        if (waiting && event.type === 'cancelled') clicked!.cancelled += 1;
+        if (waiting && ['finished', 'skipped', 'failed', 'retry'].includes(event.type)) {
+          clicked!.finishedWhileWaiting += 1;
+        }
+        if (event.type === 'failed') {
+          failures.push(`${event.label}: ${lastError.get(event.label) ?? 'failed'}`);
+        }
+        // The first answer is in and more is waiting: time a click now.
+        if (click && !clicked && sentAll && event.type !== 'queued' && event.waiting > 0) {
+          if (['finished', 'skipped', 'failed'].includes(event.type)) queueMicrotask(sendClick);
+        }
+      }
+      // Checked once the event is over: a finished hunk's follow-ups are
+      // queued just after it is reported.
+      if (sentAll && event.running === 0 && event.waiting === 0) queueMicrotask(finishIfIdle);
+    },
+  });
+
+  function finishIfIdle(): void {
+    const { running, waiting } = queue.state();
+    if (running.length === 0 && waiting.length === 0 && !clicked?.pending) finishRun();
+  }
+
+  function sendClick(): void {
+    if (clicked || stopped) return;
+    const target = requests.at(-1)?.lines.at(-1);
+    if (!target || answered.has(target.label)) return;
+    const sentAtMs = at();
+    clicked = {
+      line: target.label,
+      sentAtMs,
+      run: { ok: false, error: 'not answered' },
+      finishedWhileWaiting: 0,
+      cancelled: 0,
+      pending: true,
+    };
+    const state = clicked;
+    let firstTokenMs: number | undefined;
+    queue
+      .add(explainJob({ context: target.request.text, pr: AHEAD_PR, cause: 'click' }), {
+        onChunk: (text) => {
+          if (firstTokenMs === undefined && text) firstTokenMs = at() - sentAtMs;
+        },
+      })
+      .then(
+        (result): BenchRun =>
+          result.status === 'failed'
+            ? { ok: false, error: result.message }
+            : {
+                ok: true,
+                totalMs: at() - sentAtMs,
+                ...(firstTokenMs !== undefined && { firstTokenMs }),
+                ...(result.status === 'done' && result.timings && { timings: result.timings }),
+              },
+        (error: unknown): BenchRun => ({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+      .then((run) => {
+        state.run = run;
+        state.pending = false;
+        finishIfIdle();
+      });
+  }
+
+  const timer = setTimeout(() => {
+    stopped = true;
+    queue.drop(() => true);
+    finishRun();
+  }, maxMs);
+  // Every request at once, as the content script's pass would hand them
+  // over; the queue runs them in the PR's order.
+  requests.forEach((request, order) => {
+    const payload: ExplainPayload =
+      request.lines.length === 1
+        ? {
+            context: request.lines[0]!.request.text,
+            pr: AHEAD_PR,
+            cause: 'ahead',
+            job: { label: request.lines[0]!.label, priority: 'rest', order },
+          }
+        : {
+            context: request.text,
+            pr: AHEAD_PR,
+            cause: 'ahead',
+            job: { label: request.label, priority: 'rest', order },
+            hunk: {
+              text: request.text,
+              lines: request.lines.map((l) => ({
+                label: l.label,
+                context: l.request.text,
+                line: l.line,
+                code: l.code,
+              })),
+            },
+          };
+    // A request dropped at the time limit rejects; its lines are simply not answered.
+    queue.add(explainJob(payload)).catch(() => {});
+  });
+  sentAll = true;
+  if (requests.length === 0) finishRun();
+  await ran;
+  clearTimeout(timer);
+  const totalMs = at();
+  const answeredLines = [...answered].map(([line, atMs]) => ({ line, atMs }));
+  answeredLines.sort((a, b) => a.atMs - b.atMs);
+  const result: WholePrRun = {
+    totalMs,
+    stopped: stopped && answered.size < labelOf.size,
+    answered: answeredLines,
+    failures,
+  };
+  if (clicked) {
+    const { line, sentAtMs, startedAtMs, run, finishedWhileWaiting, cancelled } = clicked;
+    result.click = {
+      line,
+      sentAtMs,
+      ...(startedAtMs !== undefined && { startedAtMs }),
+      run,
+      finishedWhileWaiting,
+      cancelled,
+    };
+  }
+  return result;
+}
+
+/**
+ * The whole-PR mode for each model (PR 10.8): loads the model (not counted),
+ * asks WHOLE_PR_SINGLE_LINES lines one at a time, then prefetches the whole
+ * saved PR through the queue with an empty cache. Prints progress as it goes.
+ */
+export async function runWholePr(
+  bench: ReturnType<typeof createBench>,
+  models: readonly string[],
+  warmSample: BenchSample,
+  { atOnce = 1, maxMs = WHOLE_PR_MAX_MS }: { atOnce?: number; maxMs?: number } = {},
+): Promise<WholePrResult[]> {
+  const root = resolve(import.meta.dirname, '..');
+  const files = JSON.parse(readFileSync(join(root, WHOLE_PR_SAMPLE), 'utf8')) as PrFile[];
+  const plan = wholePrPlan(files);
+  const results: WholePrResult[] = [];
+  for (const model of models) {
+    console.log(`  ${model} · loading, then ${WHOLE_PR_SINGLE_LINES} lines one at a time …`);
+    await bench.explain(warmSample, model); // loads the model; not counted
+    const single: BenchRun[] = [];
+    for (const line of plan.requests.flatMap((r) => r.lines).slice(0, WHOLE_PR_SINGLE_LINES)) {
+      single.push(await bench.single(line.request.text, model));
+    }
+    console.log(
+      `  ${model} · the whole PR: ${plan.sent} lines in ${plan.requests.length} requests, ` +
+        `${formatMinutes(maxMs)} at most …`,
+    );
+    const ask = bench.wholePrAsk(model);
+    const started = performance.now();
+    let reported = 0;
+    const run = await prefetchWholePr(
+      plan.requests,
+      async (payload, options) => {
+        const result = await ask(payload, options);
+        // A line of progress about once a minute.
+        const minute = Math.floor((performance.now() - started) / 60_000);
+        if (minute > reported) {
+          reported = minute;
+          console.log(`  ${model} · ${minute} min …`);
+        }
+        return result;
+      },
+      { atOnce, maxMs },
+    );
+    const result: WholePrResult = {
+      model,
+      sample: WHOLE_PR_SAMPLE,
+      lines: plan.lines,
+      sent: plan.sent,
+      requests: plan.requests.length,
+      atOnce,
+      single,
+      ...run,
+    };
+    const ranOn = await bench.ranOn(model);
+    if (ranOn) result.ranOn = ranOn;
+    const s = summarizeWholePr(result);
+    console.log(
+      `  ${model} · whole PR ${formatMinutes(s.wholePrMs, s.estimated)}, ` +
+        `${formatMs(s.byHunkPerLineMs)} per line by hunk (${formatMs(s.singlePerLineMs)} one at a time), ` +
+        s.cached.map((c) => `after ${c.minutes} min ${formatCachedShare(c, s.lines)}`).join(', '),
+    );
     results.push(result);
   }
   return results;

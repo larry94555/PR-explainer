@@ -26,6 +26,16 @@ after Explain ahead (at least 90% of them within 2 seconds, with any model), or 
 floor (the shortest sample, an answer of at most 150 tokens, the model already loaded), which
 part of the time limits it, and what would help next.
 
+`npm run bench -- --whole-pr [model ...]` (roadmap PR 10.8) adds a **Whole PR** section: every
+changed line of a saved PR (`tests/fixtures/github-pr-66-src-files.json`, 252 lines) goes through
+the service worker's queue as **Explain ahead**'s Whole PR sends it, one request per hunk, with an
+empty cache. It reports how long the whole PR took, the time per line (a sample asked one at a
+time, and by hunk), the share of changed lines a click would find answered after 1, 5 and 15
+minutes, and how long a click sent during the run waited (it should stop at most one background
+request, never wait for one to finish). Its conclusion says whether most clicks (at least 90%) are
+instant after 5 minutes, only after 15, or not yet, and what the numbers say about **Requests at
+once** and the per-PR limit.
+
 ## Latency report 2026-11-02 03:49
 
 Every step below ran `npm run bench` (3 runs per sample) with the code as it was when that PR merged, one after another on this computer, each starting with the model unloaded. Times are the median, and the slowest run, of every sample. Keeping the model loaded (8.3) mostly helps the first click after a pause, which back-to-back runs do not show, and Explain on hover (8.7) hides time while you read rather than cutting it.

@@ -20,6 +20,11 @@ import {
   goalVerdicts,
   formatTable,
   formatParallelReport,
+  formatMinutes,
+  formatWholePrReport,
+  formatWholePrTable,
+  summarizeWholePr,
+  type WholePrResult,
   LATENCY_DOC_INTRO,
   median,
   mostAtOnce,
@@ -297,6 +302,7 @@ describe('parseBenchArgs', () => {
       save: true,
       ahead: false,
       byHunk: false,
+      wholePr: false,
     });
   });
 
@@ -317,6 +323,7 @@ describe('parseBenchArgs', () => {
       save: false,
       ahead: false,
       byHunk: false,
+      wholePr: false,
     });
   });
 
@@ -931,6 +938,330 @@ describe('requests at once (PR 10.1)', () => {
       expect(asked).toEqual(['a', 'click']);
       expect(level.answers[0]!.run.ok).toBe(false);
       expect(level.click?.run).toEqual(ok(5));
+    });
+  });
+});
+
+// PR 10.8: the whole-PR mode.
+describe('the whole-PR mode', () => {
+  const machine = {
+    os: 'Windows 11 Pro',
+    cpu: 'CPU (16 threads)',
+    ramBytes: 16 * 1024 ** 3,
+    gpus: [],
+  };
+  const okRun = (totalMs: number): BenchRun => ({ ok: true, totalMs });
+  const minutes = (m: number) => m * 60_000;
+
+  /** A run over `lines` lines, `answered` of them at the times given (in minutes). */
+  const result = (over: Partial<WholePrResult> = {}): WholePrResult => ({
+    model: 'm',
+    sample: 'tests/fixtures/pr.json',
+    lines: 10,
+    sent: 10,
+    requests: 4,
+    atOnce: 1,
+    totalMs: minutes(10),
+    stopped: false,
+    answered: [0.5, 0.5, 2, 2, 4, 4, 6, 8, 10, 10].map((m, i) => ({
+      line: `a.ts:added:${i + 1}`,
+      atMs: minutes(m),
+    })),
+    single: [okRun(3000), okRun(5000), { ok: false, error: 'timeout' }],
+    click: {
+      line: 'a.ts:added:10',
+      sentAtMs: 30_000,
+      startedAtMs: 30_012,
+      run: okRun(4200),
+      finishedWhileWaiting: 0,
+      cancelled: 1,
+    },
+    failures: [],
+    ...over,
+  });
+
+  describe('summarizeWholePr', () => {
+    it('gives the whole time, the time per line both ways, and the click wait', () => {
+      const s = summarizeWholePr(result());
+      expect(s).toMatchObject({
+        lines: 10,
+        answered: 10,
+        wholePrMs: minutes(10),
+        estimated: false,
+        // The failed single run adds no time.
+        singlePerLineMs: 4000,
+        byHunkPerLineMs: 60_000,
+        click: { line: 'a.ts:added:10', waitMs: 12, totalMs: 4200, cancelled: 1 },
+      });
+      expect(s.speedup).toBeCloseTo(4000 / 60_000);
+      expect(s.click?.waitedAtMostOneCancelled).toBe(true);
+    });
+
+    it('counts the lines cached by 1, 5 and 15 minutes, keeping the final share after the end', () => {
+      expect(summarizeWholePr(result()).cached).toEqual([
+        { minutes: 1, answered: 2, share: 0.2 },
+        { minutes: 5, answered: 6, share: 0.6 },
+        { minutes: 15, answered: 10, share: 1 },
+      ]);
+    });
+
+    it('measures the share against every changed line, including those past the limit', () => {
+      const s = summarizeWholePr(result({ lines: 20 }));
+      expect(s.cached.map((c) => c.share)).toEqual([0.1, 0.3, 0.5]);
+    });
+
+    it('estimates the whole PR from the rate when the run was stopped', () => {
+      const s = summarizeWholePr(
+        result({ stopped: true, sent: 30, totalMs: minutes(20), lines: 30 }),
+      );
+      expect(s.estimated).toBe(true);
+      expect(s.wholePrMs).toBe(minutes(20 / 10) * 30);
+    });
+
+    it('fails the click check when a background request finished while it waited', () => {
+      const click = { ...result().click!, finishedWhileWaiting: 1 };
+      expect(summarizeWholePr(result({ click })).click?.waitedAtMostOneCancelled).toBe(false);
+      const never = { ...click, finishedWhileWaiting: 0, startedAtMs: undefined };
+      expect(summarizeWholePr(result({ click: never })).click).toMatchObject({
+        waitedAtMostOneCancelled: false,
+      });
+      expect(summarizeWholePr(result({ click: never })).click?.waitMs).toBeUndefined();
+    });
+
+    it('gives no times when nothing finished', () => {
+      const s = summarizeWholePr(
+        result({ answered: [], single: [], click: undefined, totalMs: 0 }),
+      );
+      expect(s).toMatchObject({ answered: 0 });
+      expect(s.byHunkPerLineMs).toBeUndefined();
+      expect(s.singlePerLineMs).toBeUndefined();
+      expect(s.click).toBeUndefined();
+    });
+  });
+
+  describe('the section', () => {
+    const section = formatWholePrReport({
+      startedAt: new Date(2026, 10, 4, 9, 5),
+      machine,
+      llmUrl: 'http://localhost:11434',
+      temperature: 0.2,
+      maxResponseTokens: 300,
+      maxMs: minutes(20),
+      results: [result({ ranOn: '100% CPU' })],
+      conclusion: '**Most clicks are instant after 5 minutes, with m.**\n',
+    });
+
+    it('has a dated heading, the settings and a row per model', () => {
+      expect(section).toContain('## 2026-11-04 09:05 · Whole PR · m');
+      expect(section).toContain('1 at once, stopped after 20.0 min at most');
+      expect(section).toContain(
+        '| m (100% CPU) | 10 | 10.0 min | 4.0 s | 60.0 s | 20% (2 of 10) | 60% (6 of 10) | 100% (10 of 10) |',
+      );
+    });
+
+    it('describes the click and ends with the conclusion', () => {
+      expect(section).toContain(
+        '- m: a click on a.ts:added:10 at 0:30 started after 12 ms, stopping 1 background request, ' +
+          'answered in 4.2 s (a line alone: 4.0 s). It waited no longer than one cancelled request.',
+      );
+      expect(
+        section.trimEnd().endsWith('**Most clicks are instant after 5 minutes, with m.**'),
+      ).toBe(true);
+    });
+
+    it('says how many lines were sent when the limit cut the PR, and lists failures', () => {
+      const cut = formatWholePrTable([result({ lines: 600, sent: 500 })]);
+      expect(cut).toContain('| m | 600 (500 sent) |');
+      const failedSection = formatWholePrReport({
+        startedAt: new Date(2026, 10, 4, 9, 5),
+        machine,
+        llmUrl: 'http://localhost:11434',
+        temperature: 0.2,
+        maxResponseTokens: 300,
+        maxMs: minutes(20),
+        results: [result({ failures: ['a.ts: lines 1, 2: timeout'], click: undefined })],
+      });
+      expect(failedSection).toContain('- m: no click was sent (the run ended first).');
+      expect(failedSection).toContain('Failed requests:\n\n- m: a.ts: lines 1, 2: timeout');
+    });
+
+    it('formats minutes, and marks an estimate', () => {
+      expect(formatMinutes(45_000)).toBe('45.0 s');
+      expect(formatMinutes(minutes(12.34))).toBe('12.3 min');
+      expect(formatMinutes(minutes(41), true)).toBe('about 41.0 min');
+      expect(formatMinutes(undefined)).toBe('–');
+    });
+  });
+
+  describe('wholePrPlan', () => {
+    it('builds one request per hunk from the saved PR, as Whole PR sends them', async () => {
+      const { wholePrPlan, WHOLE_PR_SAMPLE } = await import('../scripts/benchExplain.ts');
+      const files = JSON.parse(readFileSync(WHOLE_PR_SAMPLE, 'utf8'));
+      const plan = wholePrPlan(files);
+      expect(plan.lines).toBe(252);
+      expect(plan.sent).toBe(252);
+      expect(plan.requests.length).toBeGreaterThanOrEqual(39);
+      for (const request of plan.requests) {
+        expect(request.lines.length).toBeGreaterThan(0);
+        expect(request.lines.length).toBeLessThanOrEqual(15);
+        // Every line of a request is in the same file.
+        const files = new Set(request.lines.map((l) => l.label.split(':added:')[0]));
+        expect(files.size).toBe(1);
+      }
+      expect(plan.requests[0]!.label).toMatch(/^src\/background\.ts: lines? /);
+    });
+
+    it('stops at the per-PR limit', async () => {
+      const { wholePrPlan, WHOLE_PR_SAMPLE } = await import('../scripts/benchExplain.ts');
+      const plan = wholePrPlan(JSON.parse(readFileSync(WHOLE_PR_SAMPLE, 'utf8')), 20);
+      expect(plan).toMatchObject({ lines: 252, sent: 20 });
+    });
+  });
+
+  describe('prefetchWholePr', () => {
+    type Ask = import('../scripts/benchExplain.ts').WholePrAsk;
+    type Request = import('../src/explainAhead').HunkRequest;
+
+    const request = (file: string, numbers: number[]): Request => ({
+      label: `${file}: lines ${numbers.join(', ')}`,
+      text: `hunk of ${file}`,
+      lines: numbers.map((n) => ({
+        label: `${file}:added:${n}`,
+        request: { text: `line ${n} of ${file}` } as never,
+        line: n,
+        code: `+code ${n}`,
+      })),
+    });
+
+    /**
+     * A model that takes 1 s per line on a fake clock, answers on the next
+     * tick, and stops when its request is aborted. `missing` lines are left
+     * out of a hunk's answer; `failing` requests fail.
+     */
+    function fakeModel({
+      missing = new Set<string>(),
+      failing = new Set<string>(),
+      hang = false,
+    } = {}) {
+      const clock = { t: 0 };
+      const asked: string[] = [];
+      const ask: Ask = (payload, { signal }) =>
+        new Promise((resolve, reject) => {
+          const label = payload.job?.label ?? payload.cause ?? '';
+          asked.push(`${payload.cause}:${label}`);
+          signal.addEventListener('abort', () => reject(new Error('aborted')));
+          if (hang) return;
+          setTimeout(() => {
+            if (signal.aborted) return;
+            clock.t += 1000 * (payload.hunk?.lines.length ?? 1);
+            if (failing.has(label)) {
+              resolve({ status: 'failed', message: 'model crashed', fix: '' });
+            } else if (payload.hunk) {
+              resolve({
+                status: 'hunk',
+                lines: payload.hunk.lines.map((l) => ({
+                  label: l.label,
+                  status: missing.has(l.label) ? 'missing' : 'done',
+                })),
+              });
+            } else {
+              resolve({
+                status: 'done',
+                model: 'm',
+                explanation: { what: 'w', why: 'y', concerns: 'c' },
+              });
+            }
+          }, 0);
+        });
+      return { ask, asked, now: () => clock.t };
+    }
+
+    it('answers every line in the PR order and records when', async () => {
+      const { prefetchWholePr } = await import('../scripts/benchExplain.ts');
+      const fake = fakeModel();
+      const requests = [request('a.ts', [1, 2]), request('b.ts', [5])];
+      const run = await prefetchWholePr(requests, fake.ask, { now: fake.now, click: false });
+      expect(fake.asked).toEqual(['ahead:a.ts: lines 1, 2', 'ahead:b.ts:added:5']);
+      expect(run).toMatchObject({ totalMs: 3000, stopped: false, failures: [] });
+      expect(run.answered).toEqual([
+        { line: 'a.ts:added:1', atMs: 2000 },
+        { line: 'a.ts:added:2', atMs: 2000 },
+        { line: 'b.ts:added:5', atMs: 3000 },
+      ]);
+      expect(run.click).toBeUndefined();
+    });
+
+    it('asks again, one by one, for the lines a hunk answer left out', async () => {
+      const { prefetchWholePr } = await import('../scripts/benchExplain.ts');
+      const fake = fakeModel({ missing: new Set(['a.ts:added:2']) });
+      const run = await prefetchWholePr([request('a.ts', [1, 2, 3])], fake.ask, {
+        now: fake.now,
+        click: false,
+      });
+      expect(fake.asked).toEqual(['ahead:a.ts: lines 1, 2, 3', 'ahead:a.ts:added:2']);
+      expect(run.answered.map((a) => a.line)).toEqual([
+        'a.ts:added:1',
+        'a.ts:added:3',
+        'a.ts:added:2',
+      ]);
+    });
+
+    it('lists a request that failed twice and leaves its lines unanswered', async () => {
+      const { prefetchWholePr } = await import('../scripts/benchExplain.ts');
+      const fake = fakeModel({ failing: new Set(['a.ts: lines 1, 2']) });
+      const run = await prefetchWholePr([request('a.ts', [1, 2]), request('b.ts', [5])], fake.ask, {
+        now: fake.now,
+        click: false,
+      });
+      expect(fake.asked.filter((a) => a === 'ahead:a.ts: lines 1, 2')).toHaveLength(2);
+      expect(run.failures).toEqual(['a.ts: lines 1, 2: model crashed']);
+      expect(run.answered.map((a) => a.line)).toEqual(['b.ts:added:5']);
+    });
+
+    it('clicks the last line once the first request is in, stopping only the one running', async () => {
+      const { prefetchWholePr } = await import('../scripts/benchExplain.ts');
+      const fake = fakeModel();
+      const requests = [request('a.ts', [1]), request('b.ts', [2, 3]), request('c.ts', [4, 5])];
+      const run = await prefetchWholePr(requests, fake.ask, { now: fake.now });
+      // b.ts was running when the click came, so it was stopped and run again after.
+      expect(fake.asked).toEqual([
+        'ahead:a.ts:added:1',
+        'ahead:b.ts: lines 2, 3',
+        'click:click',
+        'ahead:b.ts: lines 2, 3',
+        'ahead:c.ts: lines 4, 5',
+      ]);
+      expect(run.click).toEqual({
+        line: 'c.ts:added:5',
+        sentAtMs: 1000,
+        startedAtMs: 1000,
+        run: { ok: true, totalMs: 1000 },
+        finishedWhileWaiting: 0,
+        cancelled: 1,
+      });
+      // The clicked line counts as answered from the click on.
+      expect(run.answered.find((a) => a.line === 'c.ts:added:5')).toEqual({
+        line: 'c.ts:added:5',
+        atMs: 2000,
+      });
+      expect(run.answered).toHaveLength(5);
+      expect(summarizeWholePr({ ...result(), ...run }).click?.waitedAtMostOneCancelled).toBe(true);
+    });
+
+    it('stops at the time limit and says so', async () => {
+      const { prefetchWholePr } = await import('../scripts/benchExplain.ts');
+      const fake = fakeModel({ hang: true });
+      const run = await prefetchWholePr([request('a.ts', [1, 2])], fake.ask, {
+        now: fake.now,
+        maxMs: 5,
+      });
+      expect(run).toMatchObject({ stopped: true, answered: [] });
+    });
+
+    it('ends at once with nothing to send', async () => {
+      const { prefetchWholePr } = await import('../scripts/benchExplain.ts');
+      const run = await prefetchWholePr([], fakeModel().ask);
+      expect(run).toMatchObject({ stopped: false, answered: [], failures: [] });
     });
   });
 });

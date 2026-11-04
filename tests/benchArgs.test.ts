@@ -14,6 +14,7 @@ describe('--parallel', () => {
       save: true,
       ahead: false,
       byHunk: false,
+      wholePr: false,
       parallel: [1, 2, 4],
     });
     expect(parseBenchArgs(['--parallel=2']).parallel).toEqual([2]);
@@ -40,7 +41,7 @@ describe('--parallel', () => {
 
   it('cannot be used with --ahead', () => {
     expect(() => parseBenchArgs(['--ahead', '--parallel', '1,2'])).toThrow(
-      'Use only one of --ahead, --parallel and --by-hunk',
+      'Use only one of --ahead, --parallel, --by-hunk and --whole-pr',
     );
   });
 });
@@ -57,7 +58,25 @@ describe('--by-hunk (PR 10.5)', () => {
   it('cannot be used with --ahead or --parallel', () => {
     for (const other of [['--ahead'], ['--parallel', '1,2']]) {
       expect(() => parseBenchArgs(['--by-hunk', ...other])).toThrow(
-        'Use only one of --ahead, --parallel and --by-hunk',
+        'Use only one of --ahead, --parallel, --by-hunk and --whole-pr',
+      );
+    }
+  });
+});
+
+describe('--whole-pr (PR 10.8)', () => {
+  it('is off unless asked for, and reads with models', () => {
+    expect(parseBenchArgs(['m']).wholePr).toBe(false);
+    expect(parseBenchArgs(['--whole-pr', 'qwen2.5-coder:1.5b'])).toMatchObject({
+      models: ['qwen2.5-coder:1.5b'],
+      wholePr: true,
+    });
+  });
+
+  it('cannot be used with another mode', () => {
+    for (const other of [['--ahead'], ['--parallel', '1,2'], ['--by-hunk']]) {
+      expect(() => parseBenchArgs(['--whole-pr', ...other])).toThrow(
+        'Use only one of --ahead, --parallel, --by-hunk and --whole-pr',
       );
     }
   });

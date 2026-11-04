@@ -847,6 +847,252 @@ export function formatByHunkReport(report: ByHunkReport): string {
   return out.join('\n') + '\n';
 }
 
+// --- Whole PR (PR 10.8) ----------------------------------------------------
+
+/** The times, in minutes after the PR opens, the whole-PR mode reports the cached share at. */
+export const WHOLE_PR_CHECKPOINTS_MIN = [1, 5, 15] as const;
+
+/** A changed line the whole-PR mode answered, and when (ms from the start of the run). */
+export interface AnsweredLine {
+  line: string;
+  atMs: number;
+}
+
+/** The click the whole-PR mode sends while the background work runs. */
+export interface WholePrClick {
+  /** Such as "src/a.ts:added:12": a line the background work had not reached. */
+  line: string;
+  /** When it was sent, from the start of the run. */
+  sentAtMs: number;
+  /** When the queue started it, from the start of the run. Left out when it never started. */
+  startedAtMs?: number;
+  /** From sending it to its whole answer. */
+  run: BenchRun;
+  /** Background requests that finished (not stopped) while it waited to start: should be 0. */
+  finishedWhileWaiting: number;
+  /** Background requests the click stopped to free the model. */
+  cancelled: number;
+}
+
+/** The whole-PR mode's results for one model. */
+export interface WholePrResult {
+  model: string;
+  /** The saved PR the lines came from. */
+  sample: string;
+  /** Changed lines worth explaining in the PR (blank and closing lines left out). */
+  lines: number;
+  /** Lines sent, at most the per-PR limit. */
+  sent: number;
+  /** Requests sent: one per hunk, at most AHEAD_HUNK_MAX_LINES lines each. */
+  requests: number;
+  /** How many requests ran at once (Requests at once). */
+  atOnce: number;
+  /** From the first request to the queue running dry, or to the time limit. */
+  totalMs: number;
+  /** True when the run hit the time limit before every line was answered. */
+  stopped: boolean;
+  answered: AnsweredLine[];
+  /** A sample of lines asked one at a time with nothing cached, as a click asks. */
+  single: BenchRun[];
+  click?: WholePrClick;
+  /** Requests that failed, after their retry. */
+  failures: string[];
+  /** Where the model ran, worded like `ollama ps`. */
+  ranOn?: string;
+}
+
+export interface CachedShare {
+  minutes: number;
+  answered: number;
+  /** answered ÷ lines, 0 when there are no lines. */
+  share: number;
+}
+
+export interface WholePrSummary {
+  lines: number;
+  answered: number;
+  /** The whole PR's time: measured, or estimated from the rate when the run was stopped. */
+  wholePrMs?: number;
+  estimated: boolean;
+  /** Mean time per line asked one at a time. */
+  singlePerLineMs?: number;
+  /** The run's time per line it answered (one request per hunk). */
+  byHunkPerLineMs?: number;
+  /** single ÷ by hunk, when both are known. */
+  speedup?: number;
+  cached: CachedShare[];
+  click?: {
+    line: string;
+    /** From sending the click to the queue starting it. */
+    waitMs?: number;
+    totalMs?: number;
+    error?: string;
+    cancelled: number;
+    /** No background request finished while it waited, so it waited at most for stopping one. */
+    waitedAtMostOneCancelled: boolean;
+  };
+}
+
+/**
+ * The whole-PR mode's numbers. The share cached after N minutes counts the
+ * lines answered by then (a run that ended sooner keeps its final share); a
+ * click on any of them would be answered from the cache.
+ */
+export function summarizeWholePr(
+  result: WholePrResult,
+  checkpoints: readonly number[] = WHOLE_PR_CHECKPOINTS_MIN,
+): WholePrSummary {
+  const answered = result.answered.length;
+  const share = (n: number) => (result.lines ? n / result.lines : 0);
+  const singles = result.single.flatMap((r) => (r.ok ? [r.totalMs] : []));
+  const summary: WholePrSummary = {
+    lines: result.lines,
+    answered,
+    estimated: result.stopped,
+    cached: checkpoints.map((minutes) => {
+      const n = result.answered.filter((a) => a.atMs <= minutes * 60_000).length;
+      return { minutes, answered: n, share: share(n) };
+    }),
+  };
+  if (singles.length) summary.singlePerLineMs = singles.reduce((a, b) => a + b, 0) / singles.length;
+  if (answered && result.totalMs > 0) summary.byHunkPerLineMs = result.totalMs / answered;
+  if (!result.stopped) summary.wholePrMs = result.totalMs;
+  else if (summary.byHunkPerLineMs !== undefined) {
+    summary.wholePrMs = summary.byHunkPerLineMs * result.sent;
+  }
+  if (summary.singlePerLineMs !== undefined && summary.byHunkPerLineMs) {
+    summary.speedup = summary.singlePerLineMs / summary.byHunkPerLineMs;
+  }
+  const { click } = result;
+  if (click) {
+    summary.click = {
+      line: click.line,
+      cancelled: click.cancelled,
+      waitedAtMostOneCancelled:
+        click.startedAtMs !== undefined && click.finishedWhileWaiting === 0 && click.cancelled <= 1,
+    };
+    if (click.startedAtMs !== undefined) summary.click.waitMs = click.startedAtMs - click.sentAtMs;
+    if (click.run.ok) summary.click.totalMs = click.run.totalMs;
+    else summary.click.error = click.run.error;
+  }
+  return summary;
+}
+
+/** "37% (112 of 300)". */
+export function formatCachedShare(c: CachedShare, lines: number): string {
+  return `${Math.round(c.share * 100)}% (${c.answered} of ${lines})`;
+}
+
+export const WHOLE_PR_TABLE_HEADER = [
+  'Model',
+  'Lines',
+  'Whole PR',
+  'One at a time, per line',
+  'By hunk, per line',
+  ...WHOLE_PR_CHECKPOINTS_MIN.map((m) => `Cached after ${m} min`),
+] as const;
+
+/** "12.3 min", or "about 41.0 min" when estimated. */
+export function formatMinutes(ms: number | undefined, estimated = false): string {
+  if (ms === undefined) return NONE;
+  const text = ms < 60_000 ? formatMs(ms) : `${(ms / 60_000).toFixed(1)} min`;
+  return estimated ? `about ${text}` : text;
+}
+
+/** A row per model. */
+export function formatWholePrTable(results: readonly WholePrResult[]): string {
+  const line = (cells: readonly string[]) => `| ${cells.map(cell).join(' | ')} |`;
+  return [
+    line(WHOLE_PR_TABLE_HEADER),
+    line(WHOLE_PR_TABLE_HEADER.map((_, i) => (i === 0 ? '---' : '---:'))),
+    ...results.map((result) => {
+      const s = summarizeWholePr(result);
+      const sent = result.sent < result.lines ? ` (${result.sent} sent)` : '';
+      return line([
+        result.ranOn ? `${result.model} (${result.ranOn})` : result.model,
+        `${result.lines}${sent}`,
+        formatMinutes(s.wholePrMs, s.estimated),
+        formatMs(s.singlePerLineMs),
+        formatMs(s.byHunkPerLineMs),
+        ...s.cached.map((c) => formatCachedShare(c, s.lines)),
+      ]);
+    }),
+  ].join('\n');
+}
+
+/** "0:35" from the start of the run. */
+function clockTime(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  return `${Math.floor(seconds / 60)}:${pad(seconds % 60)}`;
+}
+
+/** One line per model on the click sent during the run. */
+export function formatWholePrClick(result: WholePrResult): string {
+  const s = summarizeWholePr(result);
+  const { click } = s;
+  if (!click) return `- ${result.model}: no click was sent (the run ended first).`;
+  const sent = `a click on ${click.line} at ${clockTime(result.click!.sentAtMs)}`;
+  if (click.waitMs === undefined) return `- ${result.model}: ${sent} never started.`;
+  const stopped =
+    click.cancelled === 0
+      ? 'with nothing to stop'
+      : `stopping ${click.cancelled} background ${click.cancelled === 1 ? 'request' : 'requests'}`;
+  const answer =
+    click.error !== undefined
+      ? `failed: ${click.error}`
+      : `answered in ${formatMs(click.totalMs)}` +
+        (s.singlePerLineMs !== undefined ? ` (a line alone: ${formatMs(s.singlePerLineMs)})` : '');
+  const verdict = click.waitedAtMostOneCancelled
+    ? 'It waited no longer than one cancelled request.'
+    : `It waited longer than one cancelled request: ${result.click!.finishedWhileWaiting} finished first.`;
+  return `- ${result.model}: ${sent} started after ${formatMs(click.waitMs)}, ${stopped}, ${answer}. ${verdict}`;
+}
+
+export interface WholePrReport {
+  startedAt: Date;
+  machine: MachineInfo;
+  llmUrl: string;
+  temperature: number;
+  maxResponseTokens: number;
+  /** The run's time limit per model. */
+  maxMs: number;
+  results: WholePrResult[];
+  /** From wholePrConclusion (scripts/latencyReport.ts); left out when there is none. */
+  conclusion?: string;
+}
+
+/** The section `npm run bench -- --whole-pr` adds to docs/latency.md. */
+export function formatWholePrReport(report: WholePrReport): string {
+  const first = report.results[0];
+  const out = [
+    `## ${formatDate(report.startedAt)} · Whole PR · ${report.results.map((r) => r.model).join(', ')}`,
+    '',
+    ...machineLines(report),
+    `- **Settings:** temperature ${report.temperature}, answers up to ${report.maxResponseTokens} ` +
+      `tokens per line, ${first?.atOnce ?? 1} at once, stopped after ` +
+      `${formatMinutes(report.maxMs)} at most`,
+    `- **How:** every changed line of ${first ? `\`${first.sample}\`` : 'a saved PR'} ` +
+      `(${first ? `${first.lines} lines in ${first.requests} requests` : 'its lines'}) goes through ` +
+      "the service worker's queue as Whole PR sends it, one request per hunk (PR 10.5), with an " +
+      'empty cache and the model loaded. **One at a time, per line** asks a sample of lines alone ' +
+      'first, as a click would with nothing cached. **Cached after N min** is the share of changed ' +
+      'lines a click would find answered by then. Once the first request is in, a click on a line ' +
+      'not reached yet is sent and timed.',
+    '',
+    formatWholePrTable(report.results),
+    '',
+    'Clicks during the run:',
+    '',
+    ...report.results.map(formatWholePrClick),
+  ];
+  if (report.conclusion) out.push('', report.conclusion);
+  const failures = report.results.flatMap(({ model, failures }) =>
+    failures.map((f) => `- ${model}: ${f}`),
+  );
+  if (failures.length) out.push('', 'Failed requests:', '', ...failures);
+  return out.join('\n') + '\n';
+}
+
 export const LATENCY_DOC_INTRO = `# Explanation latency
 
 Measured with \`npm run bench\` (roadmap PR 8.2), which sends the extension's real explain
@@ -863,6 +1109,16 @@ cached prompt counts fewer. **Tokens/s** is how fast the answer was written. **T
 and **Think time** are the part of the answer a reasoning model spent inside \`<think>\`,
 estimated from its share of the reply (PR 9.1). A failed run is listed under its table and
 counted in **Runs**, never dropped.
+
+\`npm run bench -- --whole-pr [model ...]\` (roadmap PR 10.8) adds a **Whole PR** section: every
+changed line of a saved PR (\`tests/fixtures/github-pr-66-src-files.json\`, 252 lines) goes through
+the service worker's queue as **Explain ahead**'s Whole PR sends it, one request per hunk, with an
+empty cache. It reports how long the whole PR took, the time per line (a sample asked one at a
+time, and by hunk), the share of changed lines a click would find answered after 1, 5 and 15
+minutes, and how long a click sent during the run waited (it should stop at most one background
+request, never wait for one to finish). Its conclusion says whether most clicks (at least 90%) are
+instant after 5 minutes, only after 15, or not yet, and what the numbers say about **Requests at
+once** and the per-PR limit.
 `;
 
 /** docs/latency.md with `section` added at the end (and the intro first, when there is no file yet). */
@@ -886,6 +1142,8 @@ export interface BenchArgs {
   parallel?: number[];
   /** Compare one line at a time with a whole hunk per request (PR 10.5). */
   byHunk: boolean;
+  /** Prefetch a whole saved PR through the queue (PR 10.8). */
+  wholePr: boolean;
 }
 
 /** The most requests `--parallel` sends at once. */
@@ -905,11 +1163,18 @@ export function parseLevels(text: string): number[] {
 }
 
 /**
- * Reads `[model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4 | --by-hunk]`.
+ * Reads `[model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4 | --by-hunk | --whole-pr]`.
  * Throws on anything else.
  */
 export function parseBenchArgs(argv: readonly string[]): BenchArgs {
-  const args: BenchArgs = { models: [], runs: 3, save: true, ahead: false, byHunk: false };
+  const args: BenchArgs = {
+    models: [],
+    runs: 3,
+    save: true,
+    ahead: false,
+    byHunk: false,
+    wholePr: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const [flag, inline] = arg.startsWith('--') ? arg.split(/=(.*)/s, 2) : [arg];
@@ -934,14 +1199,17 @@ export function parseBenchArgs(argv: readonly string[]): BenchArgs {
       args.parallel = parseLevels(value());
     } else if (flag === '--by-hunk') {
       args.byHunk = true;
+    } else if (flag === '--whole-pr') {
+      args.wholePr = true;
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown option ${arg}`);
     } else {
       args.models.push(arg);
     }
   }
-  if ([args.ahead, args.parallel !== undefined, args.byHunk].filter(Boolean).length > 1) {
-    throw new Error('Use only one of --ahead, --parallel and --by-hunk');
+  const modes = [args.ahead, args.parallel !== undefined, args.byHunk, args.wholePr];
+  if (modes.filter(Boolean).length > 1) {
+    throw new Error('Use only one of --ahead, --parallel, --by-hunk and --whole-pr');
   }
   return args;
 }
