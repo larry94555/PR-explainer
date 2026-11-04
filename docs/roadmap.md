@@ -111,7 +111,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 11.11 | Rate an answer | Small | Not started |
 | 11.12 | Ratings next to speed in the Speed test and report | Small | Not started |
 | 11.13 | Chrome's built-in model as an optional fallback | Medium | Not started |
-| 12.0 | Plan Milestone 12 | Small | ✅ Done ([#69](https://github.com/larry94555/PR-explainer/pull/69)) |
+| 12.0 | Plan Milestone 12 | Small | ✅ Done ([#70](https://github.com/larry94555/PR-explainer/pull/70)) |
 | 12.1 | Host skeleton | Small | Not started |
 | 12.2 | Accounts and the sign-up API | Medium | Not started |
 | 12.3 | One way to send email, with a test outbox | Small | Not started |
@@ -1355,7 +1355,7 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
 **Order.** The PRs go in number order. 12.1 to 12.6 build the host, accounts, email, sign-in and pages. 12.7 adds admins, 12.8 the settings file, and 12.9 to 12.11 test mode itself. Each PR is opened only after the one before it merges.
 
 ### PR 12.0: Plan Milestone 12 (Small) ✅ Done
-- **Status:** Done ([#69](https://github.com/larry94555/PR-explainer/pull/69)).
+- **Status:** Done ([#70](https://github.com/larry94555/PR-explainer/pull/70)).
 - **Why it's needed:** Testing sign-up and email verification needs a fresh email address each time, and an admin does not own enough real addresses to do that again and again.
 - **Problem it solves:** Adds this milestone to the roadmap and the matching feature to `features.md`: its goal, demo, what has to be built first, the test mode rules, open questions, order and PRs 12.1 to 12.11. No code changes.
 - **Unit tests added:** None (documentation only).
