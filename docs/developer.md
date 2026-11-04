@@ -22,7 +22,7 @@ Everything you need to work on PR Explainer: requirements, commands, the project
 | `npm run build` | Type-check and build into `dist/` |
 | `npm run dev` | Rebuild into `dist/` on every change (development mode: source maps and debug helpers) |
 | `npm run package` | Build and zip the extension into `release/pr-explainer-<version>.zip` |
-| `npm run bench -- [model ...]` | Time explanations on the local Ollama and add the results to `docs/latency.md` (`--ahead`: time clicks after Explain ahead instead) |
+| `npm run bench -- [model ...]` | Time explanations on the local Ollama and add the results to `docs/latency.md` (`--ahead`: time clicks after Explain ahead instead; `--parallel 1,2,4`: send requests that many at once) |
 | `npm run bench:history -- [model ...]` | Run the benchmark with the code after each latency PR (8.2 to now), time fresh answers and clicks after Explain ahead, measure the floor, and add the latency report to `docs/latency.md` |
 | `npm run demo:popup` | Open a demo page for the explanation popup, with fake data |
 | `npm run demo:chat` | Open a demo page for the chat panel, with fake messages |
@@ -88,7 +88,7 @@ See [Object design](object-design.md) for what each module does, and [Design and
 
 ## Benchmarks
 
-- `npm run bench -- qwen2.5-coder:7b qwen2.5-coder:3b` sends the extension's real explain prompt for each sample in `bench/` to Ollama, times each answer (median, slowest, first token, load, prompt and answer tokens, tokens per second), and appends a dated section with the machine details to [`docs/latency.md`](latency.md). Options: `--runs N`, `--url URL`, `--no-save`, and `--ahead`, which instead explains each added line of a saved GitHub diff page ahead (as **Explain ahead** does) and then times a click on each, to show how many clicks are answered within 2 seconds.
+- `npm run bench -- qwen2.5-coder:7b qwen2.5-coder:3b` sends the extension's real explain prompt for each sample in `bench/` to Ollama, times each answer (median, slowest, first token, load, prompt and answer tokens, tokens per second), and appends a dated section with the machine details to [`docs/latency.md`](latency.md). Options: `--runs N`, `--url URL`, `--no-save`, and `--ahead`, which instead explains each added line of a saved GitHub diff page ahead (as **Explain ahead** does) and then times a click on each, to show how many clicks are answered within 2 seconds. `--parallel 1,2,4` instead sends the samples 1, 2 and 4 at a time (each sample `--runs` times per level) and reports, per level, answers per minute, the time per answer, how many requests Ollama really worked on together, and how long one extra request (a click) took meanwhile, with the level the background queue should use. Ollama decides how many it runs together from `OLLAMA_NUM_PARALLEL` as it was when Ollama started, so set it before `ollama serve`.
 - `npm run bench:history -- [model ...]` reruns the benchmark with the code as it was after each latency PR of Milestones 8 and 9 (in temporary git worktrees), times fresh answers with the model warm and clicks after Explain ahead, measures the floor, and writes a latency report with a conclusion against 2 seconds. It takes 20 to 40 minutes on a laptop.
 - The settings page's **Speed test** is the quick, in-browser version: it times one short explanation on each installed coding model and offers to switch to the fastest.
 
