@@ -13,12 +13,18 @@
 // ask for (PR 8.5, src/llm/numCtx.ts), since a different num_ctx would make
 // Ollama load it again on that click.
 //
+// Opening the chat sends a warm-up `for: 'chat'` (PR 9.14), which loads the
+// Chat model the same way, with the window chat questions use (the whole
+// context size, since chat does not size its window to each prompt), so the
+// first question does not pay for loading it. It does nothing when chat uses
+// the same model as explanations, which the page's own warm-up loaded.
+//
 // Either way it notes the window the model is loaded with (PR 9.7,
 // src/llm/loadedWindow.ts): the one /api/ps reports, or the one it loaded the
 // model with, so the first click does not ask /api/ps again.
 
 import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
-import type { Settings } from '../settings';
+import { chatSettings, hasOwnChatModel, type Settings } from '../settings';
 import type { ContextSizer } from './contextSize';
 import type { LoadedWindowMemory, LoadedWindowTicket } from './loadedWindow';
 import { startingNumCtx } from './numCtx';
@@ -29,11 +35,13 @@ import { isSameModel, type LlmClient } from './types';
  * - repeat: this tab already warmed up for this PR.
  * - off: Keep model loaded is 0, so loading early would be undone at once.
  * - no-model: no model is picked yet.
+ * - same-model: a chat warm-up, but chat uses the explanation model (PR 9.14).
  * - already-loaded: Ollama had the model in memory, so nothing was sent.
  * - loaded: the model was loaded.
  * - failed: Ollama could not be reached or could not load the model.
  */
-export type WarmupOutcome = 'repeat' | 'off' | 'no-model' | 'already-loaded' | 'loaded' | 'failed';
+export type WarmupOutcome =
+  'repeat' | 'off' | 'no-model' | 'same-model' | 'already-loaded' | 'loaded' | 'failed';
 
 export interface WarmupPayload {
   /** The PR whose diffs were opened, as "owner/repo#17". */
@@ -43,6 +51,11 @@ export interface WarmupPayload {
    * description) in the debug log (PR 9.7).
    */
   debugId?: string;
+  /**
+   * Which model to load (PR 9.14): the explanation model (the default, when
+   * a PR's diffs open) or the Chat model (when the chat opens).
+   */
+  for?: 'explain' | 'chat';
 }
 
 export interface WarmupResult {
@@ -94,7 +107,11 @@ export function createWarmup(deps: WarmupDeps): Warmup {
   const running = new Map<string, Promise<WarmupOutcome>>();
   const logs = new Set<RoundTripLog>();
 
-  async function load(settings: Settings, roundTrips: RoundTripLog): Promise<WarmupOutcome> {
+  async function load(
+    settings: Settings,
+    roundTrips: RoundTripLog,
+    forChat: boolean,
+  ): Promise<WarmupOutcome> {
     const { model, keepAliveMinutes } = settings;
     let ticket: LoadedWindowTicket | undefined;
     try {
@@ -109,11 +126,13 @@ export function createWarmup(deps: WarmupDeps): Warmup {
         ticket?.done(found.contextTokens);
         return 'already-loaded';
       }
-      const window =
-        settings.contextTokens > 0
-          ? settings.contextTokens
-          : deps.contextTokens &&
-            startingNumCtx(await deps.contextTokens(settings, undefined, undefined, roundTrips));
+      // Chat questions run with the whole context size (src/chat/chatHandler.ts).
+      const auto = async () => {
+        if (!deps.contextTokens) return undefined;
+        const size = await deps.contextTokens(settings, undefined, undefined, roundTrips);
+        return forChat ? size : startingNumCtx(size);
+      };
+      const window = settings.contextTokens > 0 ? settings.contextTokens : await auto();
       const started = Date.now();
       // A click sent while the model loads takes a newer ticket, so this
       // load ending later does not overwrite what the click says.
@@ -135,8 +154,9 @@ export function createWarmup(deps: WarmupDeps): Warmup {
   }
 
   async function warmUp(tabId: number | undefined, payload: WarmupPayload): Promise<WarmupResult> {
-    const pr = typeof payload?.pr === 'string' ? payload.pr : '';
-    if (tabId !== undefined && seen.get(tabId)?.has(pr)) return { outcome: 'repeat' };
+    const forChat = payload?.for === 'chat';
+    let pr = typeof payload?.pr === 'string' ? payload.pr : '';
+    if (!forChat && tabId !== undefined && seen.get(tabId)?.has(pr)) return { outcome: 'repeat' };
     let settings: Settings;
     try {
       settings = await deps.getSettings();
@@ -145,12 +165,19 @@ export function createWarmup(deps: WarmupDeps): Warmup {
     }
     if (settings.keepAliveMinutes === 0) return { outcome: 'off' };
     if (!settings.model) return { outcome: 'no-model' };
+    if (forChat) {
+      if (!hasOwnChatModel(settings)) return { outcome: 'same-model' };
+      settings = chatSettings(settings);
+      // Counted apart from the page's, and again when another Chat model is picked.
+      pr = `chat ${settings.model} ${pr}`;
+    }
     // Marked before loading, so a second request while this one runs is a repeat.
     if (tabId !== undefined) {
       if (seen.get(tabId)?.has(pr)) return { outcome: 'repeat' };
       seen.set(tabId, (seen.get(tabId) ?? new Set()).add(pr));
     }
-    const key = `${settings.llmUrl} ${settings.model}`;
+    // A chat warm-up loads with another window, so it does not share a page's load.
+    const key = `${settings.llmUrl} ${settings.model}${forChat ? ' chat' : ''}`;
     let loading = running.get(key);
     if (!loading) {
       const group = typeof payload.debugId === 'string' ? payload.debugId.slice(0, 100) : '';
@@ -159,7 +186,7 @@ export function createWarmup(deps: WarmupDeps): Warmup {
         onUpdate: deps.onRoundTrip,
       });
       logs.add(roundTrips);
-      loading = load(settings, roundTrips).finally(() => {
+      loading = load(settings, roundTrips, forChat).finally(() => {
         running.delete(key);
         logs.delete(roundTrips);
       });

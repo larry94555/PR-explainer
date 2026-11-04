@@ -74,6 +74,8 @@ export interface RoundTrip {
   error?: string;
   bytesSent: number;
   bytesReceived: number;
+  /** For Ollama requests that name one (/api/chat, /api/show): the model (PR 9.14). */
+  model?: string;
   /** For /api/chat: the messages sent. */
   messages?: { role: string; content: string }[];
   /** For /api/chat: the `think` sent (PR 9.5), on, off or a level, when one was. */

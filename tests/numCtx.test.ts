@@ -89,6 +89,23 @@ describe('the remembered loaded window (PR 9.7)', () => {
     expect(memory.known(AT)).toBeUndefined();
   });
 
+  it('keeps a window for each model, as chat can use its own (PR 9.14)', () => {
+    const memory = createLoadedWindowMemory();
+    const chat = { ...AT, model: 'qwen2.5-coder:1.5b' };
+    memory.start(AT, 2048).done();
+    memory.start(chat, 8192).done();
+    expect(memory.known(AT)).toBe(2048);
+    expect(memory.known(chat)).toBe(8192);
+    // A request for one model is not newer than one for the other.
+    const explain = memory.start(AT, 4096);
+    memory.start(chat, 8192).failed();
+    explain.done();
+    expect(memory.known(AT)).toBe(4096);
+    expect(memory.known(chat)).toBeUndefined();
+    memory.forget();
+    expect(memory.known(AT)).toBeUndefined();
+  });
+
   describe('overlapping requests: the last one sent wins', () => {
     it('ignores an older request that succeeds after a newer one', () => {
       const memory = createLoadedWindowMemory();

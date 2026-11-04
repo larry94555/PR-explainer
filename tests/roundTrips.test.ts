@@ -49,6 +49,7 @@ describe('round trip log (PR 9.2)', () => {
         endpoint: 'localhost:11434/api/show',
         purpose: 'model details',
         cause: 'click',
+        model: 'm',
         startMs: 5,
         durationMs: 20,
         status: 'done',
@@ -57,6 +58,19 @@ describe('round trip log (PR 9.2)', () => {
         bytesReceived: 17,
       },
     ]);
+  });
+
+  it('names the model a chat request was sent to (PR 9.14)', async () => {
+    const log = createRoundTripLog('chat');
+    const body = JSON.stringify({
+      model: 'qwen2.5-coder:7b',
+      messages: [{ role: 'user', content: 'Q' }],
+    });
+    await log.record(URL_CHAT, { method: 'POST', body }, async () => new Response('{}'));
+    expect(log.list()[0]).toMatchObject({ purpose: 'chat answer', model: 'qwen2.5-coder:7b' });
+    // A request without a body names none.
+    await log.record('http://localhost:11434/api/ps', undefined, async () => new Response('{}'));
+    expect(log.list()[1]).not.toHaveProperty('model');
   });
 
   it('times the round trip until the whole reply was read', async () => {

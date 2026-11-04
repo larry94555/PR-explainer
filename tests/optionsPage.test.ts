@@ -14,6 +14,7 @@ const html = readFileSync(resolve(import.meta.dirname, '../src/options.html'), '
 const SAVED: Settings = {
   llmUrl: 'http://localhost:11434',
   model: 'qwen2.5-coder:7b',
+  chatModel: '',
   temperature: 0.4,
   maxResponseTokens: 512,
   contextTokens: 0,
@@ -319,6 +320,73 @@ describe('options page', () => {
     expect($<HTMLSelectElement>('model').value).toBe('gone:1b');
   });
 
+  describe('Chat model (PR 9.14)', () => {
+    const chatOptions = () =>
+      [...$<HTMLSelectElement>('chatModel').options].map((o) => [o.value, o.textContent]);
+    const note = () => $('chat-model-note');
+
+    it('lists "Same as explanations" first, then the installed models', async () => {
+      await initOptionsPage(document, fakeDeps(fakeClient()));
+      expect(chatOptions()).toEqual([
+        ['', 'Same as explanations'],
+        ['llama3.2:3b', 'llama3.2:3b'],
+        ['qwen2.5-coder:7b', 'qwen2.5-coder:7b'],
+      ]);
+      expect($<HTMLSelectElement>('chatModel').value).toBe('');
+      expect(note().hidden).toBe(true);
+    });
+
+    it('loads and saves a Chat model, and goes back to "Same as explanations"', async () => {
+      const deps = fakeDeps(fakeClient());
+      const page = await initOptionsPage(document, deps);
+      $<HTMLSelectElement>('chatModel').value = 'llama3.2:3b';
+      await page.save();
+      expect(await deps.getSettings()).toMatchObject({
+        model: 'qwen2.5-coder:7b',
+        chatModel: 'llama3.2:3b',
+      });
+
+      await initOptionsPage(document, deps);
+      expect($<HTMLSelectElement>('chatModel').value).toBe('llama3.2:3b');
+      $<HTMLSelectElement>('chatModel').value = '';
+      await page.save();
+      expect(await deps.getSettings()).toMatchObject({ chatModel: '' });
+    });
+
+    it('keeps a saved Chat model the server does not have, marked as not installed', async () => {
+      await initOptionsPage(document, fakeDeps(fakeClient(), { ...SAVED, chatModel: 'gone:1b' }));
+      expect(chatOptions()).toContainEqual(['gone:1b', 'gone:1b (not installed)']);
+      expect($<HTMLSelectElement>('chatModel').value).toBe('gone:1b');
+    });
+
+    it('notes the memory two models need only while chat has a model of its own', async () => {
+      await initOptionsPage(
+        document,
+        fakeDeps(fakeClient(), { ...SAVED, chatModel: 'llama3.2:3b' }),
+      );
+      expect(note().hidden).toBe(false);
+      expect(note().textContent).toContain(
+        'Explanations use qwen2.5-coder:7b and chat uses llama3.2:3b',
+      );
+      expect(note().textContent).toContain('OLLAMA_MAX_LOADED_MODELS');
+      expect(note().textContent).toMatch(/10 seconds or more/);
+
+      // Picking the same model as Model, or "Same as explanations", hides it.
+      const model = $<HTMLSelectElement>('model');
+      model.value = 'llama3.2:3b';
+      model.dispatchEvent(new Event('change'));
+      expect(note().hidden).toBe(true);
+      model.value = 'qwen2.5-coder:7b';
+      model.dispatchEvent(new Event('change'));
+      expect(note().hidden).toBe(false);
+      const chat = $<HTMLSelectElement>('chatModel');
+      chat.value = '';
+      chat.dispatchEvent(new Event('change'));
+      expect(note().hidden).toBe(true);
+      expect(note().textContent).toBe('');
+    });
+  });
+
   it('says how to get a model when none are installed', async () => {
     await initOptionsPage(document, fakeDeps(fakeClient({ listModels: async () => [] })));
 
@@ -415,6 +483,7 @@ describe('options page', () => {
     expect(deps.saveSettings).toHaveBeenCalledWith({
       llmUrl: 'http://localhost:11434',
       model: 'llama3.2:3b',
+      chatModel: '',
       temperature: 1.5,
       maxResponseTokens: 2048,
       contextTokens: 0,

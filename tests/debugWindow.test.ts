@@ -331,6 +331,38 @@ describe('debug window (PR 9.4)', () => {
     );
   });
 
+  it('names the model on each request, so a chat question shows the Chat model (PR 9.14)', () => {
+    const w = setup();
+    w.port().send({
+      type: 'snapshot',
+      entries: [
+        entry('c1', T0, { model: 'qwen2.5-coder:1.5b' }),
+        entry(
+          'q1',
+          T0 + 1_000,
+          { purpose: 'chat answer', model: 'qwen2.5-coder:7b' },
+          {
+            cause: 'chat',
+          },
+        ),
+        entry('c2', T0 + 2_000, { target: 'github', endpoint: 'github.com/x', purpose: 'file' }),
+      ],
+      running: [],
+    });
+    const [github, chat, explain] = w.all('.row-button') as HTMLButtonElement[];
+    expect(chat!.querySelector('.purpose')!.textContent).toBe('chat answer · qwen2.5-coder:7b');
+    expect(chat!.getAttribute('aria-label')).toContain('chat answer, qwen2.5-coder:7b,');
+    expect(explain!.querySelector('.purpose')!.textContent).toContain('qwen2.5-coder:1.5b');
+    // A request that names no model shows only its purpose.
+    expect(github!.querySelector('.purpose')!.textContent).toBe('file');
+    chat!.click();
+    const detail = document.getElementById(chat!.getAttribute('aria-controls')!)!;
+    const facts = [...detail.querySelectorAll('dl.facts dt')].map(
+      (dt) => `${dt.textContent}: ${dt.nextElementSibling!.textContent}`,
+    );
+    expect(facts).toContain('Model: qwen2.5-coder:7b');
+  });
+
   it('shows a GitHub round trip that failed, with its error', () => {
     const w = setup();
     w.port().send({

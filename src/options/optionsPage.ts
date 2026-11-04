@@ -6,7 +6,9 @@
 // whether it is a reasoning model and whether its thinking is on (PR 9.5). The
 // Speed section (PR 8.6) says whether the picked model runs on the GPU, and its
 // Speed test times each coding model and lets the user pick the fastest
-// (src/llm/speedTest.ts).
+// (src/llm/speedTest.ts). Chat model (PR 9.14) picks another model for chat
+// questions, "Same as explanations" by default, with a note on the memory two
+// loaded models need when another one is picked.
 //
 // All page logic lives here and takes its dependencies as parameters, so the
 // tests can run it against options.html in jsdom with fakes. main.ts wires in
@@ -40,6 +42,7 @@ import {
   DEFAULT_SETTINGS,
   SettingsValidationError,
   validateSettings,
+  hasOwnChatModel,
   type Settings,
   type SettingsField,
   type SettingsIssue,
@@ -87,6 +90,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const form = el<HTMLFormElement>(doc, 'settings-form');
   const urlInput = el<HTMLInputElement>(doc, 'llmUrl');
   const modelSelect = el<HTMLSelectElement>(doc, 'model');
+  const chatModelSelect = el<HTMLSelectElement>(doc, 'chatModel');
+  const chatModelNote = el(doc, 'chat-model-note');
   const temperatureInput = el<HTMLInputElement>(doc, 'temperature');
   const temperatureValue = el<HTMLOutputElement>(doc, 'temperature-value');
   const maxTokensInput = el<HTMLInputElement>(doc, 'maxResponseTokens');
@@ -116,6 +121,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   function fillForm(settings: Settings): void {
     urlInput.value = settings.llmUrl;
     setModelOptions(null, settings.model);
+    setChatModelOptions(null, settings.chatModel);
     temperatureInput.value = String(settings.temperature);
     temperatureValue.textContent = String(settings.temperature);
     maxTokensInput.value = String(settings.maxResponseTokens);
@@ -137,6 +143,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     return {
       llmUrl: urlInput.value.trim().replace(/\/+$/, ''),
       model: modelSelect.value,
+      chatModel: chatModelSelect.value,
       temperature: Number(temperatureInput.value),
       // An empty box becomes NaN so validation reports it instead of using 0.
       maxResponseTokens: maxTokens === '' ? NaN : Number(maxTokens),
@@ -183,6 +190,30 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     modelSelect.value = selected;
   }
 
+  // The Chat model list (PR 9.14): "Same as explanations" first, then the
+  // same models as Model, keeping a saved one the server does not have.
+  function setChatModelOptions(names: string[] | null, selected: string): void {
+    const options = [new Option(SAME_AS_EXPLANATIONS, '')];
+    for (const name of names ?? []) options.push(new Option(name, name));
+    if (selected && !names?.includes(selected)) {
+      const label = names ? `${selected} (not installed)` : selected;
+      options.push(new Option(label, selected));
+    }
+    chatModelSelect.replaceChildren(...options);
+    chatModelSelect.value = selected;
+    showChatModelNote();
+  }
+
+  // The note under Chat model: what two loaded models cost, only while chat
+  // has a model of its own.
+  function showChatModelNote(): void {
+    const model = modelSelect.value;
+    const chatModel = chatModelSelect.value;
+    const own = model !== '' && hasOwnChatModel({ model, chatModel });
+    chatModelNote.hidden = !own;
+    chatModelNote.textContent = own ? chatModelNoteText(model, chatModel) : '';
+  }
+
   // Shows "<prefix> <message>" and, on its own line, the fix, with `commands`
   // as code so they are easy to spot and copy.
   function showLlmError(
@@ -215,10 +246,9 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       const models = await deps.createClient(values).listModels();
       if (thisRefresh !== refreshCount) return;
       // Read the selection now, in case the user changed it while loading.
-      setModelOptions(
-        models.map((m) => m.name),
-        modelSelect.value,
-      );
+      const names = models.map((m) => m.name);
+      setModelOptions(names, modelSelect.value);
+      setChatModelOptions(names, chatModelSelect.value);
       modelsStatus.textContent =
         models.length === 0
           ? 'No models installed. Run `ollama pull qwen2.5-coder:7b`, then click Refresh.'
@@ -550,9 +580,11 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   testButton.addEventListener('click', () => void testConnection());
   modelSelect.addEventListener('change', () => {
     showResults(lastResults);
+    showChatModelNote();
     void checkGpu();
     void checkThinking();
   });
+  chatModelSelect.addEventListener('change', showChatModelNote);
   thinkInput.addEventListener('change', () => void checkThinking());
   speedButton.addEventListener('click', () => void speedTest());
   stopButton.addEventListener('click', stopSpeedTest);
@@ -604,6 +636,23 @@ export function thinkingText(
   return typeof think === 'string'
     ? `${model} is a reasoning model that cannot turn thinking off, so it thinks as little as it can ("${think}").`
     : `${model} is a reasoning model that cannot turn thinking off.`;
+}
+
+/** The first choice under Chat model (PR 9.14): chat uses Model. */
+export const SAME_AS_EXPLANATIONS = 'Same as explanations';
+
+/**
+ * The note under Chat model when chat has a model of its own (PR 9.14): two
+ * models loaded at once need memory for both, and when Ollama holds only one,
+ * every switch between explaining and chatting loads a model again.
+ */
+export function chatModelNoteText(model: string, chatModel: string): string {
+  return (
+    `Explanations use ${model} and chat uses ${chatModel}, so Ollama keeps both in memory ` +
+    'and needs room for both. If it can hold only one (OLLAMA_MAX_LOADED_MODELS is 1, or there ' +
+    'is too little memory), every switch between explaining and chatting loads a model again, ' +
+    'which on a CPU can take 10 seconds or more.'
+  );
 }
 
 /**

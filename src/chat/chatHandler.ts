@@ -13,6 +13,11 @@
 // the model think setting is on (PR 9.5). Thinking it returns in its own
 // field is never part of the answer.
 //
+// Questions go to the Chat model (PR 9.14), or to Model when it is "Same as
+// explanations". The settings are read with `model` set to that model
+// (chatSettings), so the context size, the thinking check, the loaded window
+// and any error message are all about the model the question is sent to.
+//
 // The window each question runs with is remembered (PR 9.7,
 // src/llm/loadedWindow.ts), so the next explanation knows how the model is
 // loaded without asking /api/ps.
@@ -22,7 +27,7 @@ import { describeLlmError, type Platform } from '../llm/describeLlmError';
 import type { LoadedWindowMemory } from '../llm/loadedWindow';
 import type { ChatMessage, LlmClient } from '../llm/types';
 import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
-import { chatResponseTokens, type Settings } from '../settings';
+import { chatResponseTokens, chatSettings, type Settings } from '../settings';
 
 export interface ChatPayload {
   /** The messages from ChatSession.messagesFor, ending with the question. */
@@ -84,7 +89,7 @@ export function createChatHandler(deps: ChatDeps) {
     if (!isChatMessages(payload?.messages)) {
       throw new Error('chat needs a list of messages that ends with a question');
     }
-    const settings = await deps.getSettings();
+    const settings = chatSettings(await deps.getSettings());
     // Each question's round trips are one group in the debug log (PR 9.3).
     const roundTrips = createRoundTripLog('chat', Date.now, { onUpdate: deps.onRoundTrip });
     const contextTokens = await deps.contextTokens?.(settings, signal, undefined, roundTrips);

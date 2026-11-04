@@ -1,6 +1,9 @@
 import {
   CHAT_MIN_RESPONSE_TOKENS,
+  chatModelOf,
   chatResponseTokens,
+  chatSettings,
+  hasOwnChatModel,
   DEFAULT_SETTINGS,
   getSettings,
   saveSettings,
@@ -60,11 +63,59 @@ describe('settings', () => {
     });
   });
 
+  describe('Chat model (PR 9.14)', () => {
+    it('is "Same as explanations" by default, so chat uses Model', () => {
+      const settings = { ...DEFAULT_SETTINGS, model: 'qwen2.5-coder:1.5b' };
+      expect(settings.chatModel).toBe('');
+      expect(chatModelOf(settings)).toBe('qwen2.5-coder:1.5b');
+      expect(chatSettings(settings)).toEqual(settings);
+      expect(hasOwnChatModel(settings)).toBe(false);
+    });
+
+    it('sends chat to the Chat model when one is set, leaving the rest as it is', () => {
+      const settings = {
+        ...DEFAULT_SETTINGS,
+        model: 'qwen2.5-coder:1.5b',
+        chatModel: 'qwen2.5-coder:7b',
+        temperature: 0.5,
+      };
+      expect(chatModelOf(settings)).toBe('qwen2.5-coder:7b');
+      expect(chatSettings(settings)).toEqual({ ...settings, model: 'qwen2.5-coder:7b' });
+      expect(hasOwnChatModel(settings)).toBe(true);
+    });
+
+    it('does not count the same model, with or without :latest, as a model of its own', () => {
+      expect(hasOwnChatModel({ model: 'llama3', chatModel: 'llama3' })).toBe(false);
+      expect(hasOwnChatModel({ model: 'llama3', chatModel: 'llama3:latest' })).toBe(false);
+      expect(hasOwnChatModel({ model: 'llama3:latest', chatModel: 'llama3' })).toBe(false);
+      expect(hasOwnChatModel({ model: 'llama3', chatModel: 'llama3:8b' })).toBe(true);
+    });
+
+    it('saves a trimmed Chat model and rejects one that is not text', async () => {
+      const storage = fakeStorage();
+      await saveSettings({ chatModel: '  qwen2.5-coder:7b ' }, storage);
+      expect(storage.data).toEqual({ [storageKey('chatModel')]: 'qwen2.5-coder:7b' });
+      await expectRejectedFields(saveSettings({ chatModel: 7 as unknown as string }, storage), [
+        'chatModel',
+      ]);
+      // Back to "Same as explanations".
+      await saveSettings({ chatModel: '' }, storage);
+      expect((await getSettings(storage)).chatModel).toBe('');
+    });
+
+    it('falls back to "Same as explanations" when the stored value is not text', async () => {
+      const storage = fakeStorage({ [storageKey('chatModel')]: 42 });
+      expect((await getSettings(storage)).chatModel).toBe('');
+    });
+  });
+
   describe('defaults', () => {
     it('uses the Ollama default URL, no model, temperature 0.2, 120-token answers, keep loaded 30 minutes', () => {
       expect(DEFAULT_SETTINGS).toEqual({
         llmUrl: 'http://localhost:11434',
         model: '',
+        // "Same as explanations" (PR 9.14).
+        chatModel: '',
         temperature: 0.2,
         // One sentence per section arrives sooner (PR 8.4, PR 9.8).
         maxResponseTokens: 120,
@@ -112,7 +163,8 @@ describe('settings', () => {
       const storage = fakeStorage();
       const update = {
         llmUrl: 'http://127.0.0.1:8080',
-        model: 'qwen2.5-coder:7b',
+        model: 'qwen2.5-coder:1.5b',
+        chatModel: 'qwen2.5-coder:7b',
         temperature: 0.7,
         maxResponseTokens: 2048,
         contextTokens: 8192,

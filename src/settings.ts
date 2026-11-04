@@ -13,11 +13,19 @@
 // The service worker and (from PR 2.3) the options page read settings through
 // this module. The content script never imports it.
 
+import { isSameModel } from './llm/types';
+
 export interface Settings {
   /** Base URL of the LLM server, for example the Ollama default. */
   llmUrl: string;
   /** Model name as the server lists it. Empty until the user picks one. */
   model: string;
+  /**
+   * The model chat questions use (PR 9.14). Empty means "Same as
+   * explanations": chat uses `model`. Explanations, Explain on hover and
+   * Explain ahead always use `model`. Read it through chatModelOf.
+   */
+  chatModel: string;
   /** Sampling temperature, 0 to 2. Low values give steadier explanations. */
   temperature: number;
   /**
@@ -83,6 +91,7 @@ export type SettingsField = keyof Settings;
 export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   llmUrl: 'http://localhost:11434',
   model: '',
+  chatModel: '',
   temperature: 0.2,
   maxResponseTokens: 120,
   contextTokens: 0,
@@ -110,6 +119,30 @@ export const CHAT_MIN_RESPONSE_TOKENS = 1024;
 /** The answer limit for a chat question: the setting, but at least CHAT_MIN_RESPONSE_TOKENS. */
 export function chatResponseTokens(settings: Pick<Settings, 'maxResponseTokens'>): number {
   return Math.max(settings.maxResponseTokens, CHAT_MIN_RESPONSE_TOKENS);
+}
+
+/** The model chat questions go to (PR 9.14): Chat model, or Model when it is "Same as explanations". */
+export function chatModelOf(settings: Pick<Settings, 'model' | 'chatModel'>): string {
+  return settings.chatModel || settings.model;
+}
+
+/**
+ * `settings` with `model` set to the chat model (PR 9.14), so everything a
+ * chat question does (the context size and thinking lookups, the loaded
+ * window, error messages and the request itself) is about the model it is
+ * sent to.
+ */
+export function chatSettings(settings: Settings): Settings {
+  return { ...settings, model: chatModelOf(settings) };
+}
+
+/**
+ * Whether chat uses a model of its own (PR 9.14): Chat model is set and names
+ * another model than Model.
+ */
+export function hasOwnChatModel(settings: Pick<Settings, 'model' | 'chatModel'>): boolean {
+  const { model, chatModel } = settings;
+  return chatModel !== '' && !isSameModel(chatModel, model) && !isSameModel(model, chatModel);
 }
 
 export const TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
@@ -157,6 +190,8 @@ function checkField(field: SettingsField, value: unknown): string | null {
       return checkLlmUrl(value);
     case 'model':
       return typeof value === 'string' ? null : 'Model must be text.';
+    case 'chatModel':
+      return typeof value === 'string' ? null : 'Chat model must be text.';
     case 'temperature':
       return checkNumber(value, TEMPERATURE_RANGE, false, 'Temperature');
     case 'maxResponseTokens':
@@ -241,6 +276,7 @@ export function validateSettings(settings: Settings): SettingsIssue[] {
 function normalize(settings: Settings): Settings {
   const result = { ...settings };
   if (typeof result.model === 'string') result.model = result.model.trim();
+  if (typeof result.chatModel === 'string') result.chatModel = result.chatModel.trim();
   if (typeof result.llmUrl === 'string') {
     // Accept "http://localhost:11434/" and store it without the slash.
     result.llmUrl = result.llmUrl.trim().replace(/\/+$/, '');
