@@ -25,12 +25,7 @@ import { createWarmup } from './llm/warmup';
 import { MessageRouter } from './messaging/router';
 import { listenForChatPorts, listenForExplainPorts } from './messaging/streamPort';
 import type { RoundTripSink } from './net/roundTrips';
-import {
-  clearOldResponseTokensDefault,
-  DEFAULT_SETTINGS,
-  getSettings,
-  saveSettings,
-} from './settings';
+import { DEFAULT_SETTINGS, getSettings, saveSettings } from './settings';
 import { setupToolbarToggle } from './toolbarToggle';
 
 console.info('[PR Explainer] service worker started');
@@ -149,12 +144,6 @@ listenForChatPorts(
     },
   }),
 );
-
-// Users still on the old 300-token answer limit move to the new default
-// (PR 9.8). It runs once; a failure is tried again when the worker next starts.
-clearOldResponseTokensDefault().catch((error: unknown) => {
-  console.warn('[PR Explainer] could not update the answer limit:', error);
-});
 
 // The toolbar button turns click-to-explain on and off for every tab.
 setupToolbarToggle({ action: chrome.action, storage: chrome.storage.local });

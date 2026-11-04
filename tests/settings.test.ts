@@ -1,17 +1,14 @@
 import {
   CHAT_MIN_RESPONSE_TOKENS,
   chatResponseTokens,
-  clearOldResponseTokensDefault,
   DEFAULT_SETTINGS,
   getSettings,
-  OLD_DEFAULT_RESPONSE_TOKENS,
-  RESPONSE_TOKENS_MIGRATION_KEY,
   saveSettings,
   storageKey,
   SettingsValidationError,
   validateSettings,
   type Settings,
-  type RemovableStorageAreaLike,
+  type StorageAreaLike,
 } from '../src/settings';
 import { STREAM_SETTING_KEY, trackStreamSetting } from '../src/streamSetting';
 import type { StorageChangedEvent } from '../src/enabledState';
@@ -20,16 +17,13 @@ import type { StorageChangedEvent } from '../src/enabledState';
 // in and out (structured clone), so tests can't share objects with it.
 function fakeStorage(initial: Record<string, unknown> = {}) {
   const data = structuredClone(initial);
-  const storage: RemovableStorageAreaLike & { data: Record<string, unknown> } = {
+  const storage: StorageAreaLike & { data: Record<string, unknown> } = {
     data,
     get: vi.fn(async (keys: string[]) =>
       Object.fromEntries(keys.filter((k) => k in data).map((k) => [k, structuredClone(data[k])])),
     ),
     set: vi.fn(async (items: Record<string, unknown>) => {
       Object.assign(data, structuredClone(items));
-    }),
-    remove: vi.fn(async (keys: string[]) => {
-      for (const key of keys) delete data[key];
     }),
   };
   return storage;
@@ -104,37 +98,10 @@ describe('settings', () => {
     });
   });
 
-  describe('moving off the old 300-token default (PR 9.8)', () => {
-    const key = storageKey('maxResponseTokens');
-
-    it('clears a stored 300 so the new default of 120 applies, once', async () => {
-      // The settings page saves every field, so pressing Save stored the old default.
-      const storage = fakeStorage({ [key]: OLD_DEFAULT_RESPONSE_TOKENS, 'settings.model': 'm' });
-      await expect(clearOldResponseTokensDefault(storage)).resolves.toBe(true);
-      expect(storage.data).toEqual({
-        'settings.model': 'm',
-        [RESPONSE_TOKENS_MIGRATION_KEY]: true,
-      });
-      expect((await getSettings(storage)).maxResponseTokens).toBe(120);
-    });
-
-    it('keeps a 300 saved after it has run', async () => {
-      const storage = fakeStorage({ [key]: 300 });
-      await clearOldResponseTokensDefault(storage);
-      await saveSettings({ maxResponseTokens: 300 }, storage);
-      await expect(clearOldResponseTokensDefault(storage)).resolves.toBe(false);
-      expect((await getSettings(storage)).maxResponseTokens).toBe(300);
-    });
-
-    it('leaves any other value, and a first run, as they are', async () => {
-      const set = fakeStorage({ [key]: 500 });
-      await expect(clearOldResponseTokensDefault(set)).resolves.toBe(false);
-      expect((await getSettings(set)).maxResponseTokens).toBe(500);
-      const empty = fakeStorage();
-      await expect(clearOldResponseTokensDefault(empty)).resolves.toBe(false);
-      expect(empty.remove).not.toHaveBeenCalled();
-      expect((await getSettings(empty)).maxResponseTokens).toBe(120);
-    });
+  it('keeps a stored 300, which may be a deliberate choice, over the new default (PR 9.8)', async () => {
+    const storage = fakeStorage({ [storageKey('maxResponseTokens')]: 300 });
+    expect((await getSettings(storage)).maxResponseTokens).toBe(300);
+    expect(storage.set).not.toHaveBeenCalled();
   });
 
   describe('saving and reloading', () => {

@@ -13,7 +13,7 @@ declare const chrome: {
     onRemoved: { addListener(listener: (tabId: number) => void): void };
   };
   storage: {
-    sync: import('./settings').RemovableStorageAreaLike;
+    sync: import('./settings').StorageAreaLike;
     local: import('./enabledState').LocalStorageLike;
     session: import('./explain/explainCache').SessionStorageLike;
     onChanged: import('./enabledState').StorageChangedEvent;
