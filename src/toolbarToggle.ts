@@ -145,7 +145,8 @@ export function setupToolbarToggle(deps: { action: ActionLike; storage: LocalSto
     idle: () => queue,
     showProgress: (tabId, progress) => {
       run(async () => {
-        if (!progress && !tabs.has(tabId)) return;
+        // A clear always draws, even for a tab this worker never drew: Chrome
+        // keeps a tab's look after the worker restarts (review on #66).
         tabs.set(tabId, progress);
         await drawTab(tabId, await readEnabled(storage));
       });

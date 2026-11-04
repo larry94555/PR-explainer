@@ -284,12 +284,14 @@ describe('Whole PR progress on the toolbar icon (PR 10.7)', () => {
     expect(shown.get(7)).toEqual(actionBadge(true));
   });
 
-  it('leaves a tab it never drew alone when cleared', async () => {
+  it('puts back ON when cleared after the service worker restarted (review on #66)', async () => {
     const { storage } = fakeStorage();
     const { action, shown } = fakeTabAction();
-    const toggle = setupToolbarToggle({ action, storage });
-    await toggle.showProgress(7, null);
-    expect(shown.has(7)).toBe(false);
+    await setupToolbarToggle({ action, storage }).showProgress(7, { done: 3, total: 10 });
+    // Chrome keeps the tab's look; the new worker has never drawn tab 7.
+    const restarted = setupToolbarToggle({ action, storage });
+    await restarted.showProgress(7, null);
+    expect(shown.get(7)).toEqual(actionBadge(true));
   });
 
   it('redraws the tabs it drew when the button is clicked', async () => {
