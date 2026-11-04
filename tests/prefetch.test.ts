@@ -567,4 +567,31 @@ describe('explain on hover on a real diff', () => {
     expect(root.querySelector('.placeholder')).toBeNull();
     expect(root.textContent).toContain('Adds one.');
   });
+
+  it('a joined prefetch shows the sections it has finished, then the rest (PR 9.13)', async () => {
+    vi.useFakeTimers();
+    const { explain, streams } = fakeExplain();
+    const prefetcher = createPrefetcher({ explain, isOn: () => true });
+    document.addEventListener('mouseover', prefetcher.onMouseOver);
+    code('R44').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+    document.removeEventListener('mouseover', prefetcher.onMouseOver);
+    // Written before the click: What it does is already finished.
+    streams[0]!.chunk("## What it does\nAdds one.\n## Why it's needed\nIt is");
+
+    explainLineAt({ explain: prefetcher.explain, openPopup }, code('R44'));
+    await flush();
+    const root = currentPopup()!.host.shadowRoot!;
+    const shown = () =>
+      [...root.querySelectorAll<HTMLElement>('.body > section')].map((s) => s.dataset.section);
+    expect(currentPopup()!.state).toBe('streaming');
+    expect(shown()).toEqual(['what']);
+    expect(root.textContent).not.toContain('It is');
+    streams[0]!.chunk(' needed.\n## Concerns\n');
+    expect(shown()).toEqual(['what', 'why']);
+    streams[0]!.finish();
+    await settle();
+    expect(currentPopup()!.state).toBe('done');
+    expect(shown()).toEqual(['what', 'why', 'concerns']);
+  });
 });

@@ -813,6 +813,39 @@ describe('click handler with the real popup', () => {
     expect(explain).toHaveBeenCalledTimes(1);
   });
 
+  it('shows each section once it is written, one at a time (PR 9.13)', async () => {
+    document.body.innerHTML = fixture('github-diff-classic.html');
+    const answer = deferred<ExplainResult>();
+    let send!: (text: string) => void;
+    const handler = createClickHandler({
+      explain: (_context, onChunk) => {
+        send = onChunk;
+        return { result: answer.promise, stop: vi.fn() };
+      },
+      openPopup: (anchor, options) => openPopup(anchor, options),
+    });
+    document.addEventListener('click', handler);
+    cleanup = () => document.removeEventListener('click', handler);
+
+    click(
+      document.getElementById(`${ANCHOR}R44`)!.closest('tr')!.querySelector('.blob-code-inner')!,
+    );
+    const root = document.getElementById(POPUP_ID)!.shadowRoot!;
+    const shown = () =>
+      [...root.querySelectorAll<HTMLElement>('.body > section')].map((s) => s.dataset.section);
+    send('## What it does\nMarks 2.4 as done.\n');
+    expect(shown()).toEqual([]);
+    send("## Why it's needed\nIt merged.\n");
+    expect(shown()).toEqual(['what']);
+    expect(currentPopup()!.state).toBe('streaming');
+    send('## Concerns\nNone');
+    expect(shown()).toEqual(['what', 'why']);
+    answer.resolve(DONE);
+    await flush();
+    expect(currentPopup()!.state).toBe('done');
+    expect(shown()).toEqual(['what', 'why', 'concerns']);
+  });
+
   it('streams the reply with Show answers as they are written on (PR 9.6)', async () => {
     document.body.innerHTML = fixture('github-diff-classic.html');
     const answer = deferred<ExplainResult>();

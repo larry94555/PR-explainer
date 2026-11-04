@@ -489,8 +489,8 @@ function explainRow(row: Element): void {
     case 'slow': {
       popup.showLoading(MODEL);
       // The model writes the answer word by word for 3 s after a short wait.
-      // The popup keeps it back and shows it whole at the end (PR 9.6), or
-      // shows each word with Show answers as they are written ticked.
+      // The popup shows each section whole once the next heading starts
+      // (PR 9.13), or each word with Show answers as they are written ticked.
       const words = formatExplanation(SAMPLE).split(/(?<=\s)/);
       let written = 0;
       const writer = setInterval(() => {
