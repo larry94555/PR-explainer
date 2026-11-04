@@ -97,6 +97,20 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 10.7 | Show prefetch progress | Small | Not started |
 | 10.8 | Report: how many clicks are instant | Small | Not started |
 | 10.9 | Keep answers after the browser closes | Medium | Not started |
+| 11.0 | Plan Milestone 11 | Small | ✅ Done |
+| 11.1 | Start the request when the mouse goes down | Small | Not started |
+| 11.2 | Explain on hover, on by default and quicker | Small | Not started |
+| 11.3 | Pause background work on battery | Small | Not started |
+| 11.4 | Skip generated and vendored files when explaining ahead | Small | Not started |
+| 11.5 | Keep the background queue when Chrome stops the service worker | Medium | Not started |
+| 11.6 | Ollama status banner that recovers on its own | Medium | Not started |
+| 11.7 | Ollama speed tips on the settings page | Small | Not started |
+| 11.8 | Chat in Chrome's side panel | Medium | Not started |
+| 11.9 | A shortcut you can change, and Explain in the right-click menu | Small | Not started |
+| 11.10 | Copy and pin a popup | Small | Not started |
+| 11.11 | Rate an answer | Small | Not started |
+| 11.12 | Ratings next to speed in the Speed test and report | Small | Not started |
+| 11.13 | Chrome's built-in model as an optional fallback | Medium | Not started |
 
 ## Milestone overview
 
@@ -112,6 +126,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 8 | Optimize LLM latency | An explanation finishes in under 10 seconds on your laptop, or a report shows the lowest time that laptop can reach and why |
 | 9 | Two-second answers | Click a line and the whole explanation appears at once within 2 seconds, and a debug window shows every round trip to the local LLM with its prompt, reply and time |
 | 10 | Answers ready before you click | Open a PR, keep reading, and the lines you click are already explained: the toolbar badge shows how much of the PR is done, and a click on a done line is answered at once from the cache |
+| 11 | Snappy and dependable | A request starts as the mouse goes down, background work pauses on battery and skips generated files, a stopped Ollama shows one banner and recovers by itself, the chat sits in Chrome's side panel, and each answer can be copied, pinned and rated |
 
 ---
 
@@ -1095,6 +1110,174 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
   3. Close every Chrome window, open Chrome again, open the same PR, and click the same 3 lines. Confirm each says "From cache" at once.
   4. Click **Clear saved answers** on the settings page, click one of the lines again, and confirm it is answered fresh.
   5. Set **Keep answers for** to 0, save, repeat step 3, and confirm the lines are answered fresh after the restart.
+
+---
+
+## Milestone 11: Snappy and dependable
+
+**Goal:** the extension feels quick and steady in daily use, beyond the raw model speed that Milestones 8 to 10 work on. A click starts work the moment the mouse goes down. Background work is quick to start, stays off the battery, skips files nobody reads, and survives Chrome stopping the service worker. A stopped Ollama is shown once and recovered from on its own. The chat, shortcuts and popup fit the way people review code, and each answer can be rated, so model and prompt choices are judged on quality as well as speed.
+
+**Demo:** Press a line and see the request start in the debug window before the mouse is released. Unplug the laptop and watch the toolbar badge say background work is paused, then plug it back in. Stop Ollama: one banner says so, and when Ollama starts again the banner goes away by itself and the next click works. Press **Ctrl+Shift+E** (or your own shortcut) on a focused line, open the chat in Chrome's side panel next to the diff, pin a popup and copy its answer into a review comment, and give an answer a thumbs down. The settings page then shows how each model was rated next to its Speed test time.
+
+**Where these ideas come from.** A review of the roadmap for latency and user experience ideas that an experienced Chrome extension engineer would suggest and that no earlier milestone covers. Each one is small and stands alone, so they can be done in any order, apart from the dependencies noted below.
+
+**Order.** 11.1, 11.3, 11.6, 11.7, 11.9, 11.10 and 11.11 need nothing new and can start now. 11.2 turns hover on by default, so it comes after 11.3 (no background work on battery). 11.4 and 11.5 change the background queue, so they come after PRs 10.3 and 10.4. 11.12 needs 11.11. 11.8 and 11.13 are the largest and are best left until the rest are done.
+
+### PR 11.0: Plan Milestone 11 (Small) ✅ Done
+- **Status:** Done.
+- **Why it's needed:** A review of the roadmap found latency and user experience ideas that no milestone covers: starting on mouse press, quicker hover, battery use, skipping generated files, the service worker being stopped, Ollama going away, the side panel, shortcuts, copy and pin, rating answers, Ollama server settings and Chrome's built-in model.
+- **Problem it solves:** Adds this milestone to the roadmap and the matching features to `features.md`: its goal, demo, order and PRs 11.1 to 11.13. No code changes.
+- **Unit tests added:** None (documentation only).
+- **How to test:** Read this section, the milestone overview and the PR status table, and confirm each PR is Small or Medium and lists why it is needed, the problem it solves, its unit tests and how to test it.
+
+### PR 11.1: Start the request when the mouse goes down (Small)
+- **Why it's needed:** An explanation starts on `click`, which fires only after the mouse button is released. Pressing and releasing takes roughly 100 to 200 ms, and that time is spent doing nothing. Starting on the press gets it back on every click that was not prefetched.
+- **Problem it solves:** In `src/clickHandler.ts`, a `pointerdown` with the main button and no modifier keys on a diff line's code sends the same request a click would (`lineRequest`, so it uses the cache and joins a running prefetch, as in PR 8.7). The popup still opens on `click`, and joins the request already running. If the pointer moves more than 4 pixels before it is released (the start of a drag selection, PR 4.4), or is released somewhere else, the request is cancelled and nothing is shown. Clicks on the line number, links and buttons in the diff behave as before. The trace from PR 9.1 gains a **Pressed** mark, so **Details** shows how much earlier the request started.
+- **Unit tests added:** `clickHandler.test.ts` (jsdom, saved diff fixtures, fake service worker) checks that a press sends the request and the click that follows opens the popup on that same request (one request, not two), that a drag past 4 pixels and a release elsewhere cancel it, that the right button, modifier keys and a press while turned off send nothing, that a cached line opens from the cache, and that a press joins a running hover prefetch. `trace.test.ts` checks the **Pressed** mark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, tick **Debug window** in the settings, and open a PR's **Files changed** tab and the debug window.
+  3. Press and hold the mouse on a line's code for about a second. Confirm the debug window shows the request started while the button is still down. Release and confirm the popup shows that request's answer, with one request in the debug window.
+  4. Press on a line and drag across several lines. Confirm the request is cancelled and the **Explain selection** button appears as before.
+  5. Open **Details** in a popup and confirm the **Pressed** mark comes before **Clicked**.
+
+### PR 11.2: Explain on hover, on by default and quicker (Small)
+- **Why it's needed:** Hover prefetch (PR 8.7) is the cheapest way to hide the model's time, but it is off by default and waits 800 ms, so most people never benefit from it, and those who do often click before it starts. Most people rest on a line for less than a second before clicking it.
+- **Problem it solves:** **Explain on hover** becomes on by default, and a new **Hover wait** setting (300 ms by default, from 150 to 2000) replaces the fixed 800 ms. A user who already turned the setting off keeps it off. Hover still sends one request at a time and cancels it when the pointer moves to another line. It sends nothing while background work is paused for the battery (PR 11.3), while the model is not loaded yet (the warm-up from PR 8.3 is still running), or while the tab is hidden. Because a shorter wait means more cancelled requests, the debug window counts hover requests that were cancelled before they finished, so the default can be checked against real use.
+- **Unit tests added:** `prefetch.test.ts` (fake timers) checks the new default and that a saved wait is used, that a saved "off" is kept, nothing during the warm-up, on battery or in a hidden tab, and the cancelled count. `settings.test.ts` checks the default and the range. `optionsPage.test.ts` checks the new field loads and saves.
+- **Screenshots:** the **Explain on hover** and **Hover wait** settings, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, and open the settings page. Confirm **Explain on hover** is ticked (if you never unticked it) and **Hover wait** is 300.
+  3. On a PR, rest the pointer on a line for about half a second and then click it. Confirm the debug window shows one request, started before the click.
+  4. Move the pointer quickly down 20 lines. Confirm at most one request runs at a time and the cancelled count goes up.
+  5. Set **Hover wait** to 1000, save, and confirm a half-second rest no longer starts a request.
+
+### PR 11.3: Pause background work on battery (Small)
+- **Why it's needed:** Hover, Explain ahead and whole-PR prefetch keep the CPU busy, which drains a laptop battery fast and turns the fan on. Today the only way to avoid that is to turn them off and remember to turn them back on.
+- **Problem it solves:** A new **Background work on battery** setting: **Pause** (the default) or **Keep going**. The content script reads the charging state with `navigator.getBattery()` (the service worker cannot) and tells the service worker when it changes. While on battery and paused, hover, Explain ahead and the background queue send nothing new and let a running request finish. Your own clicks and chat questions are never paused. The toolbar badge (PR 10.7) shows "⏸" with the tooltip "Background work paused: on battery". When the browser does not report a battery (a desktop, or a browser without the API), nothing is paused.
+- **Unit tests added:** `batteryState.test.ts` (fake battery manager) checks charging, on battery, the change events, and no battery API. `prefetch.test.ts`, `explainAhead.test.ts` and `prefetchQueue.test.ts` check that each pauses on battery and starts again when plugged in, that a click still runs, and that **Keep going** never pauses. `settings.test.ts` checks the default.
+- **Screenshots:** the setting, and the toolbar badge while paused, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, and tick **Explain on hover** and **Debug window**.
+  3. Unplug the laptop. Rest the pointer on a line for 2 seconds and confirm no request appears in the debug window and the toolbar badge shows the pause. Click the line and confirm it is still answered.
+  4. Plug the laptop in and confirm hover requests start again and the pause goes away.
+  5. Set **Background work on battery** to **Keep going**, unplug, and confirm hover requests are sent.
+
+### PR 11.4: Skip generated and vendored files when explaining ahead (Small)
+- **Why it's needed:** Many PRs change lockfiles, minified bundles, snapshots or generated code. Nobody clicks those lines, but whole-PR prefetch (PR 10.6) would spend a big share of its time on them, often more than on the code that matters, since a lockfile change can be hundreds of lines.
+- **Problem it solves:** A new `src/explain/skipFiles.ts` decides which files background work skips: the files GitHub marks as generated (it reads `linguist-generated` and `linguist-vendored` from the repository's `.gitattributes` at the PR's head, fetched once per PR), and common patterns (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `go.sum`, `poetry.lock`, `*.min.js`, `*.min.css`, `*.map`, `*.snap`, `*.pb.go`, `*_pb2.py`, `dist/`, `vendor/`, `node_modules/`). A **Skip in background** setting lets you add or remove patterns. Hover and your own clicks still work on these files. The prefetch progress (PR 10.7) counts only the files it will explain and says how many it skipped.
+- **Unit tests added:** `skipFiles.test.ts` checks each default pattern, a `.gitattributes` with generated and vendored entries (and negations), a missing `.gitattributes`, the fetch happening once per PR, and added and removed patterns. `prefetchQueue.test.ts` checks skipped files are not queued, a click on one is still answered, and the progress count.
+- **Screenshots:** the setting, and the progress tooltip with the skipped count.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, turn on **Prefetch whole PR** and **Debug window**, and open a PR that changes `package-lock.json` as well as some code.
+  3. Confirm the debug window queues lines from the code files and none from `package-lock.json`, and the badge's tooltip says how many files were skipped.
+  4. Click a line in `package-lock.json` and confirm it is still explained.
+  5. Remove `*.lock` style patterns from **Skip in background**, save, reload the PR, and confirm those files are now queued.
+
+### PR 11.5: Keep the background queue when Chrome stops the service worker (Medium)
+- **Why it's needed:** In Manifest V3 Chrome stops an extension's service worker after about 30 seconds with no events, and can do so between two background jobs or while a long prompt is being read with nothing arriving yet. The queue from PR 10.3 lives in the worker's memory, so a whole-PR prefetch that takes half an hour would quietly stop partway and only start again on the next click or scroll.
+- **Problem it solves:** The queue saves its jobs (the request, the priority, the tab and PR, not the answers, which are already in the cache) to `chrome.storage.session` whenever they change, and when the worker starts again it reloads them and carries on, skipping jobs that are now cached or whose tab has closed. A job that was running when the worker stopped is put back at the front. Each content script with background work also keeps a port open to the worker and reconnects it when it closes, which keeps the worker running while there is work and tells the page when it has restarted. The debug window shows "worker restarted, 12 jobs restored".
+- **Unit tests added:** `prefetchQueue.test.ts` (fake `chrome.storage.session`, fake worker restart) checks that the queue is saved on each change, restored after a restart in the same order, a running job put back first, cached jobs and closed tabs dropped on restore, and nothing done twice. `port.test.ts` checks the content script reconnects after the port closes and stops once its work is done. `debugLog.test.ts` checks the restart entry.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, turn on **Prefetch whole PR** and **Debug window**, and open a PR with many changed lines.
+  3. Once a few jobs are done, open `chrome://serviceworker-internals`, find PR Explainer and click **Stop**.
+  4. Confirm the debug window shows the worker restarting with jobs restored, and the badge keeps counting up without a click or scroll.
+  5. Close the PR tab, stop the worker again, and confirm no jobs for that tab are restored.
+
+### PR 11.6: Ollama status banner that recovers on its own (Medium)
+- **Why it's needed:** When Ollama is not running, every click and every background request fails with its own error (PR 2.4), which is noisy, and when Ollama comes back the page does not know until you try again. Starting Ollama after Chrome is a common case on a laptop.
+- **Problem it solves:** The service worker keeps one **Ollama status** (up, down, or model missing), from the result of every request plus a cheap `/api/version` check. When it goes down, background work stops at once instead of failing line by line, and the page shows one slim banner over the diff with the fix ("Ollama is not running. Start it from the Start menu.") and a **Try again** button. While it is down the worker checks again after 2, 4, 8 and then every 30 seconds, and only while a PR tab is open. When Ollama is back, the banner goes away, the warm-up from PR 8.3 loads the model, and background work carries on. A click while it is down still shows the full error in the popup.
+- **Unit tests added:** `ollamaStatus.test.ts` (fake timers, fake Ollama) checks moving between up, down and model missing from request results, the check schedule and its back-off, no checks with no PR tab open, and the warm-up on recovery. `statusBanner.test.ts` (jsdom) checks the banner shows once for every tab, its text for each status, **Try again**, that it goes when Ollama is back, and its label for screen readers. `prefetchQueue.test.ts` checks background work stops while down and resumes after.
+- **Screenshots:** the banner for "not running" and "model missing", light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, and open a PR's **Files changed** tab.
+  3. Quit Ollama from its tray icon. Click a line and confirm the popup shows the error, and one banner appears over the diff.
+  4. Start Ollama again and wait up to 30 seconds without touching the page. Confirm the banner goes away by itself and the next click is answered.
+  5. Change **Model** to a name that is not installed and confirm the banner says the model is missing.
+
+### PR 11.7: Ollama speed tips on the settings page (Small)
+- **Why it's needed:** Ollama has server settings that can make reading the prompt faster on a laptop, such as flash attention (`OLLAMA_FLASH_ATTENTION=1`) and a smaller context cache (`OLLAMA_KV_CACHE_TYPE=q8_0`, which needs flash attention). They are set outside the extension, as Windows environment variables, so most users never hear of them. How much they help depends on the model and the hardware, so they should be measured rather than promised.
+- **Problem it solves:** A **Make Ollama faster** section on the settings page lists each setting, what it does, the Command Prompt line that sets it (`setx OLLAMA_FLASH_ATTENTION 1`), and that Ollama must be quit and started again afterwards. A **Measure** button runs the Speed test (PR 8.6) on the current model and saves the result, so after changing a setting and restarting Ollama you can run it again and see the difference side by side. `docs/latency.md` gets a section with before and after numbers from this laptop.
+- **Unit tests added:** `optionsPage.test.ts` checks the section, the commands it shows, and that **Measure** saves a result and shows it next to the previous one. `speedTest.test.ts` checks a saved result and the comparison.
+- **Screenshots:** the section with a before and after result, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, open the settings page, and click **Measure** in **Make Ollama faster**. Note the time.
+  3. Run `setx OLLAMA_FLASH_ATTENTION 1` and `setx OLLAMA_KV_CACHE_TYPE q8_0` in Command Prompt, quit Ollama from its tray icon and start it again.
+  4. Click **Measure** again and confirm both results are shown side by side.
+
+### PR 11.8: Chat in Chrome's side panel (Medium)
+- **Why it's needed:** The chat panel (PR 5.2) floats over the bottom right of the page, so it covers code you want to ask about, and it closes when GitHub moves to another tab of the PR. Chrome's side panel sits next to the page instead of on it and stays open while you move around.
+- **Problem it solves:** A new **Chat opens in** setting: **Side panel** (the default) or **On the page** (the panel from PR 5.2). The side panel page (`src/sidepanel.html`, the new `sidePanel` permission) shows the same conversation, kept per PR as today, and follows the PR in the active tab. Chrome only opens a side panel in answer to a user action on the extension itself, so the popup's **Chat** button opens it through the service worker straight away; if Chrome refuses, the chat opens on the page as before and says why once. The toolbar button's right-click menu gets **Open chat**. Clicking another line while the side panel is open adds it to the conversation, as in PR 5.4.
+- **Unit tests added:** `sidePanel.test.ts` (fake `chrome.sidePanel`) checks opening from **Chat**, the fallback when Chrome refuses, following the active tab's PR, keeping one conversation per PR, and a new line joining the conversation. `chatPanel.test.ts` checks the same panel works in both places. `settings.test.ts` checks the default.
+- **Screenshots:** the chat in the side panel next to a PR, the setting, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, click a line on a PR and click **Chat**. Confirm the chat opens in the side panel and the code is not covered.
+  3. Ask a question, then go to the PR's **Conversation** tab and back. Confirm the side panel and the conversation are still there.
+  4. Click another line and confirm it is added to the same conversation.
+  5. Set **Chat opens in** to **On the page** and confirm the floating panel is used again.
+
+### PR 11.9: A shortcut you can change, and Explain in the right-click menu (Small)
+- **Why it's needed:** **Alt+E** (PR 7.3) is handled by the content script, so it cannot be changed, clashes with some keyboard layouts and other extensions, and Chrome's own shortcut page does not list it. Many people also reach for the right-click menu first.
+- **Problem it solves:** The manifest declares an **Explain** command (`chrome.commands`, suggested **Alt+E**, falling back to **Ctrl+Shift+E** if Chrome cannot give it) and an **Open chat** command with no key by default. Both can be changed on `chrome://extensions/shortcuts`, and the settings page links there and shows the current keys. The service worker sends the command to the active tab, which explains the focused line or selection as Alt+E does today; the content script's own Alt+E handler is removed so the key is not handled twice. A right-click on a diff line or a selection on a PR page gets **Explain with PR Explainer** (the `contextMenus` permission is already there from PR 9.4).
+- **Unit tests added:** `commands.test.ts` (fake `chrome.commands`) checks each command reaches the active tab and does nothing outside a PR. `a11y.test.ts` checks the old handler is gone and the command explains the focused line and a selection. `contextMenu.test.ts` checks the item appears only on PR pages and explains the line or selection under the pointer. `optionsPage.test.ts` checks the shortcut keys and the link.
+- **Screenshots:** the right-click menu item, and the shortcuts on the settings page.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, focus a diff line with the keyboard and press **Alt+E**. Confirm it is explained once.
+  3. Open `chrome://extensions/shortcuts`, change **Explain** to **Ctrl+Shift+Y**, and confirm the new key works and the settings page shows it.
+  4. Right-click a diff line and pick **Explain with PR Explainer**. Confirm that line is explained. Select a few lines, right-click, and confirm the selection is explained.
+
+### PR 11.10: Copy and pin a popup (Small)
+- **Why it's needed:** A common next step after reading an explanation is to write a review comment about it, but clicking into GitHub's comment box closes the popup, and the text has to be selected by hand.
+- **Problem it solves:** The popup header gets **Copy**, which copies the answer as Markdown (the three sections with their headings, and the file and line), and **Pin**. A pinned popup stays open when you click elsewhere, can be dragged by its header, and is closed only by its own close button or **Esc** while it has focus. Clicking another line opens a new popup and leaves the pinned one where it is, so two answers can be compared. At most three popups are pinned at once, and pinned popups close when you leave the PR.
+- **Unit tests added:** `popup.test.ts` (jsdom, fake clipboard) checks the copied Markdown, that a pinned popup stays open on an outside click, dragging, closing, a second popup opening beside a pinned one, the limit of three, closing on leaving the PR, keyboard focus and labels.
+- **Screenshots:** a pinned popup beside a second one, and the Copy and Pin buttons, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, click a line on a PR and wait for the answer. Click **Copy**, open a review comment box and paste. Confirm the Markdown answer is pasted.
+  3. Click **Pin**, drag the popup aside, and click into the comment box. Confirm the popup stays open.
+  4. Click another line and confirm a second popup opens and the pinned one stays.
+  5. Go to the PR's **Conversation** tab and confirm the pinned popups close.
+
+### PR 11.11: Rate an answer (Small)
+- **Why it's needed:** Every speed change so far (smaller models, one-sentence answers, whole-hunk answers in PR 10.5) can make answers worse, and nothing records whether an answer was any good. A quick rating gives a local, private record of quality to set against the speed numbers.
+- **Problem it solves:** A finished answer gets 👍 and 👎 buttons. A rating is saved in `chrome.storage.local` with the model, the kind of answer (click, hover, ahead, whole hunk, chat), the answer's length and time, and the cache key, but never the code or the answer itself. 👎 also offers **Regenerate**. The settings page gets **Clear ratings**. Nothing is sent anywhere.
+- **Unit tests added:** `ratings.test.ts` (fake `chrome.storage.local`) checks a rating is saved with the right fields and no code or text, changing a rating, the 1,000 newest kept, and **Clear ratings**. `popup.test.ts` checks the buttons appear only once an answer is finished, their labels for screen readers, and **Regenerate** after 👎.
+- **Screenshots:** the popup with the rating buttons, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, click a line on a PR, and give the answer 👎. Confirm **Regenerate** is offered.
+  3. Open the service worker console from `chrome://extensions` and run `chrome.storage.local.get('ratings')`. Confirm the rating is there with the model name and no code.
+  4. Click **Clear ratings** on the settings page and confirm the list is empty.
+
+### PR 11.12: Ratings next to speed in the Speed test and report (Small)
+- **Why it's needed:** Picking the fastest model (PRs 8.6 and 9.9) only tells half the story. Seeing how often each model's answers were liked, next to its speed, shows when a faster model is not worth it.
+- **Problem it solves:** The Speed test table on the settings page gains a **Liked** column (the share of 👍 for each model, with the number of ratings, and "–" under 10 ratings), and the same split by kind of answer (click, whole hunk, chat). `npm run bench` can read an exported ratings file (**Export ratings** on the settings page saves it as JSON) and adds the column to `docs/latency.md`.
+- **Unit tests added:** `ratings.test.ts` checks the share per model and per kind, and "–" under 10. `optionsPage.test.ts` checks the column and **Export ratings**. `bench.test.ts` checks the bench reads the file and writes the column.
+- **Screenshots:** the Speed test table with the **Liked** column.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, and rate at least 10 answers from one model.
+  3. Run the Speed test on the settings page and confirm the **Liked** column shows that model's share, and "–" for models with fewer ratings.
+  4. Click **Export ratings**, then run `npm run bench -- --ratings <the saved file>` and confirm `docs/latency.md` has the column.
+
+### PR 11.13: Chrome's built-in model as an optional fallback (Medium)
+- **Why it's needed:** Installing Ollama and pulling a model is the biggest hurdle for a new user. Recent versions of Chrome include a small on-device model (Gemini Nano, through the Prompt API) that extensions can use, which keeps code on the laptop as Ollama does. It is experimental and smaller than a coding model, and only machines with enough memory and disk can download it, so it is a fallback to try, not a replacement.
+- **Problem it solves:** A new `src/llm/chromeAiClient.ts` behind the `LlmClient` interface, so explanations and chat can use Chrome's built-in model. The settings page gets **Model server**: **Ollama** (the default) or **Chrome built-in**, which shows whether this machine can use it (available, needs a download with a **Download** button, or not supported, with Chrome's reason). When Ollama is not running and the built-in model is available, the error from PR 2.4 offers **Use Chrome's built-in model instead**. Prompts are the same, with the token budget from PR 6.2 set to the built-in model's limit. The privacy check from PR 7.4 is unchanged, since the model runs inside Chrome and the extension makes no new network requests; `PRIVACY.md` says so. If the Prompt API cannot be reached from the service worker, the client runs in an offscreen document.
+- **Unit tests added:** `chromeAiClient.test.ts` (fake Prompt API) checks each availability state, a download with progress, a non-streaming and a streaming answer, **Stop**, the token limit, and errors mapped to `LlmError` kinds. `optionsPage.test.ts` checks the setting and its states. `errors.test.ts` checks the offer appears only when the built-in model is available. `privacy.test.ts` still passes unchanged.
+- **Screenshots:** the **Model server** setting in each state, and an answer from the built-in model, light and dark.
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Run `npm run dev`, reload the extension, open the settings page and set **Model server** to **Chrome built-in**. Confirm it says whether this laptop can use it, and click **Download** if offered.
+  3. Once it is available, click a line on a PR and confirm the popup names Chrome's built-in model and shows an answer.
+  4. Set **Model server** back to **Ollama**, quit Ollama, click a line, and confirm the error offers the built-in model.
 
 ---
 
