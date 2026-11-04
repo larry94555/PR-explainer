@@ -168,7 +168,7 @@ describe('explain handler', () => {
       status: 'done',
       explanation: { what: 'A.', why: 'Because the …', cutOff: true },
     });
-    expect(vi.mocked(client.chatStream).mock.calls[0]![1].maxResponseTokens).toBe(300);
+    expect(vi.mocked(client.chatStream).mock.calls[0]![1].maxResponseTokens).toBe(120);
   });
 
   it('works without onChunk', async () => {

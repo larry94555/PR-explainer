@@ -21,8 +21,9 @@ export interface Settings {
   /** Sampling temperature, 0 to 2. Low values give steadier explanations. */
   temperature: number;
   /**
-   * Upper limit on the length of an explanation, in tokens. Kept low (PR 8.4)
-   * because writing the answer is usually the slowest part. Chat answers may
+   * Upper limit on the length of an explanation, in tokens. Kept low (PR 8.4,
+   * and 120 from PR 9.8, for one-sentence answers) because writing the answer
+   * is usually the slowest part. Chat answers may
    * use up to CHAT_MIN_RESPONSE_TOKENS even when this is lower.
    */
   maxResponseTokens: number;
@@ -75,7 +76,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   llmUrl: 'http://localhost:11434',
   model: '',
   temperature: 0.2,
-  maxResponseTokens: 300,
+  maxResponseTokens: 120,
   contextTokens: 0,
   keepAliveMinutes: 30,
   explainOnHover: false,

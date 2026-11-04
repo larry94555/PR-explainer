@@ -80,7 +80,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 9.5 | Turn off thinking for reasoning models | Small | ✅ Done ([#48](https://github.com/larry94555/PR-explainer/pull/48)) |
 | 9.6 | Show the whole answer at once | Small | ✅ Done ([#49](https://github.com/larry94555/PR-explainer/pull/49)) |
 | 9.7 | Fewer round trips per click | Small | ✅ Done ([#51](https://github.com/larry94555/PR-explainer/pull/51)) |
-| 9.8 | One-sentence answers | Small | Not started |
+| 9.8 | One-sentence answers | Small | ✅ Done ([#52](https://github.com/larry94555/PR-explainer/pull/52)) |
 | 9.9 | Aim the Speed test and benchmark at 2 seconds | Small | Not started |
 | 9.10 | Explain changed lines ahead of time | Medium | Not started |
 | 9.11 | Latency report against 2 seconds | Small | Not started |
@@ -880,16 +880,17 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
   5. Click a second line in the same file. Confirm its group has exactly one round trip, `/api/chat`.
   6. Pick another model in the settings, save, click a line, and confirm `/api/ps` is asked once again, and not on the click after it.
 
-### PR 9.8: One-sentence answers (Small)
+### PR 9.8: One-sentence answers (Small) ✅ Done
 - **Why it's needed:** Writing the answer is still the biggest term once thinking is off. At 30 tokens per second, the roughly 150-token answers PR 8.4 allows take 5 seconds on their own.
-- **Problem it solves:** The explain prompt asks for one short sentence on what the code does, one on why, and at most two one-line concerns (or "None found."), and the default **Max response length** drops from 300 to 120 tokens. Users who never changed it get the new default. The cut-off note from PR 8.4 still applies. Chat answers are not affected. The snapshot of the prompt and the bench samples are updated, and the change is kept only if the answers on the bench samples are still useful (checked by hand and noted in the PR).
-- **Unit tests added:** `explainPrompt.test.ts` snapshot is updated for the new wording. `settings.test.ts` checks the new default of 120 and that chat still gets at least 1024. `explainHandler.test.ts` checks 120 is sent. `parseExplanation.test.ts` checks a one-sentence answer per section parses.
-- **Screenshots:** a one-sentence answer in the popup, light and dark.
+- **Problem it solves:** The explain prompt asks for one short sentence on what the code does, one on why, and at most two one-line concerns (or "None found."), and the default **Max response length** drops from 300 to 120 tokens. Users who have no limit stored get the new default. A stored value is kept as it is, even 300: the settings page saves every field, so 300 may be the old default saved by **Save** or a deliberate choice, and the two cannot be told apart, so it is never changed for the user (to get 120, type it and save). The cut-off note from PR 8.4 still applies. Chat answers are not affected: they still get at least 1024 tokens. The snapshot of the prompt is updated; the bench samples need no change, since `npm run bench` reads the default limit and builds the same prompt. The popup demo (`npm run demo:popup`) has a **One-sentence answer** state. The change is kept only if the answers on the bench samples are still useful (checked by hand and noted in the PR).
+- **Unit tests added:** `explainPrompt.test.ts` snapshot is updated for the new wording. `settings.test.ts` checks the new default of 120, that chat still gets at least 1024, and that a stored 300 is kept. `explainHandler.test.ts` checks 120 is sent. `parseExplanation.test.ts` checks a one-sentence answer per section parses.
+- **Screenshots:** a one-sentence answer in the popup, light and dark ([1](screenshots/pr-9.8/1-one-sentence-light.png), [2](screenshots/pr-9.8/2-one-sentence-dark.png)), taken with `npm run demo:popup`.
 - **How to test (Windows 11, Command Prompt):**
   1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
   2. Run `npm run bench -- deepseek-r1:7b` (and the small model from PR 9.9 if you have it) and compare with the section from PR 9.5: **Answer tokens** and the median total should both be lower.
-  3. Run `npm run dev`, reload the extension, and check **Max response length** is 120 in the settings (type `120` and save if you set it earlier).
-  4. Click 5 lines on a real PR and confirm each answer is one sentence per section, still says what the code does and why, and names real concerns.
+  3. Optional, without Ollama: run `npm run demo:popup`, pick **One-sentence answer**, and click a line to see the shape of the new answer.
+  4. Run `npm run dev`, reload the extension, and check **Max response length** in the settings. If it shows 300 (or another number), you saved one earlier and it is kept: type `120` and click **Save**.
+  5. Click 5 lines on a real PR and confirm each answer is one sentence per section, still says what the code does and why, and names real concerns.
 
 ### PR 9.9: Aim the Speed test and benchmark at 2 seconds (Small)
 - **Why it's needed:** The model is the biggest lever left. The Speed test (PR 8.6) and the latency report (PR 8.8) are aimed at 10 seconds, so they cannot tell you which model meets 2.

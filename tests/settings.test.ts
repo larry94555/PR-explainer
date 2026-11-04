@@ -49,19 +49,24 @@ describe('settings', () => {
       expect(chatResponseTokens({ maxResponseTokens: 1 })).toBe(1024);
     });
 
+    it('still gives chat at least 1024 with the 120-token default (PR 9.8)', () => {
+      expect(DEFAULT_SETTINGS.maxResponseTokens).toBe(120);
+      expect(chatResponseTokens({ maxResponseTokens: 120 })).toBe(1024);
+    });
+
     it('uses the setting when it is higher', () => {
       expect(chatResponseTokens({ maxResponseTokens: 4096 })).toBe(4096);
     });
   });
 
   describe('defaults', () => {
-    it('uses the Ollama default URL, no model, temperature 0.2, 300-token answers, keep loaded 30 minutes', () => {
+    it('uses the Ollama default URL, no model, temperature 0.2, 120-token answers, keep loaded 30 minutes', () => {
       expect(DEFAULT_SETTINGS).toEqual({
         llmUrl: 'http://localhost:11434',
         model: '',
         temperature: 0.2,
-        // Short answers arrive sooner (PR 8.4).
-        maxResponseTokens: 300,
+        // One sentence per section arrives sooner (PR 8.4, PR 9.8).
+        maxResponseTokens: 120,
         contextTokens: 0,
         keepAliveMinutes: 30,
         // Explain on hover uses the model for lines never clicked (PR 8.7).
@@ -91,6 +96,12 @@ describe('settings', () => {
       await expect(getSettings(storage)).resolves.toEqual(DEFAULT_SETTINGS);
       expect(Object.isFrozen(DEFAULT_SETTINGS)).toBe(true);
     });
+  });
+
+  it('keeps a stored 300, which may be a deliberate choice, over the new default (PR 9.8)', async () => {
+    const storage = fakeStorage({ [storageKey('maxResponseTokens')]: 300 });
+    expect((await getSettings(storage)).maxResponseTokens).toBe(300);
+    expect(storage.set).not.toHaveBeenCalled();
   });
 
   describe('saving and reloading', () => {

@@ -149,7 +149,7 @@ Every caller depends on the `LlmClient` interface and gets an instance from `cre
 | `llmUrl` | `http://localhost:11434` | Must be on this computer |
 | `model` | (empty) | Picked from the installed models |
 | `temperature` | `0.2` | Sampling temperature |
-| `maxResponseTokens` | `300` | Answer limit for explanations (chat gets at least 1,024) |
+| `maxResponseTokens` | `120` | Answer limit for explanations (chat gets at least 1,024) |
 | `contextTokens` | `0` | `0` means automatic |
 | `keepAliveMinutes` | `30` | How long Ollama keeps the model loaded |
 | `explainOnHover` | `false` | Prefetch on hover |

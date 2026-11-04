@@ -17,6 +17,10 @@ export const SECTION_HEADINGS = {
   concerns: 'Concerns',
 } as const;
 
+// One sentence per section (PR 9.8): writing the answer is the biggest part
+// of the wait once thinking is off, so the answer is kept to about 60 to 100
+// tokens.
+//
 // One system prompt for a clicked line and a selected block, so it is the
 // same text on every click (PR 8.5): Ollama reuses the work for the start of
 // a prompt that matches the previous one, so everything that stays the same
@@ -28,12 +32,12 @@ export const EXPLAIN_SYSTEM_PROMPT = [
   '',
   'Answer in Markdown with exactly these level-2 headings, in this order:',
   `## ${SECTION_HEADINGS.what}`,
-  'At most two sentences.',
+  'One short sentence.',
   `## ${SECTION_HEADINGS.why}`,
-  'At most two sentences.',
+  'One short sentence.',
   `## ${SECTION_HEADINGS.concerns}`,
-  'At most three one-sentence bullets, most important first: bugs, edge cases, security,',
-  'or performance. If there are none, write "None found."',
+  'At most two one-line bullets, most important first: bugs, edge cases, security, or',
+  'performance. If there are none, write "None found."',
   '',
   'Be brief. Do not repeat the code. No other headings, no summary.',
 ].join('\n');
