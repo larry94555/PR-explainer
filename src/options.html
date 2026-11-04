@@ -106,6 +106,21 @@
 
         <div class="field">
           <label class="check">
+            <input id="explainAhead" name="explainAhead" type="checkbox" />
+            Explain ahead
+          </label>
+          <p class="hint">
+            When a PR's Files changed tab has been left alone for 2 seconds, explains the added and
+            changed lines on screen, top to bottom, one at a time, so a click on them is answered at
+            once from the cache. At most 30 lines per page; scrolling moves on to the new lines. It
+            waits while you click or chat. Off by default because it keeps the model busy and uses
+            battery.
+          </p>
+          <p class="error" data-error-for="explainAhead" role="alert"></p>
+        </div>
+
+        <div class="field">
+          <label class="check">
             <input id="letModelThink" name="letModelThink" type="checkbox" />
             Let the model think
           </label>

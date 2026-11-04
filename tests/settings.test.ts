@@ -11,6 +11,7 @@ import {
   type StorageAreaLike,
 } from '../src/settings';
 import { STREAM_SETTING_KEY, trackStreamSetting } from '../src/streamSetting';
+import { AHEAD_SETTING_KEY } from '../src/explainAhead';
 import type { StorageChangedEvent } from '../src/enabledState';
 
 // An in-memory stand-in for chrome.storage.sync. Like Chrome, it copies values
@@ -71,6 +72,8 @@ describe('settings', () => {
         keepAliveMinutes: 30,
         // Explain on hover uses the model for lines never clicked (PR 8.7).
         explainOnHover: false,
+        // Explain ahead keeps the model busy and uses battery (PR 9.10).
+        explainAhead: false,
         // Thinking was most of the wait on a reasoning model (PR 9.5).
         letModelThink: false,
         // The answer appears whole, so the sections do not jump around (PR 9.6).
@@ -115,6 +118,7 @@ describe('settings', () => {
         contextTokens: 8192,
         keepAliveMinutes: 90,
         explainOnHover: true,
+        explainAhead: true,
         letModelThink: true,
         streamAnswers: true,
         showPrompt: true,
@@ -271,6 +275,19 @@ describe('settings', () => {
       const promise = saveSettings({ explainOnHover: 1 as unknown as boolean }, fakeStorage());
       await expectRejectedFields(promise, ['explainOnHover']);
       await expect(promise).rejects.toThrow('Explain on hover must be on or off.');
+    });
+
+    it('accepts Explain ahead on or off and nothing else (PR 9.10)', async () => {
+      await expect(saveSettings({ explainAhead: true }, fakeStorage())).resolves.toMatchObject({
+        explainAhead: true,
+      });
+      const promise = saveSettings({ explainAhead: 'yes' as unknown as boolean }, fakeStorage());
+      await expectRejectedFields(promise, ['explainAhead']);
+      await expect(promise).rejects.toThrow('Explain ahead must be on or off.');
+    });
+
+    it('the content script reads Explain ahead under its key (PR 9.10)', () => {
+      expect(AHEAD_SETTING_KEY).toBe(storageKey('explainAhead'));
     });
 
     it('accepts Let the model think on or off and nothing else (PR 9.5)', async () => {

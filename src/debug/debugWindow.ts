@@ -4,8 +4,8 @@
 // It reads the debug log the service worker keeps (src/debug/debugLog.ts,
 // PR 9.3) over the debug log port: first the whole log and the round trips
 // still running, then each new entry as it comes. Round trips are grouped
-// under what caused them (a click, Explain on hover, the warm-up or a chat
-// question), newest first. Opening a row shows the request (a chat prompt
+// under what caused them (a click, Explain on hover, Explain ahead, the
+// warm-up or a chat question), newest first. Opening a row shows the request (a chat prompt
 // message by message, with its role), the reply (thinking apart from the
 // answer), Ollama's own timings, and the click's tasks from PR 9.1. A row
 // still running shows its reply growing and its time ticking.
@@ -71,6 +71,7 @@ export interface DebugWindow {
 export const CAUSE_LABELS: Record<DebugCause, string> = {
   click: 'Click',
   hover: 'Explain on hover',
+  ahead: 'Explain ahead',
   warmup: 'Warm-up',
   chat: 'Chat question',
 };
@@ -352,7 +353,9 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
       }
       if (entry.where && !group.where) group.where = entry.where;
       // A click's own entries name it, even when a warm-up's came first.
-      if (entry.cause === 'click' || entry.cause === 'hover') group.cause = entry.cause;
+      if (entry.cause === 'click' || entry.cause === 'hover' || entry.cause === 'ahead') {
+        group.cause = entry.cause;
+      }
       group.start = Math.min(group.start, entry.at);
       return group;
     };
@@ -582,7 +585,8 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
     return nodes;
   };
 
-  const causeNoun = (cause: DebugCause) => (cause === 'hover' ? 'hover' : 'click');
+  const causeNoun = (cause: DebugCause) =>
+    cause === 'hover' ? 'hover' : cause === 'ahead' ? 'line explained ahead' : 'click';
 
   const timingsTable = (t: LlmTimings) => {
     const pairs: [string, string][] = [];

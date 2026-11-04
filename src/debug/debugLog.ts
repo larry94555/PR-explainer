@@ -194,7 +194,7 @@ const MAX_TEXT = 500;
 const MAX_TRIPS = 50;
 const MAX_TASKS = 100;
 const STATUSES = new Set<RoundTripStatus>(['running', 'done', 'failed', 'cancelled', 'refused']);
-const TRIP_CAUSES = new Set<RoundTripCause>(['click', 'page', 'hover']);
+const TRIP_CAUSES = new Set<RoundTripCause>(['click', 'page', 'hover', 'ahead']);
 const TASK_SOURCES = new Set<TraceTask['source']>(['page', 'worker', 'model']);
 
 const isNumber = (value: unknown): value is number =>
@@ -267,7 +267,9 @@ export function pageEntries(payload: unknown): DebugEntryInput[] {
   const at = p.at;
   const base = {
     group,
-    cause: (p.cause === 'hover' || p.cause === 'warmup' ? p.cause : 'click') as DebugCause,
+    cause: (p.cause === 'hover' || p.cause === 'ahead' || p.cause === 'warmup'
+      ? p.cause
+      : 'click') as DebugCause,
     at,
     ...(text(p.where) !== undefined && { where: text(p.where) }),
   };

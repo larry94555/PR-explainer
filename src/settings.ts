@@ -47,6 +47,14 @@ export interface Settings {
    */
   explainOnHover: boolean;
   /**
+   * Explain the added and changed lines on screen once the Files changed tab
+   * has been idle for a moment (PR 9.10), one at a time, so most clicks are
+   * answered from the cache. Off by default, because it keeps the model busy
+   * and uses battery. The content script reads it straight from storage
+   * (src/explainAhead.ts).
+   */
+  explainAhead: boolean;
+  /**
    * Let a reasoning model, such as deepseek-r1, think before it answers
    * (PR 9.5). Off by default: explaining a few lines does not need it, and
    * thinking was most of the wait. Other models are not affected.
@@ -80,6 +88,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   contextTokens: 0,
   keepAliveMinutes: 30,
   explainOnHover: false,
+  explainAhead: false,
   letModelThink: false,
   streamAnswers: false,
   showPrompt: false,
@@ -164,6 +173,8 @@ function checkField(field: SettingsField, value: unknown): string | null {
       return checkNumber(value, KEEP_ALIVE_MINUTES_RANGE, true, 'Keep model loaded');
     case 'explainOnHover':
       return typeof value === 'boolean' ? null : 'Explain on hover must be on or off.';
+    case 'explainAhead':
+      return typeof value === 'boolean' ? null : 'Explain ahead must be on or off.';
     case 'letModelThink':
       return typeof value === 'boolean' ? null : 'Let the model think must be on or off.';
     case 'streamAnswers':

@@ -141,6 +141,13 @@ describe('chat panel', () => {
       return { chat, answer };
     };
 
+    it('says it is busy while an answer is written, for Explain ahead (PR 9.10)', () => {
+      const { chat } = ask();
+      expect(chat.isBusy).toBe(true);
+      chat.setBusy(false);
+      expect(chat.isBusy).toBe(false);
+    });
+
     it('keeps the answer empty ("Thinking…") while it is written', () => {
       const { answer } = ask();
       answer.update('Use `vi.fn()`');

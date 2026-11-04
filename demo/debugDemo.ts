@@ -4,6 +4,8 @@
 // question. A second click then runs live, its reply growing word by word.
 // From PR 9.7 the warm-up group also has the PR description, read as the page
 // opens, and a warm click's only round trip to Ollama is the explanation.
+// From PR 9.10 an "Explain ahead" group holds the lines explained once the
+// page was still, one at a time.
 // No extension APIs and no LLM. Add ?live=0 to the address to skip the live click.
 
 import '../src/debug/debugWindow.css';
@@ -103,8 +105,70 @@ const SECOND_CLICK_TASKS: TraceTask[] = [
 const warmAt = T0;
 const clickAt = T0 + 21_000;
 const hoverAt = T0 + 48_000;
+const aheadAt = T0 + 55_000;
 const chatAt = T0 + 70_000;
 const where = 'src/llm/retry.ts:14';
+
+// Explain ahead (PR 9.10): the added lines on screen, one after another, in
+// one group for the page.
+const AHEAD_LINES: { line: number; code: string; reply: string }[] = [
+  {
+    line: 9,
+    code: 'export async function retry<T>(fn: () => Promise<T>): Promise<T> {',
+    reply:
+      '**What it does** Runs `fn` and tries again when it fails.\n\n**Why it is needed** Requests sent while the model loads can fail once.\n\n**Concerns** None found.',
+  },
+  {
+    line: 10,
+    code: '  for (let attempt = 0; ; attempt++) {',
+    reply:
+      '**What it does** Counts the tries with no upper bound in the loop itself.\n\n**Why it is needed** The limit is checked inside, after a failure.\n\n**Concerns** None found.',
+  },
+  {
+    line: 12,
+    code: '      return await fn();',
+    reply:
+      '**What it does** Returns the first answer that succeeds.\n\n**Why it is needed** `await` here lets the catch below see a failure.\n\n**Concerns** None found.',
+  },
+];
+let aheadStart = aheadAt;
+const AHEAD_ENTRIES = AHEAD_LINES.map(({ line, code, reply }, i) => {
+  const durationMs = [1_820, 1_640, 1_510][i]!;
+  const entry = rt(
+    'ahead-1',
+    'ahead',
+    aheadStart,
+    trip({
+      endpoint: 'localhost:11434/api/chat',
+      purpose: 'explanation',
+      cause: 'ahead',
+      think: false,
+      durationMs,
+      bytesSent: 1_300,
+      bytesReceived: reply.length * 9,
+      messages: [
+        { role: 'system', content: SYSTEM },
+        {
+          role: 'user',
+          content: USER.replace('line 14', `line ${line}`).replace(
+            '+    await sleep(200 * 2 ** attempt);',
+            `+${code}`,
+          ),
+        },
+      ],
+      reply,
+      timings: {
+        promptTokens: 400,
+        promptMs: 280,
+        answerTokens: 60,
+        answerMs: 1_300,
+        totalMs: durationMs - 30,
+      },
+    }),
+  );
+  aheadStart += durationMs + 5;
+  return entry;
+});
 
 const ENTRIES: DebugEntry[] = [
   // The page reads the PR description as it opens (PR 9.7).
@@ -241,6 +305,7 @@ const ENTRIES: DebugEntry[] = [
     }),
     'src/llm/retry.ts:12',
   ),
+  ...AHEAD_ENTRIES,
   rt(
     'chat-1',
     'chat',

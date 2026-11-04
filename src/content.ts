@@ -22,6 +22,12 @@ import { traceLine } from './trace/clickTrace';
 import { createFileContextLoader, type CodeSpan } from './fileContext';
 import type { FileContext } from './explain/explainPrompt';
 import { createPrefetcher, trackHoverSetting, type PrefetchEvent } from './prefetch';
+import {
+  createExplainAhead,
+  trackAheadSetting,
+  visibleAddedLines,
+  type AheadEvent,
+} from './explainAhead';
 import { createPrMetadataLoader, type PrMetadata } from './prMetadata';
 import { parsePrUrl } from './prUrl';
 import { installSelection } from './selection';
@@ -94,6 +100,9 @@ const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (va
     currentPopup()?.close();
     currentChatPanel()?.close();
     prefetcher.cancel();
+    ahead.cancel();
+  } else if (features.attached) {
+    ahead.restart();
   }
   update();
 });
@@ -188,6 +197,8 @@ const chats = new ChatSessions();
 // a task in the click's trace (PR 9.1); the two reads run at the same time.
 const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
   const { fresh, code, trace, cause = 'click' } = options;
+  // A click's trace names its debug log group; Explain ahead passes its own.
+  const debugId = trace?.id ?? options.debugId;
   const pr = prName(location.href);
   // The click, on the round trips' clock (both are performance.now()).
   const clickAt = trace ? githubTrips.now() - trace.now() : undefined;
@@ -226,7 +237,7 @@ const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
     trace?.markSent();
     const sent = trace?.start('send', 'Send the request');
     const stream = openExplainStream(
-      { context, pr, fresh, prInfo, fileContext, cause, ...(trace && { debugId: trace.id }) },
+      { context, pr, fresh, prInfo, fileContext, cause, ...(debugId && { debugId }) },
       onChunk,
     );
     sent?.();
@@ -247,8 +258,49 @@ function describePrefetch(event: PrefetchEvent): string {
   if (event.type === 'joined') return `click joined the prefetch of ${event.key}${seconds}`;
   return `prefetch of ${event.key} ${event.type}`;
 }
-const prefetcher = createPrefetcher({
+// Explain ahead (PR 9.10): with the setting on, once the page has been still
+// for 2 seconds the added lines on screen are explained one at a time, so a
+// click on them is answered from the cache (src/explainAhead.ts). A click or
+// a hover on other code stops it for a moment; a click on the same line joins it.
+const aheadSetting = trackAheadSetting(chrome.storage.sync, chrome.storage.onChanged, (on) => {
+  if (!on) ahead.cancel();
+  else if (features.attached) ahead.restart();
+});
+function describeAhead(event: AheadEvent): string {
+  if (event.type === 'limit') return `explain ahead stopped at ${event.count} lines on this page`;
+  const seconds = 'elapsedMs' in event ? ` after ${(event.elapsedMs / 1000).toFixed(1)} s` : '';
+  if (event.type === 'finished') {
+    const how =
+      event.status === 'failed' ? 'failed' : event.cached ? 'was in the cache' : 'finished';
+    return `explain ahead of ${event.key} ${how}${seconds}`;
+  }
+  if (event.type === 'joined')
+    return `click joined the explanation ahead of ${event.key}${seconds}`;
+  return `explain ahead of ${event.key} ${event.type}`;
+}
+const ahead = createExplainAhead({
   explain: askWorker,
+  isOn: () => aheadSetting.current(),
+  isEnabled: () => enabled.current() === true,
+  // One request at a time: not while a click's or a chat answer is being
+  // written, not while Explain on hover runs, and not in a hidden tab.
+  isBusy: () => {
+    const state = currentPopup()?.state;
+    return (
+      state === 'loading' ||
+      state === 'streaming' ||
+      currentChatPanel()?.isBusy === true ||
+      prefetcher.running() !== undefined ||
+      document.visibilityState === 'hidden'
+    );
+  },
+  lines: () => visibleAddedLines(document),
+  onEvent: (event) => console.info(`[PR Explainer] ${describeAhead(event)}`),
+});
+
+const prefetcher = createPrefetcher({
+  // A hover on another line stops the line being explained ahead.
+  explain: ahead.explain,
   isOn: () => hoverSetting.current(),
   isEnabled: () => enabled.current() === true,
   // One request at a time: not while a click's answer is still coming, and
@@ -357,6 +409,9 @@ const features = new DiffPageFeatures(() => {
   document.addEventListener('click', onClick);
   document.addEventListener('mouseover', prefetcher.onMouseOver);
   document.addEventListener('mousedown', prefetcher.onMouseDown);
+  // Scrolling starts Explain ahead's wait again, for the lines then on screen.
+  window.addEventListener('scroll', ahead.restart, { passive: true });
+  ahead.restart();
   // Drag across lines, or click one and Shift-click another, to explain the
   // block as a whole (src/selection.ts).
   const removeSelection = installSelection(explainDeps);
@@ -364,7 +419,9 @@ const features = new DiffPageFeatures(() => {
     document.removeEventListener('click', onClick);
     document.removeEventListener('mouseover', prefetcher.onMouseOver);
     document.removeEventListener('mousedown', prefetcher.onMouseDown);
+    window.removeEventListener('scroll', ahead.restart);
     prefetcher.cancel();
+    ahead.cancel();
     removeSelection();
     // Closing the popup also stops its request.
     currentPopup()?.close();
@@ -396,6 +453,8 @@ function onPageChanged(url: string): void {
   fileContexts.forget();
   // A prefetch or wait from before the move is for code that may be gone.
   prefetcher.pageChanged();
+  ahead.pageChanged();
+  if (features.attached) ahead.restart();
   readDescriptionAhead();
 }
 watchNavigation(window, onPageChanged, { onRedraw: onPageChanged });

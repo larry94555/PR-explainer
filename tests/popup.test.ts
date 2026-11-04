@@ -164,6 +164,18 @@ describe('popup', () => {
       expect(rows().every((r) => !r.querySelector('details')!.open)).toBe(true);
     });
 
+    it('marks the round trip of a line explained ahead that the click joined (PR 9.10)', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'llama3');
+      popup.showTrace({ tasks: [TASK], roundTrips: [{ ...CHAT, cause: 'ahead' }] });
+      expect(shadow().querySelector('.trip-count')!.textContent).toBe(
+        'No round trips for this click · 1 more by Explain ahead, not counted',
+      );
+      expect(rows()[0]!.querySelector('summary')!.textContent).toBe(
+        'Ollama /api/chat · explanation · 12.3 s · by Explain ahead',
+      );
+    });
+
     it("shows the explanation's messages by role, and its reply with the thinking apart", () => {
       const popup = openPopup(ANCHOR);
       popup.showExplanation(SAMPLE, 'llama3');

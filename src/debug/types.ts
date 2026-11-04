@@ -7,8 +7,11 @@
 
 import type { RoundTrip, TraceTask } from '../trace/types';
 
-/** What a group of entries was made for: a click, Explain on hover, the warm-up or the chat. */
-export type DebugCause = 'click' | 'hover' | 'warmup' | 'chat';
+/**
+ * What a group of entries was made for: a click, Explain on hover, Explain
+ * ahead (PR 9.10, one group per page for all its lines), the warm-up or the chat.
+ */
+export type DebugCause = 'click' | 'hover' | 'ahead' | 'warmup' | 'chat';
 
 interface DebugEntryBase {
   /** Counts up from 1 in the order entries were added, and never repeats in a browser session. */
@@ -47,7 +50,7 @@ export type DebugEntryInput = Omit<DebugRoundTripEntry, 'id'> | Omit<DebugTraceE
 export interface DebugLogPayload {
   group: string;
   /** "warmup" for the page's own reads before any click, such as the PR description (PR 9.7). */
-  cause?: 'click' | 'hover' | 'warmup';
+  cause?: 'click' | 'hover' | 'ahead' | 'warmup';
   /** When the click came (Date.now()). */
   at: number;
   where?: string;

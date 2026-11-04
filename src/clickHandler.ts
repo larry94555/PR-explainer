@@ -40,12 +40,20 @@ export interface ClickHandlerDeps {
    * file (PR 6.3); it is left out for removed lines. The page's tasks for
    * the request (reading the PR description, fetching the file, sending)
    * are recorded in `trace` (PR 9.1). `cause` is "hover" for Explain on
-   * hover (PR 8.7), so its round trips are not counted against a click (PR 9.2).
+   * hover (PR 8.7) and "ahead" for Explain ahead (PR 9.10), so their round
+   * trips are not counted against a click (PR 9.2). Without a trace,
+   * `debugId` names the request's group in the debug log (PR 9.3).
    */
   explain(
     context: string,
     onChunk: (text: string) => void,
-    options: { fresh: boolean; code?: CodeSpan; trace?: ClickTrace; cause?: 'click' | 'hover' },
+    options: {
+      fresh: boolean;
+      code?: CodeSpan;
+      trace?: ClickTrace;
+      cause?: 'click' | 'hover' | 'ahead';
+      debugId?: string;
+    },
   ): ExplainStream;
   /**
    * False while the user has turned click-to-explain off with the toolbar
