@@ -24,7 +24,7 @@
 import type { ChatSubject } from './chat/chatPanel';
 import type { ChatSeed } from './chat/chatSession';
 import { factsFromHunk, type CodeFacts } from './codeFacts';
-import { locateHunk, locateRow, type DiffHunk } from './diffDom';
+import { locateHunk, locateLine, locateRow, type DiffHunk } from './diffDom';
 import { contextFromHunk, DEFAULT_CONTEXT, formatContext } from './lineContext';
 import type { Explanation } from './explain/parseExplanation';
 import type { CodeSpan } from './fileContext';
@@ -211,8 +211,20 @@ export interface ClickHandler {
   onPointerDown(event: PointerEvent): void;
   onPointerMove(event: PointerEvent): void;
   onPointerUp(event: PointerEvent): void;
-  /** For `pointercancel`, a page change, or turning off: stops a pressed line's request. */
+  /**
+   * For `pointercancel`, the pointer leaving the page, the window losing
+   * focus, a page change, or turning off: stops a pressed line's request.
+   */
   cancelPress(): void;
+}
+
+/**
+ * Names the diff line `target` is on: "src/a.ts:added:12". An unchanged
+ * line has the same name on either side of split view.
+ */
+function lineKey(target: EventTarget | null): string | undefined {
+  const line = locateLine(target);
+  return line ? `${line.filePath}:${line.side}:${line.lineNumber}` : undefined;
 }
 
 /** True for the main button with no modifier keys: the only press or click explained. */
@@ -223,6 +235,11 @@ function isPlainPress(event: MouseEvent): boolean {
 /** A line whose request started when the mouse went down, waiting for its click (PR 11.1). */
 interface Pressed {
   row: Element;
+  /**
+   * The line pressed (lineKey). In split view one row holds two lines, so
+   * the release and the click must be on this same line, not just this row.
+   */
+  key: string;
   request: ExplainRequest;
   trace: ClickTrace;
   /** Ends the trace's Pressed task, at the click. */
@@ -247,7 +264,8 @@ interface Pressed {
  * popup still opens on `click`, which takes over the request already
  * running instead of sending another. A press that moves more than
  * PRESS_SLOP_PX before release (the start of a drag selection, PR 4.4), or
- * is released somewhere else, is cancelled and shows nothing. Nothing is
+ * is released somewhere else (another line, even the other side of the
+ * same split-view row, or outside the page), is cancelled and shows nothing. Nothing is
  * sent on a press while the chat is open, as the click goes to the chat.
  */
 export function createClickHandler(deps: ClickHandlerDeps): ClickHandler {
@@ -272,7 +290,8 @@ export function createClickHandler(deps: ClickHandlerDeps): ClickHandler {
     const endPressed = trace.start('press', 'Pressed');
     const found = trace.start('find-code', 'Find the code');
     const line = lineRequest(target);
-    if (!line) return;
+    const key = lineKey(target);
+    if (!line || !key) return;
     found();
     const { row, request } = line;
     const sink: Pressed['sink'] = { chunks: [] };
@@ -286,6 +305,7 @@ export function createClickHandler(deps: ClickHandlerDeps): ClickHandler {
     stream.result.catch(() => {});
     const press: Pressed = {
       row,
+      key,
       request,
       trace,
       endPressed,
@@ -299,6 +319,12 @@ export function createClickHandler(deps: ClickHandlerDeps): ClickHandler {
 
   const onPointerMove = (event: PointerEvent) => {
     if (!pressed || pressed.timer !== undefined) return;
+    // The main button is up, but no release reached this page (it happened
+    // outside the window): the press is over.
+    if ((event.buttons & 1) === 0) {
+      cancelPress();
+      return;
+    }
     const dx = event.clientX - pressed.x;
     const dy = event.clientY - pressed.y;
     // A drag selects lines (src/selection.ts) or text, not this one line.
@@ -308,7 +334,7 @@ export function createClickHandler(deps: ClickHandlerDeps): ClickHandler {
   const onPointerUp = (event: PointerEvent) => {
     const press = pressed;
     if (!press) return;
-    if (locateRow(event.target) !== press.row) {
+    if (lineKey(event.target) !== press.key) {
       cancelPress();
       return;
     }
@@ -317,13 +343,13 @@ export function createClickHandler(deps: ClickHandlerDeps): ClickHandler {
     }, PRESS_CLICK_WAIT_MS);
   };
 
-  /** The pressed line's request, if `row` is its line; the press is used up either way. */
-  const takePress = (row: Element | null): Pressed | undefined => {
+  /** The pressed line's request, if `key` names its line; the press is used up either way. */
+  const takePress = (key: string | undefined): Pressed | undefined => {
     const press = pressed;
     if (!press) return undefined;
     pressed = undefined;
     clearTimeout(press.timer);
-    if (press.row === row) return press;
+    if (press.key === key) return press;
     press.stream.stop();
     return undefined;
   };
@@ -339,7 +365,7 @@ export function createClickHandler(deps: ClickHandlerDeps): ClickHandler {
       cancelPress();
       return;
     }
-    const press = takePress(locateRow(target));
+    const press = takePress(lineKey(target));
     if (!press) {
       explainLineAt(deps, target);
       return;
@@ -371,22 +397,35 @@ export function createClickHandler(deps: ClickHandlerDeps): ClickHandler {
 
 /**
  * Adds a click handler's listeners to `doc`: the click, and the pointer
- * events that start a line's request on the press (PR 11.1). Returns a
- * function that removes them and cancels a pending press.
+ * events that start a line's request on the press (PR 11.1). A press is
+ * also cancelled when the pointer leaves the page or the window loses focus
+ * or is hidden, since the release may then never reach this page. Returns a
+ * function that removes them all and cancels a pending press.
  */
 export function listenForClicks(handler: ClickHandler, doc: Document = document): () => void {
   const { onPointerDown, onPointerMove, onPointerUp, cancelPress } = handler;
+  const win = doc.defaultView;
+  const root = doc.documentElement;
+  const onHidden = () => {
+    if (doc.visibilityState === 'hidden') cancelPress();
+  };
   doc.addEventListener('click', handler);
   doc.addEventListener('pointerdown', onPointerDown);
   doc.addEventListener('pointermove', onPointerMove, { passive: true });
   doc.addEventListener('pointerup', onPointerUp);
   doc.addEventListener('pointercancel', cancelPress);
+  doc.addEventListener('visibilitychange', onHidden);
+  root.addEventListener('pointerleave', cancelPress);
+  win?.addEventListener('blur', cancelPress);
   return () => {
     doc.removeEventListener('click', handler);
     doc.removeEventListener('pointerdown', onPointerDown);
     doc.removeEventListener('pointermove', onPointerMove);
     doc.removeEventListener('pointerup', onPointerUp);
     doc.removeEventListener('pointercancel', cancelPress);
+    doc.removeEventListener('visibilitychange', onHidden);
+    root.removeEventListener('pointerleave', cancelPress);
+    win?.removeEventListener('blur', cancelPress);
     cancelPress();
   };
 }

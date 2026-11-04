@@ -9,6 +9,7 @@ import {
   type ClickHandlerDeps,
   type ExplainTiming,
 } from '../src/clickHandler';
+import { locateLine } from '../src/diffDom';
 import { createPrefetcher, hoveredLine } from '../src/prefetch';
 import type { ExplainResult } from '../src/explain/explainHandler';
 import { RequestError } from '../src/messaging/client';
@@ -179,6 +180,8 @@ function pointer(type: string, target: Element, init: PointerEventInit = {}): vo
       button: 0,
       pointerType: 'mouse',
       isPrimary: true,
+      // The main button is down from the press until the release.
+      buttons: type === 'pointerup' ? 0 : 1,
       clientX: 100,
       clientY: 200,
       ...init,
@@ -882,6 +885,35 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
       expect(env.popups).toHaveLength(0);
     });
 
+    it('cancels the request when the button is released outside the page', () => {
+      env = setup(() => new Promise(() => {}));
+      const line = code('R44');
+      // The pointer leaves the page with the button held.
+      pointer('pointerdown', line);
+      document.documentElement.dispatchEvent(new PointerEvent('pointerleave'));
+      expect(env.stops[0]).toHaveBeenCalledOnce();
+      // The window loses focus, as when the release lands in another window.
+      pointer('pointerdown', line);
+      window.dispatchEvent(new FocusEvent('blur'));
+      expect(env.stops[1]).toHaveBeenCalledOnce();
+      // The pointer comes back with the button up and no release seen.
+      pointer('pointerdown', line);
+      pointer('pointermove', line, { buttons: 0 });
+      expect(env.stops[2]).toHaveBeenCalledOnce();
+      expect(env.popups).toHaveLength(0);
+    });
+
+    it('takes its listeners off when removed, and cancels a pending press', () => {
+      env = setup(() => new Promise(() => {}));
+      pointer('pointerdown', code('R44'));
+      env.cleanup();
+      expect(env.stops[0]).toHaveBeenCalledOnce();
+      pointer('pointerdown', code('R44'));
+      window.dispatchEvent(new FocusEvent('blur'));
+      click(code('R44'));
+      expect(env.deps.explain).toHaveBeenCalledOnce();
+    });
+
     it('cancels the request if no click comes after the release', () => {
       vi.useFakeTimers();
       onTestFinished(() => void vi.useRealTimers());
@@ -981,6 +1013,70 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
       expect(env.stops[0]).not.toHaveBeenCalled();
       expect(prefetcher.running()).toBe(hoveredLine(line)!.key);
     });
+  });
+});
+
+describe.each([
+  { name: 'classic', file: 'github-diff-classic-split.html' },
+  { name: 'new (React)', file: 'github-diff-new-split.html' },
+])('press then click in split view on the $name layout (PR 11.1)', ({ file }) => {
+  let env: ReturnType<typeof setup>;
+
+  beforeEach(() => {
+    document.body.innerHTML = fixture(file);
+  });
+
+  afterEach(() => {
+    env?.cleanup();
+    document.body.innerHTML = '';
+  });
+
+  // A changed row: removed line 46 on the left, added line 48 on the right.
+  const changedRow = () =>
+    [...document.querySelectorAll('tbody tr')].find((r) => {
+      const line = r.children.length === 4 ? locateLine(r.children[1]!) : null;
+      return line?.lineNumber === 46 && line.side === 'removed';
+    })!;
+  const left = () => changedRow().children[1]!;
+  const right = () => changedRow().children[3]!;
+
+  it("does not hand the left line's request to a click on the right of the same row", async () => {
+    env = setup(() => Promise.resolve(DONE));
+    expect(locateLine(left())).toMatchObject({ side: 'removed', lineNumber: 46 });
+    expect(locateLine(right())).toMatchObject({ side: 'added', lineNumber: 48 });
+    pointer('pointerdown', left());
+    pointer('pointerup', right());
+    expect(env.stops[0]).toHaveBeenCalledOnce();
+    click(right());
+    await flush();
+    // The right line is explained with its own request.
+    expect(env.deps.explain).toHaveBeenCalledTimes(2);
+    expect(env.contexts[1]).not.toBe(env.contexts[0]);
+    expect(env.deps.explain).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(Function),
+      expect.objectContaining({ code: expect.objectContaining({ startLine: 48 }) }),
+    );
+    expect(env.popups).toHaveLength(1);
+  });
+
+  it('a click with no release seen still explains the clicked side', () => {
+    env = setup(() => new Promise(() => {}));
+    pointer('pointerdown', left());
+    click(right());
+    expect(env.stops[0]).toHaveBeenCalledOnce();
+    expect(env.deps.explain).toHaveBeenCalledTimes(2);
+    expect(env.contexts[1]).not.toBe(env.contexts[0]);
+  });
+
+  it('press and click on the same side still send one request', async () => {
+    env = setup(() => Promise.resolve(DONE));
+    pointer('pointerdown', right());
+    pointer('pointerup', right());
+    click(right());
+    await flush();
+    expect(env.deps.explain).toHaveBeenCalledOnce();
+    expect(env.popups[0]!.calls).toEqual([`done:${DONE.model}:${DONE.explanation.what}`]);
   });
 });
 
