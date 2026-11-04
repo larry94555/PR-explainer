@@ -22,7 +22,7 @@
 import type { ChatSubject } from './chat/chatPanel';
 import type { ChatSeed } from './chat/chatSession';
 import { factsFromHunk, type CodeFacts } from './codeFacts';
-import { locateHunk, locateRow } from './diffDom';
+import { locateHunk, locateRow, type DiffHunk } from './diffDom';
 import { contextFromHunk, DEFAULT_CONTEXT, formatContext } from './lineContext';
 import type { Explanation } from './explain/parseExplanation';
 import type { CodeSpan } from './fileContext';
@@ -232,18 +232,25 @@ export function lineRequest(
   const row = locateRow(target);
   const hunk = row && locateHunk(target);
   if (!row || !hunk) return null;
+  return { row, request: requestFromHunk(hunk) };
+}
+
+/**
+ * The request that explains the line at `hunk.index`. A click builds it from
+ * the hunk drawn on the page (lineRequest), and the PR's diff from GitHub's
+ * API builds it from the same hunk read from the patch (src/patchRequests.ts,
+ * PR 10.4), so both send the same text and get the same cache key.
+ */
+export function requestFromHunk(hunk: DiffHunk): ExplainRequest {
   const context = contextFromHunk(hunk, DEFAULT_CONTEXT);
   const { filePath, lineNumber, side, text } = context.line;
   const code =
     side === 'removed' ? undefined : { filePath, startLine: lineNumber, endLine: lineNumber, text };
   return {
-    row,
-    request: {
-      text: formatContext(context),
-      subject: { filePath, startLine: lineNumber },
-      ...(code && { code }),
-      facts: factsFromHunk(hunk),
-    },
+    text: formatContext(context),
+    subject: { filePath, startLine: lineNumber },
+    ...(code && { code }),
+    facts: factsFromHunk(hunk),
   };
 }
 

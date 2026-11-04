@@ -19,6 +19,7 @@ export const DEBUG_SETTING_KEY = 'settings.debugWindow';
 export function trackDebugSetting(
   storage: SyncStorageLike,
   events: StorageChangedEvent,
+  onChange?: (on: boolean) => void,
 ): { current(): boolean } {
-  return trackSyncFlag(DEBUG_SETTING_KEY, storage, events);
+  return trackSyncFlag(DEBUG_SETTING_KEY, storage, events, onChange);
 }

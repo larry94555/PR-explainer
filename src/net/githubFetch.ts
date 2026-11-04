@@ -17,11 +17,20 @@
 
 import type { RoundTrip, RoundTripStatus } from '../trace/types';
 
+/** GitHub's API, which the content script may use for one thing only (API_PATH). */
+export const GITHUB_API_ORIGIN = 'https://api.github.com';
+
+/** The one API address allowed: a page of a PR's changed files. */
+export const API_PATH = /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/files$/;
+
 /** The only places the content script may fetch from. */
 export const GITHUB_ORIGINS: readonly string[] = [
   'https://github.com',
   // Where public files are read from (src/fileContext.ts).
   'https://raw.githubusercontent.com',
+  // The list of a PR's changed files and their diffs (src/patchRequests.ts,
+  // PR 10.4), and nothing else on the API: see API_PATH.
+  GITHUB_API_ORIGIN,
 ];
 
 /** Thrown, before anything is sent, for a request to an address not allowed. */
@@ -43,9 +52,9 @@ export function allowedGithubUrl(url: string, base: string): URL | null {
   } catch {
     return null;
   }
-  return GITHUB_ORIGINS.includes(parsed.origin) && !parsed.username && !parsed.password
-    ? parsed
-    : null;
+  if (!GITHUB_ORIGINS.includes(parsed.origin) || parsed.username || parsed.password) return null;
+  if (parsed.origin === GITHUB_API_ORIGIN && !API_PATH.test(parsed.pathname)) return null;
+  return parsed;
 }
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -224,7 +233,13 @@ export function createGithubFetch(
       throw error;
     }
     // A redirect fails the request instead of being followed (PR 7.4 review).
-    const send = () => baseFetch(url.href, { ...init, redirect: 'error' });
+    // The API is read without the user's GitHub sign-in (PR 10.4).
+    const send = () =>
+      baseFetch(url.href, {
+        ...init,
+        ...(url.origin === GITHUB_API_ORIGIN && { credentials: 'omit' as const }),
+        redirect: 'error',
+      });
     return roundTrips ? roundTrips.record(url.href, purpose, send) : send();
   };
 }

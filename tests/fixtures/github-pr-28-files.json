@@ -1,0 +1,25 @@
+[
+  {
+    "filename": "docs/screenshots/pr-7.1/1-one-popup-after-tab-switches.png",
+    "status": "added",
+    "additions": 0,
+    "deletions": 0,
+    "changes": 0
+  },
+  {
+    "filename": "public/manifest.json",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 1,
+    "changes": 2,
+    "patch": "@@ -22,7 +22,7 @@\n   },\n   \"content_scripts\": [\n     {\n-      \"matches\": [\"https://github.com/*/*/pull/*\"],\n+      \"matches\": [\"https://github.com/*\"],\n       \"js\": [\"content.js\"],\n       \"run_at\": \"document_idle\"\n     }"
+  },
+  {
+    "filename": "tests/manifest.test.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 7,
+    "changes": 17,
+    "patch": "@@ -3,7 +3,9 @@ import { resolve } from 'node:path';\n import manifest from '../public/manifest.json';\n \n const root = resolve(import.meta.dirname, '..');\n-const PR_PATTERN = 'https://github.com/*/*/pull/*';\n+// Every github.com page, since GitHub moves to a PR without a reload and\n+// Chrome injects content scripts only on a full load (PR 7.1).\n+const GITHUB_PATTERN = 'https://github.com/*';\n \n // Turns a Chrome match pattern (scheme://host/path, no wildcards in scheme or\n // host) into a RegExp. In Chrome, `*` in the path matches any characters,\n@@ -43,9 +45,9 @@ describe('manifest.json', () => {\n     expect(manifest).not.toHaveProperty('background.page');\n   });\n \n-  it('injects one content script, only on PR URLs', () => {\n+  it('injects one content script, on github.com pages only', () => {\n     expect(manifest.content_scripts).toHaveLength(1);\n-    expect(manifest.content_scripts[0]?.matches).toEqual([PR_PATTERN]);\n+    expect(manifest.content_scripts[0]?.matches).toEqual([GITHUB_PATTERN]);\n     expect(manifest.content_scripts[0]?.js).toEqual(['content.js']);\n   });\n \n@@ -54,15 +56,16 @@ describe('manifest.json', () => {\n     'https://github.com/owner/repo/pull/123/files',\n     'https://github.com/owner/repo/pull/123/commits',\n     'https://github.com/owner/repo/pull/123/files?w=1#diff-abc',\n+    // Pages a PR is often reached from without a reload.\n+    'https://github.com/owner/repo',\n+    'https://github.com/owner/repo/pulls',\n+    'https://github.com/owner/repo/issues/1',\n+    'https://github.com/pulls',\n   ])('runs the content script on %s', (url) => {\n     expect(matchesContentScript(url)).toBe(true);\n   });\n \n   it.each([\n-    'https://github.com/owner/repo',\n-    'https://github.com/owner/repo/pulls',\n-    'https://github.com/owner/repo/issues/1',\n-    'https://github.com/pulls',\n     'http://github.com/owner/repo/pull/1',\n     'https://gist.github.com/owner/repo/pull/1',\n     'https://example.com/owner/repo/pull/1',"
+  }
+]

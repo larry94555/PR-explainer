@@ -8,6 +8,8 @@
 // page was still, one at a time.
 // From PR 10.3 a "Queue" group shows the background queue at work: those
 // lines queued and run one at a time, one put back for a click and run again.
+// From PR 10.4 the warm-up group also has the PR's diff, read from GitHub's
+// API with how many files and changed lines it holds.
 // No extension APIs and no LLM. Add ?live=0 to the address to skip the live click.
 
 import '../src/debug/debugWindow.css';
@@ -297,6 +299,20 @@ const ENTRIES: DebugEntry[] = [
       purpose: 'PR description',
       durationMs: 180,
       bytesReceived: 41_200,
+    }),
+  ),
+  // And the PR's diff from GitHub's API (PR 10.4).
+  rt(
+    'warm',
+    'warmup',
+    warmAt + 4,
+    trip({
+      target: 'github',
+      method: 'GET',
+      endpoint: 'api.github.com/repos/acme/api/pulls/482/files',
+      purpose: 'PR files: 14 files, 312 lines, 1 left out',
+      durationMs: 240,
+      bytesReceived: 96_800,
     }),
   ),
   rt(
