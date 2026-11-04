@@ -277,12 +277,18 @@ export async function runAhead(
 export type ParallelAsk = (sample: BenchSample, onFirstToken: () => void) => Promise<BenchRun>;
 
 /**
- * The requests one level sends: every sample `runs` times, and at least two
- * rounds of `atOnce`, so a level always has more work than it runs at once.
+ * The requests every level sends, the same list for each so the levels are
+ * compared on the same work (review on #60): every sample `runs` times, and
+ * more whole rounds of the samples until there are at least two rounds of the
+ * highest level, so even that level has more work than it runs at once.
  */
-export function levelJobs(samples: readonly BenchSample[], runs: number, atOnce: number) {
-  const count = Math.max(samples.length * runs, atOnce * 2);
-  return Array.from({ length: count }, (_, i) => samples[i % samples.length]!);
+export function levelJobs(
+  samples: readonly BenchSample[],
+  runs: number,
+  levels: readonly number[],
+) {
+  const rounds = Math.max(runs, Math.ceil((Math.max(...levels) * 2) / samples.length));
+  return Array.from({ length: samples.length * rounds }, (_, i) => samples[i % samples.length]!);
 }
 
 /**
@@ -350,8 +356,8 @@ export async function runParallel(
     console.log(`  ${model} · loading …`);
     await bench.explain(samples[0]!, model);
     const result: ParallelResult = { model, levels: [] };
+    const jobs = levelJobs(samples, runs, levels);
     for (const atOnce of levels) {
-      const jobs = levelJobs(samples, runs, atOnce);
       process.stdout.write(
         `  ${model} · ${atOnce} at once · ${jobs.length} answers and a click … `,
       );

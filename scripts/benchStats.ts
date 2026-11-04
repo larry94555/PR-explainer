@@ -588,6 +588,14 @@ export function recommendAtOnce(levels: readonly LevelSummary[]): {
   if (!one?.perMinute || !two?.perMinute) {
     return { atOnce: 1, why: 'levels 1 and 2 were not both measured, so the safe choice' };
   }
+  // A default must not trade failed explanations for speed (review on #60).
+  const failures = [one, two].filter((l) => l.failed > 0);
+  if (failures.length) {
+    const which = failures
+      .map((l) => `${l.failed} of ${l.answers} failed at ${l.atOnce} at once`)
+      .join(' and ');
+    return { atOnce: 1, why: `${which}, so the safe choice` };
+  }
   const gain = two.perMinute / one.perMinute;
   const more = gain >= 1 ? `${percent(gain)} more` : `${percent(gain)} fewer`;
   if (gain < PARALLEL_MIN_GAIN) {

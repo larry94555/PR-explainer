@@ -662,6 +662,23 @@ describe('requests at once (PR 10.1)', () => {
       expect(recommendAtOnce([level(1, 10, 5000), level(2, 15)]).atOnce).toBe(1);
     });
 
+    it('keeps 1 when either level had failed answers, however fast 2 was (review on #60)', () => {
+      const withFailures = (l: LevelSummary, failedCount: number) => ({
+        ...l,
+        failed: failedCount,
+      });
+      expect(recommendAtOnce([level(1, 10, 5000), withFailures(level(2, 15, 4000), 2)])).toEqual({
+        atOnce: 1,
+        why: '2 of 15 failed at 2 at once, so the safe choice',
+      });
+      expect(
+        recommendAtOnce([withFailures(level(1, 10, 5000), 1), withFailures(level(2, 15, 4000), 3)]),
+      ).toEqual({
+        atOnce: 1,
+        why: '1 of 15 failed at 1 at once and 3 of 15 failed at 2 at once, so the safe choice',
+      });
+    });
+
     it('keeps 1 when level 1 or 2 was not measured', () => {
       expect(recommendAtOnce([level(1, 10, 5000), level(4, 30, 5000)])).toEqual({
         atOnce: 1,
@@ -751,19 +768,25 @@ describe('requests at once (PR 10.1)', () => {
     const sample = (name: string): BenchSample => ({ name, context: [name] });
     const samples = ['a', 'b', 'c'].map(sample);
 
-    it('sends every sample `runs` times, and at least two rounds of the level', async () => {
+    it('sends every sample `runs` times, and whole rounds until two of the highest level', async () => {
       const { levelJobs } = await import('../scripts/benchExplain.ts');
-      expect(levelJobs(samples, 2, 1).map((s) => s.name)).toEqual(['a', 'b', 'c', 'a', 'b', 'c']);
-      expect(levelJobs(samples, 1, 4).map((s) => s.name)).toEqual([
-        'a',
-        'b',
-        'c',
-        'a',
-        'b',
-        'c',
-        'a',
-        'b',
+      const names = (jobs: BenchSample[]) => jobs.map((s) => s.name);
+      expect(names(levelJobs(samples, 2, [1, 2]))).toEqual(['a', 'b', 'c', 'a', 'b', 'c']);
+      // Two rounds of 4 need 8 requests, so three whole rounds of the samples.
+      expect(names(levelJobs(samples, 1, [1, 2, 4]))).toEqual([
+        ...['a', 'b', 'c'],
+        ...['a', 'b', 'c'],
+        ...['a', 'b', 'c'],
       ]);
+    });
+
+    it('gives every level the same work, also with --runs 1 and 1,2,4 (review on #60)', async () => {
+      const { levelJobs } = await import('../scripts/benchExplain.ts');
+      const five = ['1', '2', '3', '4', '5'].map(sample);
+      const jobs = levelJobs(five, 1, [1, 2, 4]);
+      // One list for every level, with each sample the same number of times.
+      expect(jobs).toHaveLength(10);
+      for (const s of five) expect(jobs.filter((j) => j === s)).toHaveLength(2);
     });
 
     it('keeps at most `atOnce` requests going, then sends one click once the model is writing', async () => {
