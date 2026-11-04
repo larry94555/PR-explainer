@@ -102,3 +102,52 @@ export function trackBackgroundPause(deps: {
   const battery = trackBattery(deps.nav, check);
   return { paused };
 }
+
+/** What a tab's state says about background work, for the report to the service worker. */
+export interface PauseInputs {
+  /** On battery with the setting on Pause. */
+  paused: boolean;
+  /** Click-to-explain is attached: the tab shows a PR's diffs. */
+  onDiffs: boolean;
+  /** The toolbar button has click-to-explain on (null until it is read). */
+  enabled: boolean | null;
+  /** Explain on hover or Explain ahead is on. */
+  backgroundOn: boolean;
+}
+
+/**
+ * Whether this tab holds the service worker's pause (PR 11.3): only while it
+ * could do background work and is paused. A tab off a PR's diffs, with
+ * click-to-explain off, or with no background work turned on holds back
+ * nothing, so it must not pause the other tabs (review on #71).
+ */
+export function holdsPause(inputs: PauseInputs): boolean {
+  return inputs.paused && inputs.onDiffs && inputs.enabled === true && inputs.backgroundOn;
+}
+
+/**
+ * Tells the service worker when this tab's part in the pause changes. Call
+ * `update` after anything `wanted` reads may have changed: the battery, the
+ * settings, click-to-explain, and every page change, so moving the tab off a
+ * PR lets go of the pause. A failed send is tried again on the next update.
+ *
+ * It starts from "not paused": the service worker forgets a tab when it
+ * loads a new page (src/background.ts), so a fresh page need not say so.
+ */
+export function createPauseReporter(deps: {
+  wanted(): boolean;
+  send(paused: boolean): Promise<unknown>;
+}): { update(): void } {
+  let sent = false;
+  return {
+    update() {
+      const paused = deps.wanted();
+      if (paused === sent) return;
+      sent = paused;
+      deps.send(paused).catch(() => {
+        // Not delivered: the next update sends it again.
+        if (sent === paused) sent = !paused;
+      });
+    },
+  };
+}

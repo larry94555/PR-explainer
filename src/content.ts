@@ -8,7 +8,12 @@
 // entry must not share imports with other entries: Vite would move shared
 // code into a chunk loaded with `import`, which fails in a content script.
 // Type-only imports (such as src/messaging/protocol.ts) are fine.
-import { trackBackgroundPause, type BatteryNavigatorLike } from './batteryState';
+import {
+  createPauseReporter,
+  holdsPause,
+  trackBackgroundPause,
+  type BatteryNavigatorLike,
+} from './batteryState';
 import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
 import { chatSessionFor, CurrentChat, startChat } from './chat/chatFlow';
 import { currentChatPanel, openChatPanel } from './chat/chatPanel';
@@ -177,6 +182,8 @@ const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (va
     ahead.restart();
   }
   update();
+  // A tab turned off lets go of the pause; turned on, it may hold it again.
+  reportPause();
 });
 
 let pinged = false;
@@ -262,7 +269,6 @@ function update(): void {
   currentChat.leave(prName(location.href));
   if (!syncBadge(document, location.href)) return;
   pingWorker();
-  reportPause();
   warmUpModel();
   setBadgeStatus(document, workerStatus);
   const value = enabled.current();
@@ -387,23 +393,22 @@ const backgroundPause = trackBackgroundPause({
     if (!paused && features.attached) ahead.restart();
   },
 });
-/**
- * What the service worker was last told, so it is told only changes. It
- * shows the pause on the toolbar icon only while some background work is
- * on, since otherwise nothing is held back.
- */
-let pauseSent: boolean | undefined;
-function reportPause(): void {
-  if (!parsePrUrl(location.href)) return;
-  const paused =
-    backgroundPause.paused() && (hoverSetting.current() || aheadSetting.current() !== 'off');
-  if (paused === pauseSent) return;
-  pauseSent = paused;
-  sendRequest('backgroundPaused', { paused }).catch(() => {
-    // Asked again on the next change.
-    pauseSent = undefined;
-  });
-}
+// Tells the service worker whether this tab holds the pause: only while it
+// shows a PR's diffs with click-to-explain on and some background work
+// turned on, so a tab that moved off a PR or was turned off never pauses the
+// other tabs (review on #71). The icon then shows the pause only while
+// something is held back.
+const pauseReporter = createPauseReporter({
+  wanted: () =>
+    holdsPause({
+      paused: backgroundPause.paused(),
+      onDiffs: features.attached,
+      enabled: enabled.current(),
+      backgroundOn: hoverSetting.current() || aheadSetting.current() !== 'off',
+    }),
+  send: (paused) => sendRequest('backgroundPaused', { paused }),
+});
+const reportPause = () => pauseReporter.update();
 
 // Explain on hover (PR 8.7): with the setting on, resting the pointer on a
 // line starts its explanation, and a click joins it in the service worker's
@@ -631,6 +636,7 @@ const features = new DiffPageFeatures(() => {
 
 update();
 features.sync(location.href);
+reportPause();
 // Read the description ahead of the first click, so it does not wait.
 readDescriptionAhead();
 
@@ -650,6 +656,8 @@ function onPageChanged(url: string): void {
   // A redraw can also drop the badge.
   update();
   features.sync(url);
+  // Off a PR's diffs, the tab lets go of the pause (review on #71).
+  reportPause();
   prMetadata.forget();
   fileContexts.forget();
   patchRequests.forget();

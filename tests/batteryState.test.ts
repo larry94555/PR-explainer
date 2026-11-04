@@ -2,6 +2,9 @@ import type { StorageChange } from '../src/enabledState';
 import {
   BATTERY_SETTING_KEY,
   batteryModeOf,
+  createPauseReporter,
+  holdsPause,
+  type PauseInputs,
   trackBackgroundPause,
   trackBattery,
   trackBatterySetting,
@@ -137,5 +140,41 @@ describe('whether background work is paused', () => {
     const pause = trackBackgroundPause({ nav: {}, ...fakeSync() });
     await settle();
     expect(pause.paused()).toBe(false);
+  });
+});
+
+describe("whether a tab holds the service worker's pause (review on #71)", () => {
+  const holding: PauseInputs = { paused: true, onDiffs: true, enabled: true, backgroundOn: true };
+
+  it('holds it only while paused on a PR diff with click-to-explain and background work on', () => {
+    expect(holdsPause(holding)).toBe(true);
+    expect(holdsPause({ ...holding, paused: false })).toBe(false);
+    expect(holdsPause({ ...holding, onDiffs: false })).toBe(false);
+    expect(holdsPause({ ...holding, enabled: false })).toBe(false);
+    expect(holdsPause({ ...holding, enabled: null })).toBe(false);
+    expect(holdsPause({ ...holding, backgroundOn: false })).toBe(false);
+  });
+
+  it('sends only changes, starting from not paused', () => {
+    let wanted = false;
+    const send = vi.fn(async () => ({}));
+    const reporter = createPauseReporter({ wanted: () => wanted, send });
+    reporter.update();
+    expect(send).not.toHaveBeenCalled();
+    wanted = true;
+    reporter.update();
+    reporter.update();
+    wanted = false;
+    reporter.update();
+    expect(send.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('sends again on the next update when a send fails', async () => {
+    const send = vi.fn().mockRejectedValueOnce(new Error('worker gone')).mockResolvedValue({});
+    const reporter = createPauseReporter({ wanted: () => true, send });
+    reporter.update();
+    await settle();
+    reporter.update();
+    expect(send.mock.calls).toEqual([[true], [true]]);
   });
 });

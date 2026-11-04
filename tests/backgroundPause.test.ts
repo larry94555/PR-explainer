@@ -1,4 +1,6 @@
 import { createBackgroundPause, PAUSED_TABS_KEY } from '../src/backgroundPause';
+import { createPauseReporter, holdsPause, type PauseInputs } from '../src/batteryState';
+import { createPrefetchQueue } from '../src/explain/prefetchQueue';
 
 function fakeSession(initial: Record<string, unknown> = {}) {
   const data: Record<string, unknown> = { ...initial };
@@ -58,5 +60,85 @@ describe('background work paused, in the service worker (PR 11.3)', () => {
     await pause.ready;
     expect(pause.paused()).toBe(false);
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('tabs letting go of the pause (review on #71)', () => {
+  /**
+   * Two PR tabs on battery, each with a reporter sending to one service
+   * worker pause that pauses one queue, as in src/content.ts and
+   * src/background.ts.
+   */
+  function twoTabs() {
+    const runs: string[] = [];
+    const queue = createPrefetchQueue<string, string>({
+      run: (payload) => {
+        runs.push(payload);
+        return new Promise(() => {});
+      },
+    });
+    const pause = createBackgroundPause({
+      storage: fakeSession(),
+      onChange: (paused) => queue.setPaused(paused),
+    });
+    const tab = (id: number) => {
+      const state: PauseInputs = { paused: true, onDiffs: true, enabled: true, backgroundOn: true };
+      const reporter = createPauseReporter({
+        wanted: () => holdsPause(state),
+        send: async (paused) => pause.report(id, paused),
+      });
+      reporter.update();
+      return { state, update: () => reporter.update() };
+    };
+    return { queue, pause, runs, tab };
+  }
+
+  it('resumes the queue when a paused tab moves from a PR to an issue in the same tab', () => {
+    const env = twoTabs();
+    const moving = env.tab(1);
+    // Tab 2 holds nothing (say, its setting read Keep going).
+    const other = env.tab(2);
+    other.state.paused = false;
+    other.update();
+    void env.queue
+      .add({ id: 'a', label: 'a', priority: 'on-screen', payload: 'a' })
+      .catch(() => {});
+    expect(env.runs).toEqual([]);
+
+    // GitHub moves tab 1 to an issue without a reload.
+    moving.state.onDiffs = false;
+    moving.update();
+    expect(env.pause.paused()).toBe(false);
+    expect(env.runs).toEqual(['a']);
+
+    // Back on the PR's diffs, still on battery: it holds the pause again.
+    moving.state.onDiffs = true;
+    moving.update();
+    expect(env.pause.paused()).toBe(true);
+  });
+
+  it('lets go when click-to-explain is turned off, and holds it again when turned on', () => {
+    const env = twoTabs();
+    const tab = env.tab(1);
+    expect(env.pause.paused()).toBe(true);
+    tab.state.enabled = false;
+    tab.update();
+    expect(env.pause.paused()).toBe(false);
+    void env.queue
+      .add({ id: 'a', label: 'a', priority: 'on-screen', payload: 'a' })
+      .catch(() => {});
+    expect(env.runs).toEqual(['a']);
+    tab.state.enabled = true;
+    tab.update();
+    expect(env.pause.paused()).toBe(true);
+  });
+
+  it('keeps the pause while another tab still holds it', () => {
+    const env = twoTabs();
+    const off = env.tab(1);
+    env.tab(2);
+    off.state.enabled = false;
+    off.update();
+    expect(env.pause.paused()).toBe(true);
   });
 });
