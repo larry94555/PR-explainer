@@ -483,6 +483,7 @@ describe('explain handler', () => {
           cache: {
             get: async (key) => (store.get(key) as never) ?? null,
             set: async (key, value) => void store.set(key, value),
+            list: async () => [],
           },
         });
         await handler({ context: SAMPLE_CONTEXT, pr: 'o/r#1' });
