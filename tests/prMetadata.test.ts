@@ -146,6 +146,32 @@ describe('createPrMetadataLoader', () => {
     expect(fetchHtml).toHaveBeenCalledTimes(2);
   });
 
+  it('is read as the page opens, and a click while that read runs joins it (PR 9.7)', async () => {
+    let answer!: (html: string) => void;
+    const fetchHtml = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const loader = createPrMetadataLoader({
+      doc: page(fixture('github-diff-classic.html')),
+      fetchHtml,
+    });
+    // The page opens: the content script starts the read at once.
+    const onOpen = loader.load(PR);
+    expect(fetchHtml).toHaveBeenCalledTimes(1);
+    // The first click comes before GitHub answered: no second fetch.
+    const onClick = loader.load(PR);
+    expect(fetchHtml).toHaveBeenCalledTimes(1);
+    answer(conversation);
+    expect(await onClick).toEqual(await onOpen);
+    expect((await onClick).description).toContain('Roadmap PR 5.4');
+    // A later click gets it at once, still from the one fetch.
+    await loader.load(PR);
+    expect(fetchHtml).toHaveBeenCalledTimes(1);
+  });
+
   // The user edits the description on the Conversation tab and comes back to
   // Files changed without a reload.
   function editedSetup() {

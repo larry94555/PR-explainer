@@ -12,6 +12,7 @@ import {
   WINDOW_LINES,
   type CodeSpan,
 } from '../src/fileContext';
+import { createPrMetadataLoader } from '../src/prMetadata';
 import type { PrRef } from '../src/prUrl';
 
 const lines = (text: string) => text.replace(/^\n/, '').split('\n');
@@ -356,6 +357,19 @@ describe('createFileContextLoader', () => {
     loader.forget();
     await loader.load(PR, click);
     expect(fetchText).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts the file fetch at once, alongside the PR description, not after it (PR 9.7)', async () => {
+    const pending = () => new Promise<string>(() => {});
+    const fetchText = vi.fn(pending);
+    const fetchHtml = vi.fn(pending);
+    const files = createFileContextLoader({ doc: document, fetchText });
+    const descriptions = createPrMetadataLoader({ doc: document, fetchHtml });
+    // As a click does (src/content.ts): both are asked for before either answers.
+    void descriptions.load(PR);
+    void files.load(PR, click);
+    expect(fetchHtml).toHaveBeenCalledTimes(1);
+    expect(fetchText).toHaveBeenCalledTimes(1);
   });
 
   it("tries the file's page, then the PR's head ref, when the head commit's URL fails", async () => {

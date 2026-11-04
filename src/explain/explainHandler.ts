@@ -50,6 +50,11 @@
 // the model will run. Thinking the server returns in its own field is never
 // part of the explanation; it comes back as `thinking`, for the Think row in
 // Details.
+//
+// The window the model was last run with is remembered (PR 9.7,
+// src/llm/loadedWindow.ts), so a warm click asks /api/ps only when that is
+// not known: the first time, after the model or server changed, or after a
+// request failed.
 
 import {
   FALLBACK_CONTEXT_TOKENS,
@@ -60,6 +65,7 @@ import {
 } from '../llm/contextSize';
 import { describeLlmError, type Platform } from '../llm/describeLlmError';
 import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
+import type { LoadedWindowMemory } from '../llm/loadedWindow';
 import { chooseNumCtx } from '../llm/numCtx';
 import type { ChatMessage, LlmClient, LlmTimings } from '../llm/types';
 import type { Settings } from '../settings';
@@ -204,6 +210,11 @@ export interface ExplainDeps {
   warmupRoundTrips?: () => RoundTripLog[];
   /** Gets each round trip as it starts, runs and ends, for the debug log (PR 9.3, 9.4). */
   onRoundTrip?: RoundTripSink;
+  /**
+   * The window the model was last run with (PR 9.7), shared with the chat and
+   * the warm-up. Without it, /api/ps is asked before every explanation.
+   */
+  loadedWindow?: LoadedWindowMemory;
 }
 
 /** The context window when no ContextSizer is given. */
@@ -387,16 +398,19 @@ export function createExplainHandler(deps: ExplainDeps) {
         };
       }
     }
-    // Asked only when the model will run, so a cached answer costs no request.
+    // Asked only when the model will run, so a cached answer costs no request,
+    // and only when the last request did not already say (PR 9.7).
+    const remembered = deps.loadedWindow?.known(settings);
     const numCtx =
       settings.contextTokens > 0
         ? contextTokens
         : windowFor(
-            settings.model
-              ? await tasks.time('loaded-window', 'Check loaded window', () =>
-                  loadedWindow(client, settings.model, signal),
-                )
-              : undefined,
+            remembered ??
+              (settings.model
+                ? await tasks.time('loaded-window', 'Check loaded window', () =>
+                    loadedWindow(client, settings.model, signal),
+                  )
+                : undefined),
           );
     // Usually known from the context size lookup, so this costs no round trip.
     let thinkLookedUp = false;
@@ -431,6 +445,9 @@ export function createExplainHandler(deps: ExplainDeps) {
         ...(status && { status }),
       });
     };
+    // Taken as the request is sent, so an older request ending later cannot
+    // overwrite what this one says.
+    const windowTicket = deps.loadedWindow?.start(settings, numCtx);
     try {
       const stream = client.chatStream(messages, {
         model: settings.model,
@@ -450,6 +467,8 @@ export function createExplainHandler(deps: ExplainDeps) {
         next = await stream.next();
       }
       modelTask();
+      // The model is now loaded with this window.
+      windowTicket?.done();
       const { model, timings, doneReason, thinking } = next.value;
       // "length" means the answer hit maxResponseTokens and stopped early.
       const explanation = await tasks.time('parse', 'Parse the answer', () =>
@@ -473,6 +492,8 @@ export function createExplainHandler(deps: ExplainDeps) {
       };
     } catch (error) {
       modelTask('failed');
+      // A failed or stopped request may not have loaded the model: ask next time.
+      windowTicket?.failed();
       const { message, fix } = describeLlmError(error, {
         url: settings.llmUrl,
         model: settings.model,

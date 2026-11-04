@@ -1,5 +1,6 @@
 import { createChatHandler, isChatMessages } from '../src/chat/chatHandler';
 import { createLlmClient } from '../src/llm/createClient';
+import { createLoadedWindowMemory } from '../src/llm/loadedWindow';
 import type { RoundTrip } from '../src/trace/types';
 import {
   LlmError,
@@ -199,5 +200,45 @@ describe('chat handler', () => {
         model: SETTINGS.model,
       });
     });
+  });
+});
+
+describe('chat handler and the remembered window (PR 9.7)', () => {
+  function withMemory(error?: Error, contextTokens?: number) {
+    const client = {
+      chatStream: vi.fn(async function* () {
+        yield 'Answer.';
+        if (error) throw error;
+        return { model: SETTINGS.model, doneReason: 'stop' } as ChatStreamEnd;
+      }),
+    } as unknown as LlmClient;
+    const loadedWindow = createLoadedWindowMemory();
+    const handler = createChatHandler({
+      getSettings: async () => SETTINGS,
+      createClient: () => client,
+      platform: 'windows',
+      ...(contextTokens !== undefined && { contextTokens: async () => contextTokens }),
+      loadedWindow,
+    });
+    return { handler, loadedWindow };
+  }
+
+  it('remembers the window a question ran with, so the next click need not ask', async () => {
+    const { handler, loadedWindow } = withMemory(undefined, 8192);
+    await handler({ messages: MESSAGES });
+    expect(loadedWindow.known(SETTINGS)).toBe(8192);
+  });
+
+  it("forgets after a question sent with the server's own window, or a failed one", async () => {
+    const plain = withMemory();
+    plain.loadedWindow.start(SETTINGS, 4096).done();
+    await plain.handler({ messages: MESSAGES });
+    expect(plain.loadedWindow.known(SETTINGS)).toBeUndefined();
+
+    const failed = withMemory(new LlmError('connection', 'down'), 8192);
+    failed.loadedWindow.start(SETTINGS, 4096).done();
+    const result = await failed.handler({ messages: MESSAGES });
+    expect(result.status).toBe('failed');
+    expect(failed.loadedWindow.known(SETTINGS)).toBeUndefined();
   });
 });

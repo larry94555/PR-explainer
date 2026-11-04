@@ -1,4 +1,6 @@
-import type { LlmClient } from '../src/llm/types';
+import { createLoadedWindowMemory, type LoadedWindowMemory } from '../src/llm/loadedWindow';
+import type { LlmClient, RunningModel } from '../src/llm/types';
+import type { RoundTripLog } from '../src/net/roundTrips';
 import { createWarmup, isModelLoaded } from '../src/llm/warmup';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 
@@ -7,10 +9,12 @@ const PR = { pr: 'larry94555/PR-explainer#35' };
 
 function setup(
   options: {
-    loaded?: () => Promise<string[]>;
+    /** What /api/ps lists: model names, or models with their windows. */
+    loaded?: () => Promise<(string | RunningModel)[]>;
     load?: () => Promise<void>;
     settings?: Partial<Settings>;
     contextTokens?: () => Promise<number>;
+    loadedWindow?: LoadedWindowMemory;
   } = {},
 ) {
   const client: LlmClient = {
@@ -18,9 +22,13 @@ function setup(
     modelContext: vi.fn(),
     chat: vi.fn(),
     chatStream: vi.fn(),
-    loadedModels: vi.fn(options.loaded ?? (async () => [])),
+    loadedModels: vi.fn(),
     loadedContextTokens: vi.fn(async () => undefined),
-    runningModels: vi.fn(async () => []),
+    runningModels: vi.fn(async () =>
+      (await (options.loaded ?? (async () => []))()).map((m) =>
+        typeof m === 'string' ? { name: m } : m,
+      ),
+    ),
     loadModel: vi.fn(options.load ?? (async () => {})),
   };
   const createClient = vi.fn(() => client);
@@ -30,6 +38,7 @@ function setup(
     createClient,
     log,
     ...(options.contextTokens && { contextTokens: options.contextTokens }),
+    ...(options.loadedWindow && { loadedWindow: options.loadedWindow }),
   });
   return { warmup, client, createClient, log };
 }
@@ -90,13 +99,13 @@ describe('warm-up (PR 8.3)', () => {
     const { warmup, client } = setup();
     await warmup.warmUp(1, PR);
     await expect(warmup.warmUp(1, PR)).resolves.toEqual({ outcome: 'repeat' });
-    expect(client.loadedModels).toHaveBeenCalledTimes(1);
+    expect(client.runningModels).toHaveBeenCalledTimes(1);
     expect(client.loadModel).toHaveBeenCalledTimes(1);
 
     // Another tab, or another PR in the same tab, checks again.
     await warmup.warmUp(2, PR);
     await warmup.warmUp(1, { pr: 'larry94555/PR-explainer#34' });
-    expect(client.loadedModels).toHaveBeenCalledTimes(3);
+    expect(client.runningModels).toHaveBeenCalledTimes(3);
   });
 
   it('runs again in a tab that was closed and its id reused', async () => {
@@ -173,7 +182,7 @@ describe('warm-up (PR 8.3)', () => {
       log: vi.fn(),
     });
     await expect(warmup.warmUp(1, PR)).resolves.toEqual({ outcome: 'no-model' });
-    expect(client.loadedModels).not.toHaveBeenCalled();
+    expect(client.runningModels).not.toHaveBeenCalled();
     model = 'qwen2.5-coder:7b';
     await expect(warmup.warmUp(1, PR)).resolves.toEqual({ outcome: 'loaded' });
   });
@@ -181,14 +190,14 @@ describe('warm-up (PR 8.3)', () => {
   it('does nothing when Keep model loaded is 0, since the model would unload at once', async () => {
     const { warmup, client } = setup({ settings: { keepAliveMinutes: 0 } });
     await expect(warmup.warmUp(1, PR)).resolves.toEqual({ outcome: 'off' });
-    expect(client.loadedModels).not.toHaveBeenCalled();
+    expect(client.runningModels).not.toHaveBeenCalled();
   });
 
   it('checks every time when it does not know the tab', async () => {
     const { warmup, client } = setup();
     await warmup.warmUp(undefined, PR);
     await warmup.warmUp(undefined, PR);
-    expect(client.loadedModels).toHaveBeenCalledTimes(2);
+    expect(client.runningModels).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -209,5 +218,89 @@ describe('warm-up round trips (PR 9.2)', () => {
     finish();
     await running;
     expect(warmup.inFlight()).toEqual([]);
+  });
+});
+
+describe('warm-up and the remembered window (PR 9.7)', () => {
+  const at = { llmUrl: SETTINGS.llmUrl, model: SETTINGS.model };
+
+  it('remembers the window it loaded the model with', async () => {
+    const loadedWindow = createLoadedWindowMemory();
+    const { warmup } = setup({ contextTokens: async () => 8192, loadedWindow });
+    await warmup.warmUp(1, PR);
+    expect(loadedWindow.known(at)).toBe(2048);
+  });
+
+  it('remembers the window /api/ps reports when the model is already loaded', async () => {
+    const loadedWindow = createLoadedWindowMemory();
+    const { warmup } = setup({
+      loaded: async () => [{ name: 'qwen2.5-coder:7b', contextTokens: 4096 }],
+      loadedWindow,
+    });
+    await expect(warmup.warmUp(1, PR)).resolves.toEqual({ outcome: 'already-loaded' });
+    expect(loadedWindow.known(at)).toBe(4096);
+  });
+
+  it('forgets when /api/ps does not say, or the warm-up fails', async () => {
+    const loadedWindow = createLoadedWindowMemory();
+    loadedWindow.start(at, 8192).done();
+    const old = setup({ loaded: async () => ['qwen2.5-coder:7b'], loadedWindow });
+    await old.warmup.warmUp(1, PR);
+    expect(loadedWindow.known(at)).toBeUndefined();
+
+    loadedWindow.start(at, 8192).done();
+    const down = setup({
+      load: async () => {
+        throw new Error('out of memory');
+      },
+      loadedWindow,
+    });
+    await expect(down.warmup.warmUp(1, PR)).resolves.toEqual({ outcome: 'failed' });
+    expect(loadedWindow.known(at)).toBeUndefined();
+  });
+
+  it("puts its round trips in the page's debug group when given one", async () => {
+    // The fake client sends nothing, so check the log the client was made with.
+    const named = setup();
+    await named.warmup.warmUp(1, { ...PR, debugId: 'page-1' });
+    const logOf = (createClient: typeof named.createClient) =>
+      (vi.mocked(createClient).mock.calls[0] as unknown[])[1] as { roundTrips: RoundTripLog };
+    expect(logOf(named.createClient).roundTrips.group).toBe('page-1');
+    const unnamed = setup();
+    await unnamed.warmup.warmUp(1, PR);
+    expect(logOf(unnamed.createClient).roundTrips.group).not.toBe('page-1');
+  });
+
+  it('does not overwrite a click sent while the model was still loading', async () => {
+    const loadedWindow = createLoadedWindowMemory();
+    let finish!: () => void;
+    const { warmup, client } = setup({
+      contextTokens: async () => 8192,
+      load: () => new Promise<void>((resolve) => (finish = resolve)),
+      loadedWindow,
+    });
+    const warming = warmup.warmUp(1, PR);
+    await vi.waitFor(() => expect(client.loadModel).toHaveBeenCalled());
+    // A click asks for a bigger window and gets its answer first.
+    const click = loadedWindow.start(at, 4096);
+    click.done();
+    finish();
+    await expect(warming).resolves.toEqual({ outcome: 'loaded' });
+    expect(loadedWindow.known(at)).toBe(4096);
+  });
+
+  it('does not forget what a click said when the warm-up then fails', async () => {
+    const loadedWindow = createLoadedWindowMemory();
+    let fail!: (error: Error) => void;
+    const { warmup, client } = setup({
+      load: () => new Promise<void>((_, reject) => (fail = reject)),
+      loadedWindow,
+    });
+    const warming = warmup.warmUp(1, PR);
+    await vi.waitFor(() => expect(client.loadModel).toHaveBeenCalled());
+    loadedWindow.start(at, 4096).done();
+    fail(new Error('connection reset'));
+    await expect(warming).resolves.toEqual({ outcome: 'failed' });
+    expect(loadedWindow.known(at)).toBe(4096);
   });
 });
