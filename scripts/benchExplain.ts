@@ -110,6 +110,7 @@ function memoryStorage(): SessionStorageLike {
   return {
     get: async (keys) => Object.fromEntries(keys.map((k) => [k, items[k]])),
     set: async (values) => void Object.assign(items, values),
+    remove: async (keys) => keys.forEach((k) => delete items[k]),
   };
 }
 

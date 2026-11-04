@@ -479,7 +479,9 @@ export function createExplainHandler(deps: ExplainDeps) {
         // A failed save only means the next click asks the model again.
         const elapsedMs = now() - startedAt;
         await tasks.time('cache-save', 'Save to the cache', () =>
-          cache.set(key, { explanation, model, elapsedMs, savedAt: now() }).catch(() => {}),
+          cache
+            .set(key, { explanation, model, elapsedMs, savedAt: now() }, payload.pr)
+            .catch(() => {}),
         );
       }
       return {

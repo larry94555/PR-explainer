@@ -13,7 +13,7 @@ import {
   followDebugSetting,
   setupDebugMenu,
 } from './debug/debugWindowOpener';
-import { CACHE_STORAGE_KEY, createExplainCache } from './explain/explainCache';
+import { createExplainCache } from './explain/explainCache';
 import { createExplainHandler } from './explain/explainHandler';
 import { buildExplainPrompt } from './explain/explainPrompt';
 import { SAMPLE_CONTEXT } from './explain/sampleContext';
@@ -86,13 +86,16 @@ const warmup = createWarmup({
   },
 });
 
+// Finished explanations, each under its own key (src/explain/explainCache.ts).
+const explainCache = createExplainCache(chrome.storage.session);
+
 const explain = createExplainHandler({
   getSettings,
   createClient: createLlmClient,
   platform: detectPlatform(navigator.userAgent),
   // Finished explanations are kept for the browser session, so clicking the
   // same line again answers at once (src/explain/explainCache.ts).
-  cache: createExplainCache(chrome.storage.session),
+  cache: explainCache,
   contextTokens,
   thinking,
   loadedWindow,
@@ -185,9 +188,8 @@ if (import.meta.env.MODE === 'development') {
       },
       // Runs the same code as an `explain` request from a GitHub page.
       explain: (context: string) => explain({ context }),
-      // Lists what the explanation cache holds (cleared when Chrome closes).
-      cache: async () =>
-        (await chrome.storage.session.get([CACHE_STORAGE_KEY]))[CACHE_STORAGE_KEY] ?? [],
+      // Lists what the explanation cache holds, least recently used first (cleared when Chrome closes).
+      cache: () => explainCache.list(),
       explainSample: () => explain({ context: SAMPLE_CONTEXT }),
       // Lists the debug log (PR 9.3), oldest first.
       log: () => debugLog.read(),
