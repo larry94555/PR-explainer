@@ -588,10 +588,10 @@ describe('options page Speed section (PR 8.6)', () => {
     expect(text('gpu-status')).toBe('');
   });
 
-  it('times each coding model, fastest first, and marks the fastest under 10 s', async () => {
+  it('times each coding model, fastest first, and marks the fastest under 2 s', async () => {
     const { client, now } = timedClient({
       'qwen2.5-coder:7b': 14_000,
-      'qwen2.5-coder:3b': 4_200,
+      'qwen2.5-coder:3b': 1_500,
       'llama3.2:3b': 1_000,
     });
     const deps = { ...fakeDeps(client), now };
@@ -602,12 +602,12 @@ describe('options page Speed section (PR 8.6)', () => {
 
     // llama3.2 is not a coding model, so it is not timed.
     expect(rows()).toEqual([
-      ['qwen2.5-coder:3bFastest under 10 s', '4.2 s', '50.0', '–', 'Use this model'],
+      ['qwen2.5-coder:3bFastest under 2 s', '1.5 s', '50.0', '–', 'Use this model'],
       ['qwen2.5-coder:7b', '14.0 s', '50.0', '–', 'In use'],
     ]);
     expect($('speed-results').hidden).toBe(false);
     expect($('speed-results').querySelector('tr.pick')?.textContent).toContain('qwen2.5-coder:3b');
-    expect(text('speed-status')).toBe('Fastest under 10 seconds: qwen2.5-coder:3b (4.2 s).');
+    expect(text('speed-status')).toBe('Fastest under 2 seconds: qwen2.5-coder:3b (1.5 s).');
   });
 
   it('switches and saves the model with Use this model', async () => {
@@ -668,19 +668,110 @@ describe('options page Speed section (PR 8.6)', () => {
     expect(client.chat).not.toHaveBeenCalled();
   });
 
-  it('says so when no model answers in under 10 seconds', async () => {
-    const { client, now } = timedClient({ 'qwen2.5-coder:7b': 14_000 });
+  it('says so when no model answers in under 2 seconds, and suggests a small model', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:7b': 2_000 });
     const page = await initOptionsPage(document, { ...fakeDeps(client), now });
     await page.speedTest();
     expect($('speed-results').querySelector('.badge')).toBeNull();
-    expect(text('speed-status')).toContain(
-      'No model answered in under 10 seconds; the fastest was qwen2.5-coder:7b at 14.0 s.',
+    expect(text('speed-status')).toBe(
+      'No model answered in under 2 seconds; the fastest was qwen2.5-coder:7b at 2.0 s. ' +
+        'A small coding model is much faster: run ollama pull qwen2.5-coder:1.5b ' +
+        '(or ollama pull qwen2.5-coder:0.5b on a slow CPU), then run the Speed test again.',
     );
+    expect([...$('speed-status').querySelectorAll('code')].map((c) => c.textContent)).toEqual([
+      'ollama pull qwen2.5-coder:1.5b',
+      'ollama pull qwen2.5-coder:0.5b',
+    ]);
+  });
+
+  it('suggests a small model when every model fails, keeping the reasons in the table', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:7b': 1, 'codellama:7b': 1 });
+    vi.mocked(client.loadModel).mockRejectedValue(new LlmError('http', 'out of memory'));
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    await page.speedTest();
+    expect(rows().map((r) => r[1])).toEqual(['Failed: out of memory', 'Failed: out of memory']);
+    expect(text('speed-status')).toBe(
+      'No model answered. See the table for why. ' +
+        'A small coding model is much faster: run ollama pull qwen2.5-coder:1.5b ' +
+        '(or ollama pull qwen2.5-coder:0.5b on a slow CPU), then run the Speed test again.',
+    );
+    expect([...$('speed-status').querySelectorAll('code')].map((c) => c.textContent)).toEqual([
+      'ollama pull qwen2.5-coder:1.5b',
+      'ollama pull qwen2.5-coder:0.5b',
+    ]);
+  });
+
+  it('suggests the GPU when every model fails and both small models were tried', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:1.5b': 1, 'qwen2.5-coder:0.5b': 1 });
+    vi.mocked(client.loadModel).mockRejectedValue(new LlmError('http', 'out of memory'));
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    await page.speedTest();
+    expect(text('speed-status')).toBe(
+      'No model answered. See the table for why. A model fully on the GPU would be faster.',
+    );
+  });
+
+  it('suggests only the smaller model once the small one has been timed', async () => {
+    const { client, now } = timedClient({
+      'qwen2.5-coder:7b': 14_000,
+      'qwen2.5-coder:1.5b': 2_500,
+    });
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    await page.speedTest();
+    expect(text('speed-status')).toContain(
+      'the fastest was qwen2.5-coder:1.5b at 2.5 s. Try an even smaller one: ' +
+        'run ollama pull qwen2.5-coder:0.5b, then run the Speed test again.',
+    );
+    expect([...$('speed-status').querySelectorAll('code')].map((c) => c.textContent)).toEqual([
+      'ollama pull qwen2.5-coder:0.5b',
+    ]);
+  });
+
+  it('suggests the GPU once both small models have been timed', async () => {
+    const { client, now } = timedClient({
+      'qwen2.5-coder:1.5b': 2_500,
+      'qwen2.5-coder:0.5b': 2_100,
+    });
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    await page.speedTest();
+    expect(text('speed-status')).toBe(
+      'No model answered in under 2 seconds; the fastest was qwen2.5-coder:0.5b at 2.1 s. ' +
+        'A model fully on the GPU would be faster.',
+    );
+    expect($('speed-status').querySelector('code')).toBeNull();
+  });
+
+  it('says when the picked model is a reasoning model and none made 2 seconds', async () => {
+    const { client, now } = timedClient(
+      { 'deepseek-r1:7b': 9_000, 'qwen2.5-coder:7b': 6_000 },
+      {
+        modelContext: vi.fn(async (model: string) =>
+          model.startsWith('deepseek-r1') ? { capabilities: ['completion', 'thinking'] } : {},
+        ),
+      },
+    );
+    const page = await initOptionsPage(document, {
+      ...fakeDeps(client, { ...SAVED, model: 'deepseek-r1:7b' }),
+      now,
+    });
+    await vi.waitFor(() => expect(text('thinking-status')).toContain('is a reasoning model'));
+    await page.speedTest();
+    expect(text('speed-status')).toContain(
+      'deepseek-r1:7b, the model picked above, is a reasoning model: even with thinking off ' +
+        'it is bigger and slower than a small coding model.',
+    );
+  });
+
+  it('does not call a model that is not a reasoning model one', async () => {
+    const { client, now } = timedClient({ 'qwen2.5-coder:7b': 6_000 });
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+    await page.speedTest();
+    expect(text('speed-status')).not.toContain('reasoning');
   });
 
   it('shows where each model ran and why a model failed', async () => {
     const { client, now } = timedClient(
-      { 'qwen2.5-coder:7b': 3_000, 'codellama:7b': 1 },
+      { 'qwen2.5-coder:7b': 1_200, 'codellama:7b': 1 },
       {
         runningModels: vi.fn(async () => [
           { name: 'qwen2.5-coder:7b', sizeBytes: 6 * GB, vramBytes: 3 * GB },
@@ -693,7 +784,7 @@ describe('options page Speed section (PR 8.6)', () => {
     const page = await initOptionsPage(document, { ...fakeDeps(client), now });
     await page.speedTest();
     expect(rows()).toEqual([
-      ['qwen2.5-coder:7bFastest under 10 s', '3.0 s', '50.0', '50%/50% CPU/GPU', 'In use'],
+      ['qwen2.5-coder:7bFastest under 2 s', '1.2 s', '50.0', '50%/50% CPU/GPU', 'In use'],
       ['codellama:7b', 'Failed: out of memory'],
     ]);
   });
@@ -740,10 +831,10 @@ describe('options page Speed section (PR 8.6)', () => {
     const page = await initOptionsPage(document, fakeDeps(client));
     await page.speedTest();
     expect(text('speed-status')).toBe(
-      'No models installed. Run ollama pull qwen2.5-coder:3b, then try again.',
+      'No models installed. Run ollama pull qwen2.5-coder:1.5b, then try again.',
     );
     expect($('speed-status').querySelector('code')?.textContent).toBe(
-      'ollama pull qwen2.5-coder:3b',
+      'ollama pull qwen2.5-coder:1.5b',
     );
     expect(client.chat).not.toHaveBeenCalled();
   });

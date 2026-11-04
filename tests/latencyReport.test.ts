@@ -8,6 +8,7 @@ import {
   dominantTerm,
   fastest,
   formatHistoryReport,
+  GOAL_MS,
   HISTORY_STEPS,
   lastSection,
   nextStep,
@@ -18,6 +19,7 @@ import {
   type FloorResult,
   type HistoryReport,
 } from '../scripts/latencyReport.ts';
+import { LATENCY_GOAL_MS } from '../src/llm/latencyGoal';
 
 const run = (totalMs: number, t: Partial<Record<string, number>> = {}): BenchRun => ({
   ok: true,
@@ -221,31 +223,42 @@ describe('the conclusion', () => {
   it('names a faster model left out because some of its runs failed', () => {
     const text = conclusion(
       [
-        { model: 'steady', medianMs: 8000, failed: 0 },
-        { model: 'flaky', medianMs: 2000, runs: 15, failed: 4 },
+        { model: 'steady', medianMs: 1800, failed: 0 },
+        { model: 'flaky', medianMs: 900, runs: 15, failed: 4 },
       ],
       [],
     );
     expect(text).toMatch(
-      /^\*\*Goal met\.\*\* With the default settings, steady explains in 8\.0 s/,
+      /^\*\*Goal met\.\*\* With the default settings, steady explains in 1\.8 s/,
     );
     expect(text).toMatch(/Left out because some runs failed.*: flaky \(4 of 15 runs failed\)\./);
   });
 
-  it('says the goal is met by the fastest model, and warns when its slowest run passes 10 s', () => {
+  it('says the goal is met by the fastest model, and warns when its slowest run passes 2 s', () => {
+    expect(GOAL_MS).toBe(LATENCY_GOAL_MS);
+    expect(GOAL_MS).toBe(2000);
     const text = conclusion(
       [
         { model: 'big', medianMs: 14_000, failed: 0 },
-        { model: 'small', medianMs: 6200, slowestMs: 11_000, ranOn: '100% GPU', failed: 0 },
+        { model: 'small', medianMs: 1600, slowestMs: 2_400, ranOn: '100% GPU', failed: 0 },
       ],
       [],
     );
-    expect(text).toMatch(/^\*\*Goal met\.\*\* With the default settings, small explains in 6\.2 s/);
+    expect(text).toMatch(/^\*\*Goal met\.\*\* With the default settings, small explains in 1\.6 s/);
     expect(text).toMatch(/on 100% GPU/);
-    expect(text).toMatch(/slowest run took 11\.0 s/);
+    expect(text).toMatch(/slowest run took 2\.4 s, so a long selection can still pass 2\.0 s\./);
     expect(
-      conclusion([{ model: 'small', medianMs: 6200, slowestMs: 8000, failed: 0 }], []),
+      conclusion([{ model: 'small', medianMs: 1600, slowestMs: 1900, failed: 0 }], []),
     ).not.toMatch(/slowest/);
+  });
+
+  it('does not call a median of exactly 2 seconds, or the 10 seconds of Milestone 8, the goal met', () => {
+    expect(conclusion([{ model: 'm', medianMs: 2000, failed: 0 }], [])).toMatch(
+      /^\*\*Goal not met\.\*\*/,
+    );
+    expect(conclusion([{ model: 'm', medianMs: 8000, failed: 0 }], [])).toMatch(
+      /^\*\*Goal not met\.\*\*/,
+    );
   });
 
   it('gives the floor, the part that limits it and the next step when the goal is not met', () => {
@@ -273,7 +286,7 @@ describe('the report section', () => {
   const steps = HISTORY_STEPS.map((step, i) => ({
     step,
     section: benchSection([
-      { model: 'm', totals: [20_000 - i * 3000, 21_000 - i * 3000, 19_000 - i * 3000] },
+      { model: 'm', totals: [20_000 - i * 4600, 21_000 - i * 4600, 19_000 - i * 4600] },
     ]),
   }));
   const report: HistoryReport = {
@@ -288,9 +301,9 @@ describe('the report section', () => {
     expect(text).toMatch(/^## Latency report 2026-11-02 09:30\n/);
     expect(text).toContain('| Step | m median | m slowest |');
     expect(text).toContain('| Baseline (8.2) | 20.0 s | 21.0 s |');
-    expect(text).toContain('| Now (8.6 to 8.8) | 8.0 s | 9.0 s |');
+    expect(text).toContain('| Now (8.6 to 8.8) | 1.6 s | 2.6 s |');
     expect(text).toContain(
-      '### Conclusion\n\n**Goal met.** With the default settings, m explains in 8.0 s',
+      '### Conclusion\n\n**Goal met.** With the default settings, m explains in 1.6 s',
     );
     expect(text).toContain('### Baseline (8.2)\n\n#### 2026-11-02 09:30 · m');
     expect(text).toContain('\n##### m (context up to 4096 tokens)\n');

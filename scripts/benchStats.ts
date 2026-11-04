@@ -2,6 +2,8 @@
 // functions only: scripts/bench.ts does the talking to Ollama and the file
 // writing, so everything here can be unit tested without a model.
 
+import { LATENCY_GOAL_MS } from '../src/llm/latencyGoal.ts';
+
 /** Ollama's timings for one reply, in milliseconds (the shape of LlmTimings). */
 export interface RunTimings {
   totalMs?: number;
@@ -212,6 +214,26 @@ function formatGb(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
+/**
+ * Each model against the goal (PR 9.9), by the median of every sample: met
+ * only when every run finished and the median is under the goal.
+ */
+export function goalVerdicts(models: readonly Pick<ModelResult, 'model' | 'rows'>[]): string {
+  return (
+    models
+      .map(({ model, rows }) => {
+        const s = summarize(rows.flatMap((r) => r.runs));
+        if (s.medianMs === undefined) return `${model} has no finished runs`;
+        const median = `median ${formatMs(s.medianMs)}`;
+        if (s.failed > 0) return `${model} did not finish every run (${median} of those that did)`;
+        return s.medianMs < LATENCY_GOAL_MS
+          ? `${model} met it (${median})`
+          : `${model} did not (${median})`;
+      })
+      .join('; ') + '.'
+  );
+}
+
 /** One dated section of docs/latency.md: the machine, the settings, and a table per model. */
 export function formatReport(report: BenchReport): string {
   const { machine } = report;
@@ -224,6 +246,7 @@ export function formatReport(report: BenchReport): string {
     `- **Settings:** temperature ${report.temperature}, answers up to ${report.maxResponseTokens} ` +
       `tokens, ${report.runsPerSample} ${report.runsPerSample === 1 ? 'run' : 'runs'} per sample`,
   ];
+  out.push(`- **Against the ${LATENCY_GOAL_MS / 1000} s goal:** ${goalVerdicts(report.models)}`);
   for (const model of report.models) {
     const notes = [
       // The window is sized to each prompt within this (PR 8.5).

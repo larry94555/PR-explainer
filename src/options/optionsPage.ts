@@ -24,11 +24,16 @@ import {
   fastestUnderGoal,
   rankResults,
   runSpeedTest,
-  SPEED_GOAL_MS,
   speedTestModels,
   type SpeedResult,
 } from '../llm/speedTest';
 import { thinkOption } from '../llm/contextSize';
+import {
+  LATENCY_GOAL_MS,
+  LATENCY_GOAL_SECONDS,
+  SMALL_CODING_MODEL,
+  TINY_CODING_MODEL,
+} from '../llm/latencyGoal';
 import { isSameModel, thinkingSupport, type LlmClient, type ThinkingSupport } from '../llm/types';
 import {
   DEFAULT_SETTINGS,
@@ -360,7 +365,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
         row.className = 'pick';
         const badge = doc.createElement('span');
         badge.className = 'badge';
-        badge.textContent = 'Fastest under 10 s';
+        badge.textContent = `Fastest under ${LATENCY_GOAL_SECONDS} s`;
         name.append(badge);
       }
       row.append(name);
@@ -423,18 +428,35 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     await Promise.all([checkGpu(), checkThinking()]);
   }
 
-  function summary(results: readonly SpeedResult[], stopped: boolean): string {
+  function summary(
+    results: readonly SpeedResult[],
+    stopped: boolean,
+    picked: { model: string; thinks: boolean } | undefined,
+  ): string {
     const ranked = rankResults(results);
     const fastest = ranked[0];
     if (stopped) return 'Stopped.';
-    if (fastest?.status !== 'done') return 'No model answered. See the table for why.';
+    // Every model failed, often out of memory on a laptop: a small model may still fit.
+    if (fastest?.status !== 'done')
+      return `No model answered. See the table for why. ${smallModelSuggestion(results)}`;
     const time = `${(fastest.totalMs / 1000).toFixed(1)} s`;
-    if (fastest.totalMs < SPEED_GOAL_MS)
-      return `Fastest under 10 seconds: ${fastest.model} (${time}).`;
+    if (fastest.totalMs < LATENCY_GOAL_MS)
+      return `Fastest under ${LATENCY_GOAL_SECONDS} seconds: ${fastest.model} (${time}).`;
+    const reasoning = picked?.thinks
+      ? ` ${picked.model}, the model picked above, is a reasoning model: even with thinking off ` +
+        'it is bigger and slower than a small coding model.'
+      : '';
     return (
-      `No model answered in under 10 seconds; the fastest was ${fastest.model} at ${time}. ` +
-      'A smaller model, or one fully on the GPU, would be faster.'
+      `No model answered in under ${LATENCY_GOAL_SECONDS} seconds; the fastest was ${fastest.model} at ${time}. ` +
+      `${smallModelSuggestion(results)}${reasoning}`
     );
+  }
+
+  // Whether the model picked in the settings is a reasoning model, from what
+  // the line under the model already looked up (PR 9.5); no extra request.
+  function pickedModel(llmUrl: string, model: string): { model: string; thinks: boolean } {
+    const thinks = thinkingKnown.get(`${llmUrl} ${model}`);
+    return { model, thinks: Boolean(thinks) };
   }
 
   async function speedTest(): Promise<void> {
@@ -473,7 +495,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
         speedStatus.replaceChildren(
           ...withCode(
             doc,
-            'No models installed. Run `ollama pull qwen2.5-coder:3b`, then try again.',
+            `No models installed. Run \`ollama pull ${SMALL_CODING_MODEL}\`, then try again.`,
           ),
         );
         return;
@@ -496,7 +518,12 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
         },
       });
       showResults(results, !run.signal.aborted);
-      speedStatus.textContent = summary(results, run.signal.aborted);
+      speedStatus.replaceChildren(
+        ...withCode(
+          doc,
+          summary(results, run.signal.aborted, pickedModel(values.llmUrl, values.model)),
+        ),
+      );
     } finally {
       speedRun = null;
       speedButton.disabled = false;
@@ -573,6 +600,27 @@ export function thinkingText(
   return typeof think === 'string'
     ? `${model} is a reasoning model that cannot turn thinking off, so it thinks as little as it can ("${think}").`
     : `${model} is a reasoning model that cannot turn thinking off.`;
+}
+
+/**
+ * What to install when no model met the goal (PR 9.9): a small coding model by
+ * name, with the command to get it, unless it was already timed.
+ */
+export function smallModelSuggestion(results: readonly SpeedResult[]): string {
+  const timed = (name: string) => results.some((r) => isSameModel(r.model, name));
+  if (!timed(SMALL_CODING_MODEL)) {
+    return (
+      `A small coding model is much faster: run \`ollama pull ${SMALL_CODING_MODEL}\` ` +
+      `(or \`ollama pull ${TINY_CODING_MODEL}\` on a slow CPU), then run the Speed test again.`
+    );
+  }
+  if (!timed(TINY_CODING_MODEL)) {
+    return (
+      `Try an even smaller one: run \`ollama pull ${TINY_CODING_MODEL}\`, then run the Speed test again. ` +
+      'A model fully on the GPU would also be faster.'
+    );
+  }
+  return 'A model fully on the GPU would be faster.';
 }
 
 function cell(doc: Document, text: string, className?: string): HTMLTableCellElement {

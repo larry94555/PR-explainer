@@ -6,7 +6,7 @@ PR Explainer does everything in its [feature list](features.md), but there is pl
 
 ## 1. LLM latency (the big one)
 
-An explanation that takes close to a minute breaks the flow of a code review. Milestone 8 set a goal of **under 10 seconds** from click to "Answered in …" and attacked every part of the time. The [latency report](latency.md) has the full numbers from a real laptop.
+An explanation that takes close to a minute breaks the flow of a code review. Milestone 8 set a goal of **under 10 seconds** from click to "Answered in …" and attacked every part of the time. Milestone 9 tightens it to **under 2 seconds**: the Speed test on the settings page and `npm run bench` now measure against 2 seconds (PR 9.9). The [latency report](latency.md) has the full numbers from a real laptop.
 
 **Where things stand** (Windows 11, Intel i7-1360P, Intel Iris Xe graphics, `deepseek-r1:7b` running 100% on the CPU):
 
@@ -22,7 +22,7 @@ An explanation that takes close to a minute breaks the flow of a code review. Mi
 
 **What would help most, in order:**
 
-1. **A smaller coding model.** A 1.5B model such as `qwen2.5-coder:1.5b` usually writes four to five times faster than a 7B model on a laptop CPU, which would put a typical answer at roughly 5 to 15 seconds. The next step is to benchmark it (`ollama pull qwen2.5-coder:1.5b`, then `npm run bench -- qwen2.5-coder:1.5b`) and check the answers are still useful.
+1. **A smaller coding model.** This is the recommended model now: `qwen2.5-coder:1.5b` usually writes four to five times faster than a 7B model on a laptop CPU, and `qwen2.5-coder:0.5b` is smaller still for a slow CPU. With the one-sentence answers of PR 9.8 that brings a warm answer close to 2 seconds. Get it with `ollama pull qwen2.5-coder:1.5b`, click **Speed test** on the settings page, and compare with `npm run bench -- qwen2.5-coder:1.5b deepseek-r1:7b`. Keep it only if its answers are still useful.
 2. **Avoid reasoning models.** `deepseek-r1` writes a hidden `<think>` section before answering. With the 300-token limit it often spent the whole budget thinking and sent no answer at all. A model that answers directly is both faster and more useful here.
 3. **Use the GPU.** Ollama did not use the Intel Iris Xe GPU on Windows, so the model ran entirely on the CPU. A supported GPU (or freeing video memory so the whole model fits) makes generation several times faster. The settings page already shows whether the model runs on the GPU and suggests a fix.
 4. **Pick a model for the user.** First-run setup could run the speed test automatically and recommend the fastest model that gives good answers, instead of leaving users to discover it.
