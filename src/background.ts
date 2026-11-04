@@ -138,7 +138,8 @@ const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult>({
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   warmup.forgetTab(tabId);
-  explainQueue.drop((job) => job.tab === tabId);
+  // Only that tab's callers: a job shared with another tab keeps going.
+  explainQueue.dropTab(tabId);
 });
 
 // Listeners must be added on the first run of the worker, before it goes idle,

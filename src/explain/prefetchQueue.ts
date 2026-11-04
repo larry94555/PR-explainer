@@ -6,12 +6,13 @@
 // A job is one request (for now one line, built as a click would build it;
 // PR 10.5 adds whole hunks) with a priority. Jobs run highest priority first,
 // then in the order their lines appear in the PR (`order`), then in the order
-// they came. At most `concurrency` jobs run at once (1 by default), counting
-// clicks.
+// they came. At most `concurrency` jobs run at once (1 by default), and no
+// background job starts while a click runs.
 //
 // - A click always runs at once. It stops the background jobs that are
 //   running (so Ollama is free for it) and puts them back at the front of
-//   their priority. A hovered line does the same to the lower jobs when
+//   their priority. A click that joins a job already running does the same,
+//   without stopping that job. A hovered line does the same to the lower jobs when
 //   there is no room, since the pointer resting on it says a click is near
 //   (as before, PR 8.7); the other priorities wait for room, so scrolling
 //   never throws away work in progress.
@@ -26,7 +27,8 @@
 //   priority, then given up on. A click is never tried again by itself.
 // - A job whose callers have all gone (the popup closed, the tab moved on) is
 //   dropped, and stopped if it is running. Jobs can also be re-prioritised
-//   and dropped by tab or PR.
+//   and dropped by PR. Closing a tab lets go of only that tab's callers, so a
+//   job another tab also waits for keeps running.
 //
 // It knows nothing about Chrome or Ollama: `run` does the work (the explain
 // handler in src/background.ts), so the tests drive it with a fake.
@@ -111,12 +113,21 @@ export interface PrefetchQueue<P, R> {
   prioritise(match: (spec: JobSpec<P>) => boolean, priority: JobPriority): number;
   /** Drops the jobs `match` picks (stopping running ones). Returns how many. */
   drop(match: (spec: JobSpec<P>) => boolean): number;
+  /**
+   * Lets go of everything a closed tab asked for: its callers leave their
+   * jobs, and a job is dropped only when nobody else is waiting for it (a
+   * job shared with another tab keeps running for that tab). Returns how
+   * many jobs were dropped.
+   */
+  dropTab(tab: number): number;
   /** The labels of the running and waiting jobs, in the order they would run. */
   state(): { running: string[]; waiting: string[] };
 }
 
 interface Caller<R> {
   click: boolean;
+  /** The tab that asked, so closing it lets go of only its own callers. */
+  tab?: number;
   onChunk?(text: string): void;
   resolve(result: R): void;
   reject(error: unknown): void;
@@ -251,10 +262,14 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       .filter((other) => rank(other.spec.priority) > rank(job.spec.priority))
       .sort((a, b) => rank(b.spec.priority) - rank(a.spec.priority))[0];
 
+  const clickRunning = () => running().some((job) => job.spec.priority === 'click');
+
   /** Starts waiting jobs while there is room. */
   function pump(): void {
     for (const job of waiting()) {
       if (job.spec.priority === 'click') startClick(job);
+      // While a click runs, the background waits, so the click has Ollama to itself.
+      else if (clickRunning()) continue;
       else if (running().length < concurrency) start(job);
       else if (job.spec.priority === 'hovered') {
         const lower = lowerRunning(job);
@@ -274,6 +289,18 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
     emit('dropped', job, run && now() - run.startedAt);
   };
 
+  /**
+   * Takes `caller` off `job` (rejecting it), and drops the job when nobody
+   * else waits for it. True when the job was dropped.
+   */
+  const leave = (job: Job<P, R>, caller: Caller<R>): boolean => {
+    if (!job.callers.delete(caller)) return false;
+    caller.reject(abortError());
+    if (job.callers.size > 0 || jobs.get(job.spec.id) !== job) return false;
+    remove(job);
+    return true;
+  };
+
   const add = (spec: JobSpec<P>, options: AddOptions = {}): Promise<R> =>
     new Promise<R>((resolve, reject) => {
       if (options.signal?.aborted) {
@@ -281,7 +308,13 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
         return;
       }
       const click = spec.priority === 'click';
-      const caller: Caller<R> = { click, onChunk: options.onChunk, resolve, reject };
+      const caller: Caller<R> = {
+        click,
+        ...(spec.tab !== undefined && { tab: spec.tab }),
+        onChunk: options.onChunk,
+        resolve,
+        reject,
+      };
       let job = jobs.get(spec.id);
       if (job) {
         if (rank(spec.priority) < rank(job.spec.priority)) {
@@ -292,6 +325,9 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
         // What the model has written so far, then the rest as it comes.
         const soFar = job.run?.chunks.join('');
         if (click && soFar) options.onChunk?.(soFar);
+        // A click joining a running job keeps it going and stops the other
+        // background jobs, as a new click would.
+        if (click && job.run) startClick(job);
       } else {
         job = { spec, seq: ++seq, front: 0, attempts: 0, callers: new Set([caller]) };
         jobs.set(spec.id, job);
@@ -301,12 +337,7 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       options.signal?.addEventListener(
         'abort',
         () => {
-          if (!joined.callers.delete(caller)) return;
-          reject(abortError());
-          if (joined.callers.size === 0 && jobs.get(joined.spec.id) === joined) {
-            remove(joined);
-            pump();
-          }
+          if (leave(joined, caller)) pump();
         },
         { once: true },
       );
@@ -330,6 +361,16 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       for (const job of picked) remove(job);
       if (picked.length) pump();
       return picked.length;
+    },
+    dropTab(tab) {
+      let dropped = 0;
+      for (const job of [...jobs.values()]) {
+        for (const caller of [...job.callers]) {
+          if (caller.tab === tab && leave(job, caller)) dropped += 1;
+        }
+      }
+      if (dropped) pump();
+      return dropped;
     },
     state: () => ({
       running: running().map((job) => job.spec.label),

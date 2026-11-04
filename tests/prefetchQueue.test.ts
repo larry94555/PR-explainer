@@ -388,6 +388,70 @@ describe('callers going away, re-prioritising and dropping', () => {
   });
 });
 
+describe('a click joining a running job (review on #62)', () => {
+  it('stops the other running background jobs, keeps the joined one going, and resumes them after', async () => {
+    const env = setup({ concurrency: 2 });
+    void env.queue.add(env.job('a'));
+    void env.queue.add(env.job('b'));
+    env.runs[0]!.chunk('Ad');
+    const got: string[] = [];
+    const click = env.queue.add(env.job('a', 'click'), { onChunk: (t) => got.push(t) });
+    // b is stopped and put back; a keeps its run and what it has written.
+    expect(env.runs[1]!.signal.aborted).toBe(true);
+    expect(env.runs[0]!.signal.aborted).toBe(false);
+    expect(env.queue.state()).toEqual({ running: ['a'], waiting: ['b'] });
+    expect(got).toEqual(['Ad']);
+    env.runs[0]!.chunk('ds one.');
+    env.runs[0]!.finish();
+    await expect(click).resolves.toMatchObject({ text: 'answer to a' });
+    await settle();
+    expect(env.live().map((r) => r.payload)).toEqual(['b']);
+    expect(env.runs.filter((r) => r.payload === 'a')).toHaveLength(1);
+  });
+});
+
+describe('a new click with room for two', () => {
+  it('stops both background jobs, and they wait until it is answered', async () => {
+    const env = setup({ concurrency: 2 });
+    void env.queue.add(env.job('a'));
+    void env.queue.add(env.job('b'));
+    void env.queue.add(env.job('x', 'click'));
+    expect(env.queue.state()).toEqual({ running: ['x'], waiting: ['b', 'a'] });
+    env.live()[0]!.finish();
+    await settle();
+    expect(env.live().map((r) => r.payload)).toEqual(['b', 'a']);
+  });
+});
+
+describe('closing a tab (review on #62)', () => {
+  it("lets go of that tab's callers only: a job another tab joined keeps running for it", async () => {
+    const env = setup();
+    void env.queue.add(env.job('same', 'on-screen', { tab: 1 }));
+    const got: string[] = [];
+    const click = env.queue.add(env.job('same', 'click', { tab: 2 }), {
+      onChunk: (t) => got.push(t),
+    });
+    expect(env.queue.dropTab(1)).toBe(0);
+    expect(env.runs[0]!.signal.aborted).toBe(false);
+    env.runs[0]!.chunk('still coming');
+    expect(got).toEqual(['still coming']);
+    env.runs[0]!.finish();
+    await expect(click).resolves.toMatchObject({ text: 'answer to same' });
+    expect(env.runs).toHaveLength(1);
+  });
+
+  it('drops the jobs only that tab waits for, and runs the next', async () => {
+    const env = setup();
+    const a = env.queue.add(env.job('a', 'on-screen', { tab: 1 }));
+    void env.queue.add(env.job('b', 'on-screen', { tab: 1 }));
+    void env.queue.add(env.job('c', 'on-screen', { tab: 2 }));
+    expect(env.queue.dropTab(1)).toBe(2);
+    await expect(a).rejects.toMatchObject({ name: 'AbortError' });
+    expect(env.runs[0]!.signal.aborted).toBe(true);
+    expect(env.queue.state()).toEqual({ running: ['c'], waiting: [] });
+  });
+});
+
 describe('two tabs', () => {
   it('share one queue: one job running across both', async () => {
     const env = setup();
