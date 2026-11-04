@@ -54,9 +54,17 @@
 // With the Debug window setting on (PR 9.4), the header also has a Debug
 // button that opens the debug window: every round trip, live.
 //
+// Under the header, a facts line (PR 9.12) says what is known about the code
+// without the model: the file and line, the function from the hunk header,
+// and what kind of change it is (src/codeFacts.ts). It is there from the
+// moment the popup opens and stays above the answer, for a cached answer too.
+// It is outside the live region, so screen readers read it once, as the
+// popup's description, not again with each update.
+//
 // The content script opens it from its click handler (src/clickHandler.ts),
 // and the demo page (`npm run demo:popup`) shows it with fake data.
 
+import type { CodeFacts } from '../codeFacts';
 import type { PromptReport } from '../explain/fitPrompt';
 import type { Explanation, SectionKey } from '../explain/parseExplanation';
 import type { LlmTimings } from '../llm/types';
@@ -123,6 +131,11 @@ export interface PopupOptions {
    * stay until the whole answer is shown.
    */
   streamAnswers?: boolean;
+  /**
+   * What is known about the code without the model (PR 9.12), shown under
+   * the header from the start. Left out: no facts line.
+   */
+  facts?: CodeFacts;
   /** Clock in milliseconds, for the elapsed time. Tests pass a fake one. */
   now?: () => number;
 }
@@ -237,6 +250,30 @@ export function promptSummary(report: PromptReport): string {
     ? `trimmed: ${report.trimmed.join(', ')}`
     : 'nothing trimmed';
   return `Prompt sent · ${size} (${window}) · ${trimmed}`;
+}
+
+/** The facts line under the header (PR 9.12): file and line · in scope · kind of change. */
+function factsLine(doc: Document, facts: CodeFacts): HTMLElement {
+  const line = doc.createElement('p');
+  line.className = 'facts';
+  line.id = 'pe-facts';
+  const part = (className: string, ...children: Array<Node | string>) => {
+    if (line.childNodes.length) line.append(' · ');
+    const span = doc.createElement('span');
+    span.className = className;
+    span.append(...children);
+    line.append(span);
+  };
+  const code = (text: string) => {
+    const el = doc.createElement('code');
+    el.textContent = text;
+    return el;
+  };
+  part('where', facts.where);
+  if (facts.scope) part('scope', 'in ', code(facts.scope));
+  if (facts.was !== undefined) part('change', `${facts.change} `, code(facts.was));
+  else part('change', facts.change);
+  return line;
 }
 
 /** A heading and its text, for a round trip's message or reply. */
@@ -441,7 +478,12 @@ export function openPopup(
     });
     footer.append(askButton);
   }
-  panel.append(header, latency, body, footer);
+  panel.append(header);
+  if (options.facts) {
+    panel.append(factsLine(doc, options.facts));
+    panel.setAttribute('aria-describedby', 'pe-facts');
+  }
+  panel.append(latency, body, footer);
   shadow.append(style, panel);
   doc.body.append(host);
   const stopFollowingTheme = followTheme(host, doc);

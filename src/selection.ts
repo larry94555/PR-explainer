@@ -21,6 +21,7 @@
 // cursor (explainLineAt in src/clickHandler.ts).
 
 import { isEditable, isExplainShortcut, shortcutTarget } from './a11y';
+import { selectionFacts } from './codeFacts';
 import { explainCode, explainLineAt, isInteractive, type ClickHandlerDeps } from './clickHandler';
 import type { CodeSpan } from './fileContext';
 import { locateRange, locateRow, type DiffRange } from './diffDom';
@@ -281,6 +282,7 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
         text: formatSelection(context),
         subject: selectionSubject(context),
         ...(code && { code }),
+        facts: selectionFacts(range),
       };
       explainCode(deps, request, blockAnchor(selected), () => {
         // Only clear the highlight if no newer selection replaced it.

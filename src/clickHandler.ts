@@ -21,8 +21,9 @@
 
 import type { ChatSubject } from './chat/chatPanel';
 import type { ChatSeed } from './chat/chatSession';
-import { locateRow } from './diffDom';
-import { extractContext, formatContext } from './lineContext';
+import { factsFromHunk, type CodeFacts } from './codeFacts';
+import { locateHunk, locateRow } from './diffDom';
+import { contextFromHunk, DEFAULT_CONTEXT, formatContext } from './lineContext';
 import type { Explanation } from './explain/parseExplanation';
 import type { CodeSpan } from './fileContext';
 import type { LlmTimings } from './llm/types';
@@ -64,7 +65,7 @@ export interface ClickHandlerDeps {
   openPopup(
     anchor: PopupAnchor,
     options: Required<Pick<PopupOptions, 'onStop' | 'onClose' | 'onRegenerate'>> &
-      Pick<PopupOptions, 'onAsk'>,
+      Pick<PopupOptions, 'onAsk' | 'facts'>,
   ): Popup;
   /**
    * Opens the chat about an explanation (the popup's Ask a question button).
@@ -102,6 +103,8 @@ export interface ExplainRequest {
   subject: ChatSubject;
   /** Where the code is in the new file (PR 6.3). Left out when it is only removed lines. */
   code?: CodeSpan;
+  /** What is known without the model, for the popup's facts line (PR 9.12). */
+  facts?: CodeFacts;
 }
 
 export interface ExplainTiming {
@@ -222,8 +225,9 @@ export function lineRequest(
   target: EventTarget | null,
 ): { row: Element; request: ExplainRequest } | null {
   const row = locateRow(target);
-  const context = row && extractContext(target);
-  if (!row || !context) return null;
+  const hunk = row && locateHunk(target);
+  if (!row || !hunk) return null;
+  const context = contextFromHunk(hunk, DEFAULT_CONTEXT);
   const { filePath, lineNumber, side, text } = context.line;
   const code =
     side === 'removed' ? undefined : { filePath, startLine: lineNumber, endLine: lineNumber, text };
@@ -233,6 +237,7 @@ export function lineRequest(
       text: formatContext(context),
       subject: { filePath, startLine: lineNumber },
       ...(code && { code }),
+      facts: factsFromHunk(hunk),
     },
   };
 }
@@ -269,7 +274,7 @@ export function explainCode(
  */
 export function explainInPopup(
   deps: Pick<ClickHandlerDeps, 'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat'>,
-  { text, subject, code }: ExplainRequest,
+  { text, subject, code, facts }: ExplainRequest,
   anchor: PopupAnchor,
   onClose?: () => void,
   firstTrace?: ClickTrace,
@@ -289,6 +294,8 @@ export function explainInPopup(
   // The popup's callbacks only run after a user action, by which time
   // `stream` (below) is set.
   const popup = deps.openPopup(anchor, {
+    // Shown at once, before anything is sent (PR 9.12).
+    ...(facts && { facts }),
     onStop: () => {
       stream.stop();
       report({ status: 'stopped', ...endedEarly(trace, 'stopped') });

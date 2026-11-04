@@ -702,6 +702,26 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     );
   });
 
+  it('opens the popup with the facts known without the model, before any answer (PR 9.12)', () => {
+    env = setup(() => new Promise(() => {}));
+    click(code('R44'));
+    expect(env.popups[0]!.hooks.facts).toEqual({
+      where: 'docs/roadmap.md, line 44',
+      scope: "Update this table (and the PR's heading) when a roadmap PR merges.",
+      change: 'Changed line, was:',
+      was: '| 2.4 | Friendly LLM error messages | Small | Not started |',
+    });
+    click(code('L44'));
+    expect(env.popups[1]!.hooks.facts).toEqual(
+      expect.objectContaining({
+        where: 'docs/roadmap.md, line 44 of the old file',
+        change: 'Removed line',
+      }),
+    );
+    // The request text sent to the model is unchanged by the facts.
+    expect(env.contexts[0]).not.toContain('Changed line');
+  });
+
   it('while a chat is open, a clicked line goes to the chat instead of a popup (PR 5.4)', () => {
     env = setup();
     let chatOpen = true;
@@ -712,6 +732,7 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
       text: expect.stringContaining('docs/roadmap.md'),
       subject: { filePath: 'docs/roadmap.md', startLine: 44 },
       code: expect.objectContaining({ startLine: 44, endLine: 44 }),
+      facts: expect.objectContaining({ where: 'docs/roadmap.md, line 44' }),
     });
     expect(env.deps.explain).not.toHaveBeenCalled();
     expect(env.popups).toEqual([]);
