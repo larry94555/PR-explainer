@@ -189,7 +189,12 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
      * Explains `sample` once with `model`, timing it the way the popup does.
      * `onFirstToken` hears when the first piece of the answer arrives.
      */
-    explain: (sample: BenchSample, model: string, onFirstToken?: () => void): Promise<BenchRun> =>
+    explain: (
+      sample: BenchSample,
+      model: string,
+      onFirstToken?: () => void,
+      signal?: AbortSignal,
+    ): Promise<BenchRun> =>
       timed(
         handlerFor(model),
         {
@@ -197,7 +202,7 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
           ...(sample.pr && { prInfo: sample.pr }),
           ...(sample.fileContext !== undefined && { fileContext: sample.fileContext as never }),
         },
-        onFirstToken && { onFirstToken },
+        { ...(onFirstToken && { onFirstToken }), ...(signal && { signal }) },
       ),
 
     /**
@@ -287,8 +292,8 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
     },
 
     /** Explains `context` once with nothing cached, as a click on an idle model does. */
-    single: (context: string, model: string): Promise<BenchRun> =>
-      timed(handlerFor(model), { context, pr: AHEAD_PR }),
+    single: (context: string, model: string, signal?: AbortSignal): Promise<BenchRun> =>
+      timed(handlerFor(model), { context, pr: AHEAD_PR }, signal && { signal }),
 
     /**
      * The whole-PR mode (PR 10.8): the explain and hunk handlers sharing one
@@ -326,10 +331,13 @@ async function timed(
     onCached,
     onFirstToken,
     onAnswer,
+    signal,
   }: {
     onCached?: (cached: boolean) => void;
     onFirstToken?: () => void;
     onAnswer?: (answer: BenchAnswer) => void;
+    /** Stops the request (the whole-PR mode's time limit). */
+    signal?: AbortSignal;
   } = {},
 ): Promise<BenchRun> {
   const startedAt = performance.now();
@@ -337,6 +345,7 @@ async function timed(
   let reply = '';
   try {
     const result = await explain(payload, {
+      ...(signal && { signal }),
       onChunk: (chunk) => {
         reply += chunk;
         if (firstTokenMs === undefined && chunk) {
@@ -572,7 +581,10 @@ export async function runByHunk(
 /** The saved PR the whole-PR mode prefetches: the src/ files of #66 (PR 10.7), as GitHub's API lists them. */
 export const WHOLE_PR_SAMPLE = 'tests/fixtures/github-pr-66-src-files.json';
 
-/** How long the whole-PR mode lets one model run: past the last checkpoint (15 minutes). */
+/**
+ * How long the whole-PR mode lets one model run, from loading it to the end
+ * of the prefetch: past the last checkpoint (15 minutes).
+ */
 export const WHOLE_PR_MAX_MS = 20 * 60_000;
 
 /** How many lines are asked one at a time first, for the time per line without hunks. */
@@ -653,6 +665,9 @@ export async function prefetchWholePr(
   const labelOf = new Map(requests.flatMap((r) => r.lines.map((l) => [l.request.text, l.label])));
   const answered = new Map<string, number>();
   const mark = (label: string) => {
+    // The clicked line is the click's answer, even when the click joined its
+    // queued background job (review on #67).
+    if (label === clicked?.line) return;
     if (!answered.has(label)) answered.set(label, at());
   };
   const lastError = new Map<string, string>();
@@ -668,13 +683,17 @@ export async function prefetchWholePr(
     now: at,
     run: async (payload, options) => {
       const result = await ask(payload, options);
+      // Only what the background work answered with the model counts (review
+      // on #67): the click is timed on its own, and a line found in the cache
+      // was answered by the click, since the run starts with an empty cache.
+      if (payload.cause === 'click') return result;
       const label = payload.job?.label ?? labelOf.get(payload.context) ?? payload.context;
       if (result.status === 'failed') lastError.set(label, result.message);
       else if (result.status === 'hunk') {
         result.lines.forEach((line, i) => {
-          if (line.status !== 'missing') mark(payload.hunk?.lines[i]?.label ?? line.label);
+          if (line.status === 'done') mark(payload.hunk?.lines[i]?.label ?? line.label);
         });
-      } else mark(labelOf.get(payload.context) ?? label);
+      } else if (result.cached === undefined) mark(labelOf.get(payload.context) ?? label);
       return result;
     },
     failed: (result) => result.status === 'failed',
@@ -831,22 +850,34 @@ export async function runWholePr(
   bench: ReturnType<typeof createBench>,
   models: readonly string[],
   warmSample: BenchSample,
-  { atOnce = 1, maxMs = WHOLE_PR_MAX_MS }: { atOnce?: number; maxMs?: number } = {},
+  {
+    atOnce = 1,
+    maxMs = WHOLE_PR_MAX_MS,
+    sample = WHOLE_PR_SAMPLE,
+  }: { atOnce?: number; maxMs?: number; sample?: string } = {},
 ): Promise<WholePrResult[]> {
   const root = resolve(import.meta.dirname, '..');
-  const files = JSON.parse(readFileSync(join(root, WHOLE_PR_SAMPLE), 'utf8')) as PrFile[];
+  const files = JSON.parse(readFileSync(join(root, sample), 'utf8')) as PrFile[];
   const plan = wholePrPlan(files);
   const results: WholePrResult[] = [];
   for (const model of models) {
+    // `maxMs` covers the whole model (review on #67): loading it and the lines
+    // one at a time too, so a slow or stuck Ollama cannot run past it.
+    const modelStarted = performance.now();
+    const left = () => maxMs - (performance.now() - modelStarted);
+    const deadline = new AbortController();
+    const deadlineTimer = setTimeout(() => deadline.abort(), maxMs);
     console.log(`  ${model} · loading, then ${WHOLE_PR_SINGLE_LINES} lines one at a time …`);
-    await bench.explain(warmSample, model); // loads the model; not counted
+    await bench.explain(warmSample, model, undefined, deadline.signal); // loads the model; not counted
     const single: BenchRun[] = [];
     for (const line of plan.requests.flatMap((r) => r.lines).slice(0, WHOLE_PR_SINGLE_LINES)) {
-      single.push(await bench.single(line.request.text, model));
+      if (deadline.signal.aborted) break;
+      single.push(await bench.single(line.request.text, model, deadline.signal));
     }
+    clearTimeout(deadlineTimer);
     console.log(
       `  ${model} · the whole PR: ${plan.sent} lines in ${plan.requests.length} requests, ` +
-        `${formatMinutes(maxMs)} at most …`,
+        `${formatMinutes(Math.max(0, left()))} at most …`,
     );
     const ask = bench.wholePrAsk(model);
     const started = performance.now();
@@ -863,11 +894,12 @@ export async function runWholePr(
         }
         return result;
       },
-      { atOnce, maxMs },
+      // The rest of the model's time; when none is left, the run stops at once.
+      { atOnce, maxMs: Math.max(0, left()) },
     );
     const result: WholePrResult = {
       model,
-      sample: WHOLE_PR_SAMPLE,
+      sample,
       lines: plan.lines,
       sent: plan.sent,
       requests: plan.requests.length,

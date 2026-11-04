@@ -891,6 +891,11 @@ export interface WholePrResult {
   totalMs: number;
   /** True when the run hit the time limit before every line was answered. */
   stopped: boolean;
+  /**
+   * The lines the background work answered with the model. The click's line
+   * is left out (review on #67), even when the background work later finds
+   * it in the cache, so the share is what prefetching alone made instant.
+   */
   answered: AnsweredLine[];
   /** A sample of lines asked one at a time with nothing cached, as a click asks. */
   single: BenchRun[];
@@ -978,9 +983,9 @@ export function summarizeWholePr(
   return summary;
 }
 
-/** "37% (112 of 300)". */
+/** "37% (112 of 300)", rounded down so it never says 100% early. */
 export function formatCachedShare(c: CachedShare, lines: number): string {
-  return `${Math.round(c.share * 100)}% (${c.answered} of ${lines})`;
+  return `${Math.floor(c.share * 100)}% (${c.answered} of ${lines})`;
 }
 
 export const WHOLE_PR_TABLE_HEADER = [
@@ -1069,15 +1074,15 @@ export function formatWholePrReport(report: WholePrReport): string {
     '',
     ...machineLines(report),
     `- **Settings:** temperature ${report.temperature}, answers up to ${report.maxResponseTokens} ` +
-      `tokens per line, ${first?.atOnce ?? 1} at once, stopped after ` +
-      `${formatMinutes(report.maxMs)} at most`,
+      `tokens per line, ${first?.atOnce ?? 1} at once, each model stopped after ` +
+      `${formatMinutes(report.maxMs)} at most (loading it and the lines one at a time included)`,
     `- **How:** every changed line of ${first ? `\`${first.sample}\`` : 'a saved PR'} ` +
       `(${first ? `${first.lines} lines in ${first.requests} requests` : 'its lines'}) goes through ` +
       "the service worker's queue as Whole PR sends it, one request per hunk (PR 10.5), with an " +
       'empty cache and the model loaded. **One at a time, per line** asks a sample of lines alone ' +
       'first, as a click would with nothing cached. **Cached after N min** is the share of changed ' +
-      'lines a click would find answered by then. Once the first request is in, a click on a line ' +
-      'not reached yet is sent and timed.',
+      'lines the background work answered by then. Once the first request is in, a click on a ' +
+      'line not reached yet is sent and timed; its line is not counted as prefetched.',
     '',
     formatWholePrTable(report.results),
     '',

@@ -571,7 +571,7 @@ describe('the whole-PR conclusion', () => {
     const text = wholePrConclusion([run('m', 200, 12)], defaults)!;
     expect(text).toContain('**Most clicks are instant only after 15 minutes, with m.**');
     expect(text).toContain(
-      '42% of the changed lines were answered after 5 minutes and 100% after 15, and the whole PR (200 lines) took 12.0 min (3.6 s per line by hunk, slower than 3.0 s one at a time)',
+      '41% of the changed lines were answered after 5 minutes and 100% after 15, and the whole PR (200 lines) took 12.0 min (3.6 s per line by hunk, slower than 3.0 s one at a time)',
     );
   });
 

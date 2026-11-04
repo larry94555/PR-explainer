@@ -475,7 +475,7 @@ export interface WholePrDefaults {
 /** How long Whole PR may take to get through a PR at the per-PR limit before the limit should come down. */
 export const WHOLE_PR_LIMIT_BUDGET_MS = 30 * 60_000;
 
-const sharePercent = (share: number) => `${Math.round(share * 100)}%`;
+const sharePercent = (share: number) => `${Math.floor(share * 100)}%`;
 
 const cachedAfter = (s: WholePrSummary, minutes: number) =>
   s.cached.find((c) => c.minutes === minutes)?.share ?? 0;

@@ -20,6 +20,7 @@ import {
   goalVerdicts,
   formatTable,
   formatParallelReport,
+  formatCachedShare,
   formatMinutes,
   formatWholePrReport,
   formatWholePrTable,
@@ -1053,7 +1054,9 @@ describe('the whole-PR mode', () => {
 
     it('has a dated heading, the settings and a row per model', () => {
       expect(section).toContain('## 2026-11-04 09:05 · Whole PR · m');
-      expect(section).toContain('1 at once, stopped after 20.0 min at most');
+      expect(section).toContain(
+        '1 at once, each model stopped after 20.0 min at most (loading it and the lines one at a time included)',
+      );
       expect(section).toContain(
         '| m (100% CPU) | 10 | 10.0 min | 4.0 s | 60.0 s | 20% (2 of 10) | 60% (6 of 10) | 100% (10 of 10) |',
       );
@@ -1083,6 +1086,12 @@ describe('the whole-PR mode', () => {
       });
       expect(failedSection).toContain('- m: no click was sent (the run ended first).');
       expect(failedSection).toContain('Failed requests:\n\n- m: a.ts: lines 1, 2: timeout');
+    });
+
+    it('rounds the cached share down, so it never says 100% early', () => {
+      expect(formatCachedShare({ minutes: 5, answered: 251, share: 251 / 252 }, 252)).toBe(
+        '99% (251 of 252)',
+      );
     });
 
     it('formats minutes, and marks an estimate', () => {
@@ -1145,6 +1154,8 @@ describe('the whole-PR mode', () => {
     } = {}) {
       const clock = { t: 0 };
       const asked: string[] = [];
+      // What the explanation cache would hold: a hunk finds these lines cached.
+      const cache = new Set<string>();
       const ask: Ask = (payload, { signal }) =>
         new Promise((resolve, reject) => {
           const label = payload.job?.label ?? payload.cause ?? '';
@@ -1161,14 +1172,21 @@ describe('the whole-PR mode', () => {
                 status: 'hunk',
                 lines: payload.hunk.lines.map((l) => ({
                   label: l.label,
-                  status: missing.has(l.label) ? 'missing' : 'done',
+                  status: cache.has(l.context)
+                    ? 'cached'
+                    : missing.has(l.label)
+                      ? 'missing'
+                      : 'done',
                 })),
               });
             } else {
+              const cached = cache.has(payload.context);
+              cache.add(payload.context);
               resolve({
                 status: 'done',
                 model: 'm',
                 explanation: { what: 'w', why: 'y', concerns: 'c' },
+                ...(cached && { cached: {} as never }),
               });
             }
           }, 0);
@@ -1239,13 +1257,27 @@ describe('the whole-PR mode', () => {
         finishedWhileWaiting: 0,
         cancelled: 1,
       });
-      // The clicked line counts as answered from the click on.
-      expect(run.answered.find((a) => a.line === 'c.ts:added:5')).toEqual({
-        line: 'c.ts:added:5',
-        atMs: 2000,
-      });
-      expect(run.answered).toHaveLength(5);
+      // The clicked line is not counted as prefetched (review on #67), even
+      // though c.ts's hunk later finds it in the cache.
+      expect(run.answered.map((a) => a.line)).toEqual([
+        'a.ts:added:1',
+        'b.ts:added:2',
+        'b.ts:added:3',
+        'c.ts:added:4',
+      ]);
       expect(summarizeWholePr({ ...result(), ...run }).click?.waitedAtMostOneCancelled).toBe(true);
+    });
+
+    it('does not raise the prefetched share for a line only the click answered', async () => {
+      const { prefetchWholePr } = await import('../scripts/benchExplain.ts');
+      const fake = fakeModel();
+      const requests = [request('a.ts', [1]), request('b.ts', [2])];
+      const run = await prefetchWholePr(requests, fake.ask, { now: fake.now });
+      expect(run.click).toMatchObject({ line: 'b.ts:added:2', run: { ok: true } });
+      // b.ts's own request found its only line cached by the click.
+      expect(run.answered.map((a) => a.line)).toEqual(['a.ts:added:1']);
+      const s = summarizeWholePr({ ...result(), lines: 2, sent: 2, ...run });
+      expect(s.cached.map((c) => c.share)).toEqual([0.5, 0.5, 0.5]);
     });
 
     it('stops at the time limit and says so', async () => {
@@ -1256,6 +1288,41 @@ describe('the whole-PR mode', () => {
         maxMs: 5,
       });
       expect(run).toMatchObject({ stopped: true, answered: [] });
+    });
+
+    it('keeps loading and the lines one at a time inside the time limit (review on #67)', async () => {
+      const { runWholePr } = await import('../scripts/benchExplain.ts');
+      const hangs = (signal?: AbortSignal) =>
+        new Promise<BenchRun>((resolve) =>
+          signal?.addEventListener('abort', () => resolve({ ok: false, error: 'stopped' })),
+        );
+      const asked: string[] = [];
+      const bench = {
+        explain: (_s: unknown, _m: string, _f?: unknown, signal?: AbortSignal) => {
+          asked.push('warm-up');
+          return hangs(signal);
+        },
+        single: (_c: string, _m: string, signal?: AbortSignal) => {
+          asked.push('single');
+          return hangs(signal);
+        },
+        wholePrAsk: () => fakeModel({ hang: true }).ask,
+        ranOn: async () => undefined,
+      };
+      const started = Date.now();
+      const [model] = await runWholePr(
+        bench as never,
+        ['m'],
+        { name: 'x', context: ['y'] },
+        {
+          maxMs: 30,
+          sample: 'tests/fixtures/github-pr-10-files.json',
+        },
+      );
+      expect(Date.now() - started).toBeLessThan(2000);
+      // The stuck warm-up used up the time, so no line was asked alone.
+      expect(asked).toEqual(['warm-up']);
+      expect(model).toMatchObject({ single: [], answered: [], stopped: true });
     });
 
     it('ends at once with nothing to send', async () => {
