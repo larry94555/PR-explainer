@@ -117,18 +117,33 @@
         </div>
 
         <div class="field">
-          <label class="check">
-            <input id="explainAhead" name="explainAhead" type="checkbox" />
-            Explain ahead
-          </label>
+          <label for="explainAhead">Explain ahead</label>
+          <select id="explainAhead" name="explainAhead">
+            <option value="off">Off</option>
+            <option value="screen">Lines on screen</option>
+            <option value="pr">Whole PR</option>
+          </select>
           <p class="hint">
-            When a PR's Files changed tab has been left alone for 2 seconds, explains the added and
-            changed lines on screen, top to bottom, one at a time, so a click on them is answered at
-            once from the cache. At most 30 lines per page; scrolling moves on to the new lines. It
-            waits while you click or chat. Off by default because it keeps the model busy and uses
-            battery.
+            When a PR's Files changed tab has been left alone for 2 seconds, explains changed lines
+            before you click them, so a click is answered at once from the cache.
+            <strong>Lines on screen</strong> explains the lines you can see, at most 30 lines per
+            page. <strong>Whole PR</strong> works through every changed line of the PR, starting
+            with the code on screen, then the files next to it, then the rest, at most 500 lines per
+            PR in each tab and again after a new commit. Both wait while you click or chat and while
+            the tab is hidden. Off by default because it keeps the model busy and uses battery.
           </p>
           <p class="error" data-error-for="explainAhead" role="alert"></p>
+        </div>
+
+        <div class="field">
+          <label for="requestsAtOnce">Requests at once</label>
+          <input id="requestsAtOnce" name="requestsAtOnce" type="number" min="1" max="4" step="1" />
+          <p class="hint">
+            How many explanations are sent to Ollama together. More than 1 only helps when Ollama is
+            set to run several (OLLAMA_NUM_PARALLEL), and usually only on a GPU: on a CPU each
+            answer gets slower and a click waits longer. A click always goes first.
+          </p>
+          <p class="error" data-error-for="requestsAtOnce" role="alert"></p>
         </div>
 
         <div class="field">

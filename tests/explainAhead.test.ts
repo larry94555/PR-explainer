@@ -10,20 +10,26 @@ import {
   AHEAD_HUNK_MAX_LINES,
   AHEAD_IDLE_MS,
   AHEAD_MAX_PER_PAGE,
+  AHEAD_MAX_PER_PR,
   AHEAD_RETRY_MS,
   AHEAD_SETTING_KEY,
+  aheadModeOf,
   createExplainAhead,
   trackAheadSetting,
   visibleAddedLines,
   worthExplaining,
   type AheadEvent,
   type AheadLine,
+  type AheadPage,
   type ExplainAheadDeps,
   type HunkRequest,
   hunkRequest,
+  orderWholePr,
+  requestsAtOnceOf,
+  samePrHead,
 } from '../src/explainAhead';
 import type { ExplainStream, PortStream } from '../src/messaging/client';
-import { storageKey } from '../src/settings';
+import { AHEAD_MODES, storageKey } from '../src/settings';
 
 const DONE: ExplainResult = {
   status: 'done',
@@ -234,7 +240,7 @@ describe('Explain ahead', () => {
       if (env.ahead.running()) await finishCurrent(env);
     }
     expect(env.explain).toHaveBeenCalledTimes(AHEAD_MAX_PER_PAGE);
-    expect(env.events).toContainEqual({ type: 'limit', count: AHEAD_MAX_PER_PAGE });
+    expect(env.events).toContainEqual({ type: 'limit', count: AHEAD_MAX_PER_PAGE, wholePr: false });
 
     // Scrolling does not get past the limit on the same page.
     env.setLines(Array.from({ length: 5 }, (_, i) => line(`more${i}`)));
@@ -578,19 +584,446 @@ describe('the Explain ahead setting', () => {
     expect(AHEAD_SETTING_KEY).toBe(storageKey('explainAhead'));
   });
 
-  it('is off until read, then follows each save', async () => {
+  it('is Off until read, then follows each save, reading an old on or off (PR 10.6)', async () => {
     let listener: (changes: Record<string, StorageChange>, area: string) => void = () => {};
-    const seen: boolean[] = [];
+    const seen: string[] = [];
     const setting = trackAheadSetting(
       { get: async () => ({ [AHEAD_SETTING_KEY]: true }) },
       { addListener: (l) => void (listener = l) },
-      (on) => seen.push(on),
+      (mode) => seen.push(mode),
     );
-    expect(setting.current()).toBe(false);
+    expect(setting.current()).toBe('off');
     await settle();
-    expect(setting.current()).toBe(true);
+    // Saved as on before PR 10.6.
+    expect(setting.current()).toBe('screen');
+    listener({ [AHEAD_SETTING_KEY]: { newValue: 'pr' } }, 'sync');
+    expect(setting.current()).toBe('pr');
     listener({ [AHEAD_SETTING_KEY]: { newValue: false } }, 'sync');
-    expect(setting.current()).toBe(false);
-    expect(seen).toEqual([true, false]);
+    expect(setting.current()).toBe('off');
+    expect(seen).toEqual(['screen', 'pr', 'off']);
+  });
+
+  it('reads the same values the settings page saves', () => {
+    expect(AHEAD_MODES.map(aheadModeOf)).toEqual([...AHEAD_MODES]);
+    expect([true, false, 'fast', undefined].map(aheadModeOf)).toEqual([
+      'screen',
+      'off',
+      'off',
+      'off',
+    ]);
+  });
+});
+
+describe('Whole PR (PR 10.6)', () => {
+  /** A changed line `n` of `file`, as built from the PR's diff, `order` in the PR. */
+  const prLine = (file: string, n: number, order: number): AheadLine => ({
+    key: `${file}:added:${n}`,
+    text: `line ${n}`,
+    filePath: file,
+    order,
+    request: () => ({
+      text: `context of ${file}:${n}`,
+      subject: { filePath: file, startLine: n },
+    }),
+  });
+  /** Five files of two lines each, in the PR's order. */
+  const FILES = ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'];
+  const PR_LINES = FILES.flatMap((file, i) => [prLine(file, 1, i * 2), prLine(file, 2, i * 2 + 1)]);
+  /** The page's own copy of a line on screen (no order, as visibleAddedLines gives it). */
+  const shown = (file: string, n: number): AheadLine => ({
+    key: `${file}:added:${n}`,
+    text: `line ${n}`,
+    filePath: file,
+    request: () => null,
+  });
+
+  function prSetup(overrides: Partial<ExplainAheadDeps> = {}) {
+    let screen: AheadLine[] = [shown('c.ts', 2)];
+    let prLines: AheadLine[] | null = PR_LINES;
+    let key: AheadPage | undefined = { pr: 'o/r#1', head: 'abc' };
+    const env = setup({
+      wholePr: () => true,
+      prLines: async () => prLines,
+      lines: () => screen,
+      pageKey: () => key,
+      ...overrides,
+    });
+    return {
+      ...env,
+      setScreen: (lines: AheadLine[]) => (screen = lines),
+      setPrLines: (lines: AheadLine[] | null) => (prLines = lines),
+      setKey: (value: AheadPage | undefined) => (key = value),
+      /** Waits out the idle time and the PR diff read. */
+      async idle() {
+        vi.advanceTimersByTime(AHEAD_IDLE_MS);
+        await settle();
+      },
+    };
+  }
+
+  it('orders the lines on screen first, then their files and the files next to them, then the rest', () => {
+    const ordered = orderWholePr(PR_LINES, [shown('c.ts', 2)]);
+    expect(ordered.map((l) => [l.key, l.priority])).toEqual([
+      ['c.ts:added:2', 'on-screen'],
+      // The rest of the file on screen, and the files just above and below it.
+      ['b.ts:added:1', 'near-screen'],
+      ['b.ts:added:2', 'near-screen'],
+      ['c.ts:added:1', 'near-screen'],
+      ['d.ts:added:1', 'near-screen'],
+      ['d.ts:added:2', 'near-screen'],
+      // The rest in the PR's order.
+      ['a.ts:added:1', 'rest'],
+      ['a.ts:added:2', 'rest'],
+      ['e.ts:added:1', 'rest'],
+      ['e.ts:added:2', 'rest'],
+    ]);
+    // Nothing on screen: the PR's order.
+    expect(orderWholePr(PR_LINES, []).map((l) => l.key)).toEqual(PR_LINES.map((l) => l.key));
+    expect(new Set(orderWholePr(PR_LINES, []).map((l) => l.priority))).toEqual(new Set(['rest']));
+  });
+
+  it('counts a file on screen with no changed line in view as on screen', () => {
+    // A file header or removed lines in view: its file and the files next to it come first.
+    const ordered = orderWholePr(PR_LINES, [{ ...shown('e.ts', 99), key: 'e.ts:removed:99' }]);
+    expect(ordered.slice(0, 4).map((l) => [l.key, l.priority])).toEqual([
+      ['d.ts:added:1', 'near-screen'],
+      ['d.ts:added:2', 'near-screen'],
+      ['e.ts:added:1', 'near-screen'],
+      ['e.ts:added:2', 'near-screen'],
+    ]);
+  });
+
+  it('queues every changed line of the PR, telling the queue its priority and place', async () => {
+    const env = prSetup();
+    env.ahead.restart();
+    await env.idle();
+    expect(env.texts()).toEqual(['context of c.ts:2']);
+    expect(env.streams[0]!.options.job).toEqual({
+      label: 'c.ts:added:2',
+      priority: 'on-screen',
+      order: 5,
+    });
+    expect(env.ahead.queued()).toHaveLength(PR_LINES.length - 1);
+    for (let i = 0; i < PR_LINES.length; i++) await finishCurrent(env);
+    expect(env.texts()).toHaveLength(PR_LINES.length);
+    expect(env.streams[1]!.options.job).toEqual({
+      label: 'b.ts:added:1',
+      priority: 'near-screen',
+      order: 2,
+    });
+    expect(env.streams.at(-1)!.options.job).toEqual({
+      label: 'e.ts:added:2',
+      priority: 'rest',
+      order: 9,
+    });
+    expect(env.ahead.running()).toBeUndefined();
+  });
+
+  it('sends a hunk of the PR as one request, with its priority and place', async () => {
+    const hunk: DiffHunk = {
+      header: '@@ -1 +1,3 @@',
+      index: 0,
+      lines: [1, 2, 3].map((n) => ({
+        filePath: 'f.ts',
+        lineNumber: n,
+        side: 'added' as const,
+        text: `line ${n}`,
+      })),
+    };
+    const lines = [1, 2, 3].map((n, order) => ({
+      ...prLine('f.ts', n, order),
+      hunk: { id: 'patch:0', read: () => hunk },
+    }));
+    const explainHunk = vi.fn<NonNullable<ExplainAheadDeps['explainHunk']>>(() => ({
+      result: new Promise<HunkResult>(() => {}),
+      stop: () => {},
+    }));
+    const env = prSetup({ prLines: async () => lines, explainHunk });
+    env.setScreen([]);
+    env.ahead.restart();
+    await env.idle();
+    expect(explainHunk).toHaveBeenCalledTimes(1);
+    const [request, options] = explainHunk.mock.calls[0]!;
+    expect(request.label).toBe('f.ts: lines 1, 2, 3');
+    expect(options).toEqual({ debugId: 'ahead-1', job: { priority: 'rest', order: 0 } });
+  });
+
+  it('counts only the lines a hunk answered toward the limit (review on #65)', async () => {
+    const hunk: DiffHunk = {
+      header: '@@ -1 +1,2 @@',
+      index: 0,
+      lines: [1, 2].map((n) => ({
+        filePath: 'f.ts',
+        lineNumber: n,
+        side: 'added' as const,
+        text: `line ${n}`,
+      })),
+    };
+    const lines = [1, 2].map((n, order) => ({
+      ...prLine('f.ts', n, order),
+      hunk: { id: 'patch:0', read: () => hunk },
+    }));
+    let answer!: (result: HunkResult) => void;
+    const explainHunk = vi.fn<NonNullable<ExplainAheadDeps['explainHunk']>>(() => ({
+      result: new Promise<HunkResult>((resolve) => (answer = resolve)),
+      stop: () => {},
+    }));
+    const env = prSetup({ prLines: async () => lines, explainHunk, maxPerPr: 2 });
+    env.setScreen([]);
+    env.ahead.restart();
+    await env.idle();
+    expect(explainHunk).toHaveBeenCalledTimes(1);
+    // The model's answer left out line 2.
+    answer({
+      status: 'hunk',
+      lines: [
+        { label: 'f.ts:added:1', status: 'done' },
+        { label: 'f.ts:added:2', status: 'missing' },
+      ],
+    });
+    await settle();
+    expect(env.events).not.toContainEqual(expect.objectContaining({ type: 'limit' }));
+    // After a scroll, line 2 is asked again, on its own, within the limit.
+    env.ahead.restart();
+    await env.idle();
+    expect(env.texts()).toEqual(['context of f.ts:2']);
+    await finishCurrent(env);
+    // Now both lines count, and the limit is reached on the next pass.
+    env.ahead.restart();
+    await env.idle();
+    expect(env.explain).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves the code you scroll to to the front', async () => {
+    const env = prSetup();
+    env.ahead.restart();
+    await env.idle();
+    expect(env.ahead.running()).toBe('c.ts:added:2');
+    // Scroll to the last file while the first line is explained.
+    env.setScreen([shown('e.ts', 1), shown('e.ts', 2)]);
+    env.ahead.restart();
+    await env.idle();
+    // The line already running keeps going.
+    expect(env.streams[0]!.stopped).toBe(false);
+    expect(env.ahead.queued().slice(0, 4)).toEqual([
+      'e.ts:added:1',
+      'e.ts:added:2',
+      'd.ts:added:1',
+      'd.ts:added:2',
+    ]);
+    await finishCurrent(env);
+    expect(env.texts().at(-1)).toBe('context of e.ts:1');
+    expect(env.streams.at(-1)!.options.job?.priority).toBe('on-screen');
+  });
+
+  it(`stops at ${AHEAD_MAX_PER_PR} lines the model answered for one PR`, async () => {
+    const many = Array.from({ length: AHEAD_MAX_PER_PR + 20 }, (_, i) =>
+      prLine('big.ts', i + 1, i),
+    );
+    const env = prSetup({ prLines: async () => many });
+    env.setScreen([]);
+    env.ahead.restart();
+    await env.idle();
+    for (let i = 0; i < AHEAD_MAX_PER_PR; i++) await finishCurrent(env);
+    expect(env.explain).toHaveBeenCalledTimes(AHEAD_MAX_PER_PR);
+    expect(env.events).toContainEqual({ type: 'limit', count: AHEAD_MAX_PER_PR, wholePr: true });
+    expect(env.ahead.queued()).toEqual([]);
+  });
+
+  it('keeps the limit and the lines done across page changes of the same PR and head', async () => {
+    const env = prSetup({ maxPerPr: 3 });
+    env.setScreen([]);
+    env.ahead.restart();
+    await env.idle();
+    await finishCurrent(env);
+    await finishCurrent(env);
+    // Off to the Conversation tab and back.
+    env.ahead.pageChanged();
+    env.ahead.restart();
+    await env.idle();
+    // The line stopped by the page change is asked again; the two done are
+    // not, and only one more fits.
+    expect(env.texts()).toEqual([
+      'context of a.ts:1',
+      'context of a.ts:2',
+      'context of b.ts:1',
+      'context of b.ts:1',
+    ]);
+    await finishCurrent(env);
+    expect(env.explain).toHaveBeenCalledTimes(4);
+    expect(env.events).toContainEqual({ type: 'limit', count: 3, wholePr: true });
+  });
+
+  it('starts over when the PR gets a new commit', async () => {
+    const env = prSetup({ maxPerPr: 2 });
+    env.setScreen([]);
+    env.ahead.restart();
+    await env.idle();
+    await finishCurrent(env);
+    await finishCurrent(env);
+    expect(env.explain).toHaveBeenCalledTimes(2);
+    // The push changes the code, so the requests (and cache keys) are new.
+    env.setPrLines(
+      PR_LINES.map((l) => ({ ...l, request: () => ({ ...l.request()!, text: `new ${l.key}` }) })),
+    );
+    env.setKey({ pr: 'o/r#1', head: 'def' });
+    env.ahead.pageChanged();
+    env.ahead.restart();
+    await env.idle();
+    // The same names, but new code: asked again, with a new limit.
+    expect(env.texts().at(-1)).toBe('new a.ts:added:1');
+    await finishCurrent(env);
+    await finishCurrent(env);
+    expect(env.explain).toHaveBeenCalledTimes(4);
+    expect(env.events.filter((e) => e.type === 'limit')).toHaveLength(2);
+  });
+
+  it('starts over on every page change off a PR', async () => {
+    const env = prSetup({ maxPerPr: 1 });
+    env.setKey(undefined);
+    env.ahead.pageChanged();
+    env.setScreen([]);
+    env.ahead.restart();
+    await env.idle();
+    await finishCurrent(env);
+    env.ahead.pageChanged();
+    env.ahead.restart();
+    await env.idle();
+    // Asked again (and answered from the cache, so it does not count), then the next.
+    expect(env.texts()).toEqual(['context of a.ts:1', 'context of a.ts:1', 'context of a.ts:2']);
+  });
+
+  it('keeps the lines done through a page that does not say its head, such as the Conversation tab', async () => {
+    const env = prSetup({ maxPerPr: 2 });
+    env.setScreen([]);
+    env.ahead.restart();
+    await env.idle();
+    await finishCurrent(env);
+    await finishCurrent(env);
+    env.setKey({ pr: 'o/r#1', head: null });
+    env.ahead.pageChanged();
+    env.setKey({ pr: 'o/r#1', head: 'abc' });
+    env.ahead.pageChanged();
+    env.ahead.restart();
+    await env.idle();
+    expect(env.explain).toHaveBeenCalledTimes(2);
+    // Another PR starts over.
+    env.setKey({ pr: 'o/r#2', head: 'abc' });
+    env.ahead.pageChanged();
+    env.ahead.restart();
+    await env.idle();
+    // Asked again from the start (the fake's cache answers the first two at
+    // once), and the next line is sent.
+    expect(env.texts().slice(2)).toEqual([
+      'context of a.ts:1',
+      'context of a.ts:2',
+      'context of b.ts:1',
+    ]);
+  });
+
+  it('tells whether a page change keeps the lines done', () => {
+    const at = (pr: string, head: string | null): AheadPage => ({ pr, head });
+    expect(samePrHead(at('o/r#1', 'a'), at('o/r#1', 'a'))).toBe(true);
+    expect(samePrHead(at('o/r#1', 'a'), at('o/r#1', null))).toBe(true);
+    expect(samePrHead(at('o/r#1', null), at('o/r#1', 'b'))).toBe(true);
+    expect(samePrHead(at('o/r#1', 'a'), at('o/r#1', 'b'))).toBe(false);
+    expect(samePrHead(at('o/r#1', 'a'), at('o/r#2', 'a'))).toBe(false);
+    expect(samePrHead(undefined, at('o/r#1', 'a'))).toBe(false);
+    expect(samePrHead(at('o/r#1', 'a'), undefined)).toBe(false);
+  });
+
+  it('pauses while busy (a hidden tab, a click or chat answer) and carries on after', async () => {
+    const env = prSetup();
+    env.setBusy(true);
+    env.ahead.restart();
+    await env.idle();
+    vi.advanceTimersByTime(AHEAD_RETRY_MS * 10);
+    expect(env.explain).not.toHaveBeenCalled();
+    env.setBusy(false);
+    vi.advanceTimersByTime(AHEAD_RETRY_MS);
+    expect(env.texts()).toEqual(['context of c.ts:2']);
+  });
+
+  it('sends nothing while click-to-explain is off', async () => {
+    const env = prSetup();
+    env.setEnabled(false);
+    env.ahead.restart();
+    await env.idle();
+    expect(env.explain).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing after leaving the PR, even when its diff arrives late', async () => {
+    let answer!: (lines: AheadLine[]) => void;
+    const env = prSetup({ prLines: () => new Promise((resolve) => (answer = resolve)) });
+    env.ahead.restart();
+    await env.idle();
+    env.ahead.cancel();
+    answer(PR_LINES);
+    await settle();
+    vi.advanceTimersByTime(AHEAD_IDLE_MS * 5);
+    expect(env.explain).not.toHaveBeenCalled();
+    expect(env.ahead.queued()).toEqual([]);
+  });
+
+  it('stops when the setting is turned off', async () => {
+    const env = prSetup();
+    env.ahead.restart();
+    await env.idle();
+    env.setOn(false);
+    env.ahead.cancel();
+    expect(env.streams[0]!.stopped).toBe(true);
+    expect(env.ahead.queued()).toEqual([]);
+  });
+
+  it('explains the lines on screen when the PR diff cannot be read', async () => {
+    const env = prSetup();
+    env.setPrLines(null);
+    env.setScreen([line('x'), line('y')]);
+    env.ahead.restart();
+    await env.idle();
+    expect(env.texts()).toEqual(['context of x']);
+    expect(env.ahead.queued()).toEqual(['y']);
+  });
+
+  it('leaves the PR diff alone with Lines on screen', async () => {
+    const prLines = vi.fn(async () => PR_LINES);
+    const env = prSetup({ wholePr: () => false, prLines });
+    env.setScreen([line('x')]);
+    env.ahead.restart();
+    await env.idle();
+    expect(prLines).not.toHaveBeenCalled();
+    expect(env.texts()).toEqual(['context of x']);
+    expect(env.streams[0]!.options.job).toEqual({ label: 'x' });
+  });
+
+  it('sends up to Requests at once together, and stops them all when cancelled', async () => {
+    let atOnce = 2;
+    const env = prSetup({ concurrency: () => atOnce });
+    env.ahead.restart();
+    await env.idle();
+    expect(env.texts()).toEqual(['context of c.ts:2', 'context of b.ts:1']);
+    expect(env.ahead.runningAll()).toEqual(['c.ts:added:2', 'b.ts:added:1']);
+    await finishCurrent(env);
+    // One finished, so the next starts: still two running.
+    expect(env.ahead.runningAll()).toHaveLength(2);
+    atOnce = 1;
+    await finishCurrent(env);
+    expect(env.ahead.runningAll()).toHaveLength(1);
+    env.ahead.cancel();
+    expect(env.streams.filter((s) => s.stopped)).toHaveLength(1);
+    expect(env.ahead.runningAll()).toEqual([]);
+  });
+
+  it('keeps Requests at once to 1 to 4', async () => {
+    const env = prSetup({ concurrency: () => 10 });
+    env.ahead.restart();
+    await env.idle();
+    expect(env.ahead.runningAll()).toHaveLength(4);
+  });
+
+  it('reads Requests at once as the settings page saves it', () => {
+    expect([1, 2, 4, 0, 5, 1.5, '2', undefined].map(requestsAtOnceOf)).toEqual([
+      1, 2, 4, 1, 1, 1, 1, 1,
+    ]);
   });
 });

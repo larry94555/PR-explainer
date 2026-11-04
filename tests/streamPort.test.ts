@@ -222,6 +222,30 @@ describe('explain stream over a port', () => {
     );
   });
 
+  it("passes on Whole PR's priority for the queue (PR 10.6), and drops any other", async () => {
+    const model = controllableExplain();
+    const port = fakePort(EXPLAIN_PORT, { id: EXTENSION_ID });
+    serveExplainPort(port, model.explain);
+    port.emitMessage({
+      type: 'start',
+      context: 'ctx',
+      cause: 'ahead',
+      job: { label: 'a', order: 2, priority: 'near-screen' },
+    });
+    expect(model.explain.mock.calls[0]![0].job).toEqual({
+      label: 'a',
+      order: 2,
+      priority: 'near-screen',
+    });
+    for (const priority of ['click', 'hovered', 'soon', 3]) {
+      const other = controllableExplain();
+      const otherPort = fakePort(EXPLAIN_PORT, { id: EXTENSION_ID });
+      serveExplainPort(otherPort, other.explain);
+      otherPort.emitMessage({ type: 'start', context: 'ctx', job: { label: 'a', priority } });
+      expect(other.explain.mock.calls[0]![0].job).toEqual({ label: 'a' });
+    }
+  });
+
   it('ignores a malformed job, and cuts a long label', async () => {
     const model = controllableExplain();
     const port = fakePort(EXPLAIN_PORT, { id: EXTENSION_ID });

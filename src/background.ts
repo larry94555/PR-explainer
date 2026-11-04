@@ -32,7 +32,7 @@ import { createWarmup } from './llm/warmup';
 import { MessageRouter } from './messaging/router';
 import { listenForChatPorts, listenForExplainPorts } from './messaging/streamPort';
 import type { RoundTripSink } from './net/roundTrips';
-import { DEFAULT_SETTINGS, getSettings, saveSettings } from './settings';
+import { DEFAULT_SETTINGS, followRequestsAtOnce, getSettings, saveSettings } from './settings';
 import { setupToolbarToggle } from './toolbarToggle';
 
 console.info('[PR Explainer] service worker started');
@@ -126,7 +126,11 @@ const explainHunk = createHunkExplainHandler(explainDeps);
 const QUEUE_GROUP_IDLE_MS = 5_000;
 let queueGroup = crypto.randomUUID();
 let queueIdleSince: number | undefined;
+// Requests at once (PR 10.6): how many jobs run together, read as each job
+// could start, so a save applies at once.
+const requestsAtOnce = followRequestsAtOnce(chrome.storage.sync, chrome.storage.onChanged);
 const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult | HunkResult>({
+  concurrency: () => requestsAtOnce.current(),
   run: (payload, options) =>
     payload.hunk ? explainHunk(payload, options) : explain(payload, options),
   failed: (result) => result.status === 'failed',

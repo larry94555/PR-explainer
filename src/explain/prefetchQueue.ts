@@ -109,7 +109,11 @@ export interface QueueDeps<P, R> {
    * the lines its answer left out (PR 10.5). They take its priority.
    */
   followUps?(spec: JobSpec<P>, result: R): JobSpec<P>[];
-  concurrency?: number;
+  /**
+   * How many jobs run at once. A function is read each time a job could
+   * start, so a change to Requests at once (PR 10.6) applies at once.
+   */
+  concurrency?: number | (() => number);
   /** Clock in milliseconds. Defaults to Date.now. */
   now?(): number;
   onEvent?(event: QueueEvent): void;
@@ -166,7 +170,10 @@ function abortError(): Error {
 }
 
 export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<P, R> {
-  const concurrency = Math.max(1, deps.concurrency ?? DEFAULT_CONCURRENCY);
+  const concurrency = () => {
+    const value = typeof deps.concurrency === 'function' ? deps.concurrency() : deps.concurrency;
+    return Math.max(1, Math.floor(value ?? DEFAULT_CONCURRENCY) || DEFAULT_CONCURRENCY);
+  };
   const now = deps.now ?? Date.now;
   const jobs = new Map<string, Job<P, R>>();
   let seq = 0;
@@ -335,7 +342,7 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       else if (clickActive()) continue;
       // A line being answered as part of a hunk waits for it.
       else if (cover) continue;
-      else if (running().length < concurrency) start(job);
+      else if (running().length < concurrency()) start(job);
       else if (job.spec.priority === 'hovered') {
         const lower = lowerRunning(job);
         if (lower) {
@@ -460,8 +467,10 @@ let freshCount = 0;
  */
 export function explainJob(payload: ExplainPayload, tab?: number): JobSpec<ExplainPayload> {
   // A hunk is only ever background work.
-  const priority =
-    payload.hunk && payload.cause !== 'hover' ? 'on-screen' : priorityFor(payload.cause);
+  const base = payload.hunk && payload.cause !== 'hover' ? 'on-screen' : priorityFor(payload.cause);
+  // Prefetching the whole PR (PR 10.6) says how near the screen its code is.
+  const asked = payload.job?.priority;
+  const priority = base === 'on-screen' && asked && rank(asked) >= rank('on-screen') ? asked : base;
   const lineId = (context: string) => `${payload.pr ?? ''}\n${context}`;
   // A hunk (PR 10.5) is named by its lines, and answers each line's job.
   const covers = payload.hunk?.lines.map((line) => lineId(line.context));

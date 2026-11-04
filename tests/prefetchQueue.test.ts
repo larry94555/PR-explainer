@@ -125,6 +125,23 @@ describe('the background queue', () => {
     expect(env.live().map((r) => r.payload)).toEqual(['b', 'c']);
   });
 
+  it('reads a `concurrency` function each time a job could start (Requests at once, PR 10.6)', async () => {
+    let atOnce = 1;
+    const env = setup({ concurrency: () => atOnce });
+    for (const id of ['a', 'b', 'c', 'd']) void env.queue.add(env.job(id));
+    expect(env.live().map((r) => r.payload)).toEqual(['a']);
+    atOnce = 3;
+    env.live()[0]!.finish();
+    await settle();
+    expect(env.live().map((r) => r.payload)).toEqual(['b', 'c', 'd']);
+  });
+
+  it('runs one at a time when `concurrency` gives something that is not a count', () => {
+    const env = setup({ concurrency: () => NaN });
+    for (const id of ['a', 'b']) void env.queue.add(env.job(id));
+    expect(env.live()).toHaveLength(1);
+  });
+
   it('resolves each job with its answer', async () => {
     const env = setup();
     const answer = env.queue.add(env.job('a'));
@@ -518,6 +535,36 @@ describe('explain requests as jobs', () => {
     const b = explainJob({ context: 'code', pr: 'o/r#1', fresh: true });
     expect(a.id).not.toBe(b.id);
     expect(a.id).not.toBe(explainJob({ context: 'code', pr: 'o/r#1' }).id);
+  });
+
+  it('takes the priority Whole PR gives a background request (PR 10.6), but never a higher one', () => {
+    const ahead = (priority: unknown) =>
+      explainJob({
+        context: 'c',
+        cause: 'ahead',
+        job: { label: 'x', priority: priority as 'rest' },
+      }).priority;
+    expect(ahead('near-screen')).toBe('near-screen');
+    expect(ahead('rest')).toBe('rest');
+    expect(ahead('on-screen')).toBe('on-screen');
+    expect(ahead('click')).toBe('on-screen');
+    expect(ahead('hovered')).toBe('on-screen');
+    // A click and a hover keep theirs.
+    expect(explainJob({ context: 'c', job: { label: 'x', priority: 'rest' } }).priority).toBe(
+      'click',
+    );
+    expect(
+      explainJob({ context: 'c', cause: 'hover', job: { label: 'x', priority: 'rest' } }).priority,
+    ).toBe('hovered');
+    // A hunk too.
+    expect(
+      explainJob({
+        context: 'section',
+        cause: 'ahead',
+        job: { label: 'x', priority: 'near-screen' },
+        hunk: { text: 'section', lines: [{ label: 'l', context: 'one', line: 1, code: '+a' }] },
+      }).priority,
+    ).toBe('near-screen');
   });
 
   it('keeps the place in the PR', () => {

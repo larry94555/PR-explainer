@@ -1,6 +1,7 @@
 // The settings page: the Ollama URL, a model dropdown filled from the server,
 // temperature, max response length, context size, how long to keep the model
-// loaded (PR 8.3), Explain on hover (PR 8.7), Explain ahead (PR 9.10), Let the
+// loaded (PR 8.3), Explain on hover (PR 8.7), Explain ahead (PR 9.10; Off,
+// Lines on screen or Whole PR from PR 10.6) and Requests at once, Let the
 // model think (PR 9.5), the Debug section (Show prompt, PR 6.2, and Debug
 // window, PR 9.3), Save, and Test connection. Under the model, a line says
 // whether it is a reasoning model and whether its thinking is on (PR 9.5). The
@@ -98,7 +99,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const contextInput = el<HTMLInputElement>(doc, 'contextTokens');
   const keepAliveInput = el<HTMLInputElement>(doc, 'keepAliveMinutes');
   const hoverInput = el<HTMLInputElement>(doc, 'explainOnHover');
-  const aheadInput = el<HTMLInputElement>(doc, 'explainAhead');
+  const aheadSelect = el<HTMLSelectElement>(doc, 'explainAhead');
+  const requestsInput = el<HTMLInputElement>(doc, 'requestsAtOnce');
   const thinkInput = el<HTMLInputElement>(doc, 'letModelThink');
   const streamInput = el<HTMLInputElement>(doc, 'streamAnswers');
   const thinkingLine = el(doc, 'thinking-status');
@@ -129,7 +131,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     contextInput.value = settings.contextTokens > 0 ? String(settings.contextTokens) : '';
     keepAliveInput.value = String(settings.keepAliveMinutes);
     hoverInput.checked = settings.explainOnHover;
-    aheadInput.checked = settings.explainAhead;
+    aheadSelect.value = settings.explainAhead;
+    requestsInput.value = String(settings.requestsAtOnce);
     thinkInput.checked = settings.letModelThink;
     streamInput.checked = settings.streamAnswers;
     showPromptInput.checked = settings.showPrompt;
@@ -140,6 +143,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     const maxTokens = maxTokensInput.value.trim();
     const contextTokens = contextInput.value.trim();
     const keepAlive = keepAliveInput.value.trim();
+    const requests = requestsInput.value.trim();
     return {
       llmUrl: urlInput.value.trim().replace(/\/+$/, ''),
       model: modelSelect.value,
@@ -151,7 +155,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       contextTokens: contextTokens === '' ? 0 : Number(contextTokens),
       keepAliveMinutes: keepAlive === '' ? NaN : Number(keepAlive),
       explainOnHover: hoverInput.checked,
-      explainAhead: aheadInput.checked,
+      explainAhead: aheadSelect.value as Settings['explainAhead'],
+      requestsAtOnce: requests === '' ? NaN : Number(requests),
       letModelThink: thinkInput.checked,
       streamAnswers: streamInput.checked,
       showPrompt: showPromptInput.checked,

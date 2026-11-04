@@ -26,12 +26,13 @@ import { currentPopup, openPopup } from './popup/popup';
 import { buildWaterfall } from './popup/latencyBreakdown';
 import { traceLine } from './trace/clickTrace';
 import { createFileContextLoader, headShaFromPage, type CodeSpan } from './fileContext';
-import { createPatchRequestLoader, describePatchResult } from './patchRequests';
+import { aheadLines, createPatchRequestLoader, describePatchResult } from './patchRequests';
 import type { FileContext } from './explain/explainPrompt';
 import { createPrefetcher, trackHoverSetting, type PrefetchEvent } from './prefetch';
 import {
   createExplainAhead,
   trackAheadSetting,
+  trackRequestsSetting,
   visibleAddedLines,
   type AheadEvent,
   type ExplainAheadDeps,
@@ -95,9 +96,9 @@ function loadFileContext(code: CodeSpan | undefined): Promise<FileContext | unde
 }
 
 // Every changed line's request, built from the PR's diff on GitHub's API
-// rather than the page (PR 10.4), read once per PR and head commit. Nothing
-// sends them yet (PR 10.6 will); for now the list is read only with the
-// Debug window setting on, so the debug window can show it.
+// rather than the page (PR 10.4), read once per PR and head commit. Explain
+// ahead's Whole PR sends them (PR 10.6); with the Debug window setting on, the
+// list is also read as the page opens, so the debug window can show it.
 const patchRequests = createPatchRequestLoader({
   fetchJson: async (url, signal) => {
     const response = await githubFetch(
@@ -337,7 +338,7 @@ const askWorker: ClickHandlerDeps['explain'] = (context, onChunk, options) => {
 // Every line of one hunk in one request (PR 10.5), for Explain ahead. Each
 // line carries what a click on it would send, so the service worker saves
 // its answer under the key that click looks up.
-const askWorkerHunk: NonNullable<ExplainAheadDeps['explainHunk']> = (request, { debugId }) => {
+const askWorkerHunk: NonNullable<ExplainAheadDeps['explainHunk']> = (request, { debugId, job }) => {
   const pr = prName(location.href);
   const ready = Promise.all([
     loadPrMetadata(),
@@ -351,7 +352,8 @@ const askWorkerHunk: NonNullable<ExplainAheadDeps['explainHunk']> = (request, { 
       prInfo,
       cause: 'ahead',
       debugId,
-      job: { label: request.label },
+      // Whole PR (PR 10.6) says how near the screen the hunk is.
+      job: { label: request.label, ...job },
       hunk: {
         text: request.text,
         lines: request.lines.map((line, i) => ({
@@ -384,12 +386,25 @@ function describePrefetch(event: PrefetchEvent): string {
 // click on them is answered from the cache (src/explainAhead.ts). The service
 // worker's queue (PR 10.3) stops it for a moment for a click or a hover on
 // other code, and joins a click on the same line to it.
-const aheadSetting = trackAheadSetting(chrome.storage.sync, chrome.storage.onChanged, (on) => {
-  if (!on) ahead.cancel();
+// Whole PR (PR 10.6) works through every changed line of the PR from its
+// diff on GitHub's API, the code on screen first, up to 500 lines per PR and
+// head commit in this tab (each tab keeps its own count; lines another tab
+// already explained are cache hits and do not count); Requests at once sets how many requests it sends together.
+const aheadSetting = trackAheadSetting(chrome.storage.sync, chrome.storage.onChanged, (mode) => {
+  if (mode === 'off') ahead.cancel();
   else if (features.attached) ahead.restart();
 });
+const requestsSetting = trackRequestsSetting(chrome.storage.sync, chrome.storage.onChanged);
+/** The PR and its head commit, for Whole PR's per-PR limit. */
+function aheadPage(): { pr: string; head: string | null } | undefined {
+  const pr = parsePrUrl(location.href);
+  const name = prName(location.href);
+  return pr && name ? { pr: name, head: headShaFromPage(document, pr) } : undefined;
+}
 function describeAhead(event: AheadEvent): string {
-  if (event.type === 'limit') return `explain ahead stopped at ${event.count} lines on this page`;
+  if (event.type === 'limit') {
+    return `explain ahead stopped at ${event.count} lines ${event.wholePr ? 'for this PR' : 'on this page'}`;
+  }
   const seconds = 'elapsedMs' in event ? ` after ${(event.elapsedMs / 1000).toFixed(1)} s` : '';
   if (event.type === 'finished') {
     const how =
@@ -401,7 +416,19 @@ function describeAhead(event: AheadEvent): string {
 const ahead = createExplainAhead({
   explain: askWorker,
   explainHunk: askWorkerHunk,
-  isOn: () => aheadSetting.current(),
+  isOn: () => aheadSetting.current() !== 'off',
+  wholePr: () => aheadSetting.current() === 'pr',
+  prLines: async () => {
+    const pr = parsePrUrl(location.href);
+    const result = pr ? await patchRequests.load(pr) : undefined;
+    if (result?.status !== 'done') {
+      if (result) console.info(`[PR Explainer] Whole PR: ${describePatchResult(result)}`);
+      return null;
+    }
+    return aheadLines(result);
+  },
+  pageKey: aheadPage,
+  concurrency: () => requestsSetting.current(),
   isEnabled: () => enabled.current() === true,
   // One request at a time: not while a click's or a chat answer is being
   // written, not while Explain on hover runs, and not in a hidden tab.

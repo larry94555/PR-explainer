@@ -101,11 +101,18 @@ function serveStreamPort<P, R>(
 /** The queue's name for the line and its place in the PR, when they are well formed. */
 function toJobInfo(value: unknown): ExplainJobInfo | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
-  const { label, order } = value as { label?: unknown; order?: unknown };
+  const { label, order, priority } = value as {
+    label?: unknown;
+    order?: unknown;
+    priority?: unknown;
+  };
   if (typeof label !== 'string' || !label) return undefined;
   return {
     label: label.slice(0, 200),
     ...(typeof order === 'number' && Number.isFinite(order) && { order }),
+    ...((priority === 'on-screen' || priority === 'near-screen' || priority === 'rest') && {
+      priority,
+    }),
   };
 }
 

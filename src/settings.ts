@@ -55,13 +55,22 @@ export interface Settings {
    */
   explainOnHover: boolean;
   /**
-   * Explain the added and changed lines on screen once the Files changed tab
-   * has been idle for a moment (PR 9.10), one at a time, so most clicks are
-   * answered from the cache. Off by default, because it keeps the model busy
-   * and uses battery. The content script reads it straight from storage
-   * (src/explainAhead.ts).
+   * Explain changed lines before they are clicked, once the Files changed tab
+   * has been idle for a moment, so most clicks are answered from the cache:
+   * `screen` explains the lines on screen (PR 9.10), `pr` works through the
+   * whole PR, starting with the code on screen (PR 10.6). Off by default,
+   * because it keeps the model busy and uses battery. A saved on or off from
+   * before PR 10.6 reads as `screen` or `off`. The content script reads it
+   * straight from storage (src/explainAhead.ts).
    */
-  explainAhead: boolean;
+  explainAhead: AheadMode;
+  /**
+   * How many explanations the service worker's queue runs at once (PR 10.6,
+   * src/explain/prefetchQueue.ts), and how many Explain ahead sends at once.
+   * 1 by default: on a CPU, Ollama's requests share the same cores, so more
+   * only helps when Ollama is set to run several and usually on a GPU.
+   */
+  requestsAtOnce: number;
   /**
    * Let a reasoning model, such as deepseek-r1, think before it answers
    * (PR 9.5). Off by default: explaining a few lines does not need it, and
@@ -88,6 +97,10 @@ export interface Settings {
 
 export type SettingsField = keyof Settings;
 
+/** The choices of Explain ahead (PR 10.6). */
+export const AHEAD_MODES = ['off', 'screen', 'pr'] as const;
+export type AheadMode = (typeof AHEAD_MODES)[number];
+
 export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   llmUrl: 'http://localhost:11434',
   model: '',
@@ -97,7 +110,8 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   contextTokens: 0,
   keepAliveMinutes: 30,
   explainOnHover: false,
-  explainAhead: false,
+  explainAhead: 'off',
+  requestsAtOnce: 1,
   letModelThink: false,
   streamAnswers: false,
   showPrompt: false,
@@ -151,6 +165,8 @@ export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
 export const KEEP_ALIVE_MINUTES_RANGE = { min: 0, max: 1440 } as const;
 /** A set context size must be in this range; 0 means automatic. */
 export const CONTEXT_TOKENS_RANGE = { min: 512, max: 131072 } as const;
+/** Requests at once (PR 10.6). */
+export const REQUESTS_AT_ONCE_RANGE = { min: 1, max: 4 } as const;
 
 // Code never leaves the laptop, so only loopback addresses are accepted.
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -209,7 +225,11 @@ function checkField(field: SettingsField, value: unknown): string | null {
     case 'explainOnHover':
       return typeof value === 'boolean' ? null : 'Explain on hover must be on or off.';
     case 'explainAhead':
-      return typeof value === 'boolean' ? null : 'Explain ahead must be on or off.';
+      return (AHEAD_MODES as readonly unknown[]).includes(value)
+        ? null
+        : 'Explain ahead must be Off, Lines on screen or Whole PR.';
+    case 'requestsAtOnce':
+      return checkNumber(value, REQUESTS_AT_ONCE_RANGE, true, 'Requests at once');
     case 'letModelThink':
       return typeof value === 'boolean' ? null : 'Let the model think must be on or off.';
     case 'streamAnswers':
@@ -291,6 +311,11 @@ async function readStored(storage: StorageAreaLike): Promise<Partial<Settings>> 
   for (const field of FIELDS) {
     const key = storageKey(field);
     if (!Object.hasOwn(raw, key)) continue;
+    // Explain ahead was on or off before PR 10.6.
+    if (field === 'explainAhead' && typeof raw[key] === 'boolean') {
+      stored.explainAhead = raw[key] ? 'screen' : 'off';
+      continue;
+    }
     // A bad stored value (hand-edited, or from an older version) falls back to
     // the default instead of breaking the extension.
     if (checkField(field, raw[key]) === null) Object.assign(stored, { [field]: raw[key] });
@@ -331,4 +356,43 @@ export async function saveSettings(
   }
   if (Object.keys(items).length > 0) await storage.set(items);
   return getSettings(storage);
+}
+
+/** Requests at once as stored, or the default when it is not a valid value. */
+export function requestsAtOnceOf(stored: unknown): number {
+  return checkField('requestsAtOnce', stored) === null
+    ? (stored as number)
+    : DEFAULT_SETTINGS.requestsAtOnce;
+}
+
+/** The part of chrome.storage.onChanged followRequestsAtOnce uses. */
+export interface SettingsChangedLike {
+  addListener(
+    listener: (changes: Record<string, { newValue?: unknown }>, areaName: string) => void,
+  ): void;
+}
+
+/**
+ * Follows Requests at once in the service worker (PR 10.6), so the queue's
+ * limit changes as soon as the setting is saved. The default until it is read.
+ */
+export function followRequestsAtOnce(
+  storage: StorageAreaLike,
+  onChanged: SettingsChangedLike,
+): { current(): number } {
+  const key = storageKey('requestsAtOnce');
+  let current = DEFAULT_SETTINGS.requestsAtOnce;
+  let changed = false;
+  onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'sync' || !Object.hasOwn(changes, key)) return;
+    changed = true;
+    current = requestsAtOnceOf(changes[key]?.newValue);
+  });
+  storage.get([key]).then(
+    (stored) => {
+      if (!changed) current = requestsAtOnceOf(stored[key]);
+    },
+    () => undefined,
+  );
+  return { current: () => current };
 }

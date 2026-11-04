@@ -111,6 +111,11 @@ export interface ExplainPayload {
 export interface ExplainJobInfo {
   label: string;
   order?: number;
+  /**
+   * For Explain ahead's whole-PR mode (PR 10.6): how near the screen the
+   * code is. Only background priorities are taken.
+   */
+  priority?: 'on-screen' | 'near-screen' | 'rest';
 }
 
 /** The most file lines accepted, so a bad message cannot make a huge prompt. */

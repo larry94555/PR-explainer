@@ -22,14 +22,15 @@
 // GitHub sign-in (the API does not take the site's cookies), so it works for
 // public repositories; for a private one GitHub answers 404 and the result
 // says so, and everything works from the page as before. It only builds
-// requests: PR 10.5 groups them by hunk and PR 10.6 sends them.
+// requests: Explain ahead's Whole PR (PR 10.6) sends them, one request per
+// hunk (PR 10.5), through aheadLines.
 //
 // This file is part of the content script, which must not share runtime code
 // with the service worker (see src/content.ts).
 
 import { requestFromHunk, type ExplainRequest } from './clickHandler';
 import type { DiffHunk, DiffLine } from './diffDom';
-import { worthExplaining } from './explainAhead';
+import { worthExplaining, type AheadLine } from './explainAhead';
 import type { PrRef } from './prUrl';
 
 /** One file of the API's answer; only the fields used here. */
@@ -49,6 +50,10 @@ export interface PatchLine {
   lineNumber: number;
   /** Which hunk of the PR the line is in, counted from 0 across all files (for PR 10.5). */
   hunk: number;
+  /** The line's code. */
+  text: string;
+  /** The hunk itself, as the page would give it, for one request per hunk (PR 10.5). */
+  diff: DiffHunk;
   request: ExplainRequest;
 }
 
@@ -139,6 +144,8 @@ export function requestsFromFiles(files: readonly PrFile[]): Omit<PatchRequests,
           filePath: line.filePath,
           lineNumber: line.lineNumber,
           hunk: hunkCount,
+          text: line.text,
+          diff: hunk,
           request: requestFromHunk({ ...hunk, index }),
         });
       });
@@ -262,4 +269,19 @@ export function describePatchResult(result: PatchResult): string {
   if (result.leftOut.length) parts.push(`${result.leftOut.length} left out`);
   if (!result.complete) parts.push('more files than GitHub lists');
   return parts.join(', ');
+}
+
+/**
+ * The lines for Explain ahead's Whole PR (PR 10.6), in the PR's order. Lines
+ * of one hunk share an id, so they go in one request (PR 10.5).
+ */
+export function aheadLines(requests: Pick<PatchRequests, 'lines'>): AheadLine[] {
+  return requests.lines.map((line, order) => ({
+    key: line.key,
+    text: line.text,
+    filePath: line.filePath,
+    order,
+    request: () => line.request,
+    hunk: { id: `patch:${line.hunk}`, read: () => line.diff },
+  }));
 }
