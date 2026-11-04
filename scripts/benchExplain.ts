@@ -27,12 +27,17 @@ import { splitAnswer, thinkShare } from '../src/popup/latencyBreakdown';
 import { DEFAULT_SETTINGS, type Settings } from '../src/settings';
 import {
   formatMs,
+  formatRate,
   formatShare,
   summarizeAhead,
+  summarizeLevel,
   type AheadLineResult,
   type AheadResult,
   type BenchRun,
   type BenchSample,
+  type LevelResult,
+  type ParallelResult,
+  type TimedRun,
 } from './benchStats.ts';
 
 export { DEFAULT_SETTINGS };
@@ -145,13 +150,20 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
     /** The context window explanations with `model` run with. */
     contextTokens: (model: string) => contextSizer(settingsFor(model)),
 
-    /** Explains `sample` once with `model`, timing it the way the popup does. */
-    explain: (sample: BenchSample, model: string): Promise<BenchRun> =>
-      timed(handlerFor(model), {
-        context: sample.context.join('\n'),
-        ...(sample.pr && { prInfo: sample.pr }),
-        ...(sample.fileContext !== undefined && { fileContext: sample.fileContext as never }),
-      }),
+    /**
+     * Explains `sample` once with `model`, timing it the way the popup does.
+     * `onFirstToken` hears when the first piece of the answer arrives.
+     */
+    explain: (sample: BenchSample, model: string, onFirstToken?: () => void): Promise<BenchRun> =>
+      timed(
+        handlerFor(model),
+        {
+          context: sample.context.join('\n'),
+          ...(sample.pr && { prInfo: sample.pr }),
+          ...(sample.fileContext !== undefined && { fileContext: sample.fileContext as never }),
+        },
+        onFirstToken && { onFirstToken },
+      ),
 
     /**
      * The ahead mode (PR 9.11): explains each line ahead, one at a time, as
@@ -166,7 +178,7 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
         const run = await timed(
           explain,
           { context: line.context, pr: AHEAD_PR, cause },
-          (cached) => (fromCache = cached),
+          { onCached: (cached) => (fromCache = cached) },
         );
         return { run, fromCache };
       });
@@ -177,12 +189,16 @@ export function createBench(llmUrl: string, platform: Platform, overrides: Parti
 /**
  * Runs one explain request, timing it the way the popup does: the whole
  * answer, the first piece of it, Ollama's timings and the thinking part.
- * `onCached` hears whether the answer came from the cache.
+ * `onCached` hears whether the answer came from the cache, and
+ * `onFirstToken` when the first piece of the answer arrives.
  */
 async function timed(
   explain: ReturnType<typeof createExplainHandler>,
   payload: ExplainPayload,
-  onCached?: (cached: boolean) => void,
+  {
+    onCached,
+    onFirstToken,
+  }: { onCached?: (cached: boolean) => void; onFirstToken?: () => void } = {},
 ): Promise<BenchRun> {
   const startedAt = performance.now();
   let firstTokenMs: number | undefined;
@@ -191,7 +207,10 @@ async function timed(
     const result = await explain(payload, {
       onChunk: (chunk) => {
         reply += chunk;
-        if (firstTokenMs === undefined && chunk) firstTokenMs = performance.now() - startedAt;
+        if (firstTokenMs === undefined && chunk) {
+          firstTokenMs = performance.now() - startedAt;
+          onFirstToken?.();
+        }
       },
     });
     const totalMs = performance.now() - startedAt;
@@ -247,6 +266,114 @@ export async function runAhead(
       `  ${model} · ahead ${formatMs(s.aheadTotalMs)} in all (${formatMs(s.aheadMedianMs)} per line), ` +
         `clicks within 2 s: ${formatShare(s)}`,
     );
+    results.push(result);
+  }
+  return results;
+}
+
+// --- Requests at once (PR 10.1) --------------------------------------------
+
+/** One request of the parallel mode: explains `sample`, calling `onFirstToken` when the answer starts. */
+export type ParallelAsk = (sample: BenchSample, onFirstToken: () => void) => Promise<BenchRun>;
+
+/**
+ * The requests every level sends, the same list for each so the levels are
+ * compared on the same work (review on #60): every sample `runs` times, and
+ * more whole rounds of the samples until there are at least two rounds of the
+ * highest level, so even that level has more work than it runs at once.
+ */
+export function levelJobs(
+  samples: readonly BenchSample[],
+  runs: number,
+  levels: readonly number[],
+) {
+  const rounds = Math.max(runs, Math.ceil((Math.max(...levels) * 2) / samples.length));
+  return Array.from({ length: samples.length * rounds }, (_, i) => samples[i % samples.length]!);
+}
+
+/**
+ * One level of the parallel mode: keeps `atOnce` requests going until every
+ * job is answered. Once the model is writing (the first piece of any answer
+ * arrives, or the first request ends), `click` is sent as one more request
+ * and timed. Times are from the start of the level.
+ */
+export async function runLevel(
+  atOnce: number,
+  jobs: readonly BenchSample[],
+  click: BenchSample,
+  ask: ParallelAsk,
+  now: () => number = () => performance.now(),
+): Promise<LevelResult> {
+  const t0 = now();
+  const at = () => now() - t0;
+  const timedAsk = async (sample: BenchSample, onStarted?: () => void): Promise<TimedRun> => {
+    const startMs = at();
+    let firstTokenAtMs: number | undefined;
+    const run = await ask(sample, () => {
+      firstTokenAtMs ??= at();
+      onStarted?.();
+    });
+    return {
+      run,
+      startMs,
+      endMs: at(),
+      ...(firstTokenAtMs !== undefined && { firstTokenAtMs }),
+    };
+  };
+
+  let sendClick!: () => void;
+  const busy = new Promise<void>((resolve) => (sendClick = resolve));
+  const clicked = busy.then(() => timedAsk(click));
+
+  const answers: TimedRun[] = new Array(jobs.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < jobs.length) {
+      const i = next++;
+      answers[i] = await timedAsk(jobs[i]!, sendClick);
+      sendClick();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(atOnce, jobs.length) }, worker));
+  sendClick(); // when there were no jobs
+  return { atOnce, answers, click: await clicked };
+}
+
+/**
+ * The parallel mode for each model (PR 10.1): each level in turn, after
+ * loading the model once with the first sample (not counted). Prints a line
+ * per level as it finishes.
+ */
+export async function runParallel(
+  bench: ReturnType<typeof createBench>,
+  models: readonly string[],
+  samples: readonly BenchSample[],
+  levels: readonly number[],
+  runs: number,
+): Promise<ParallelResult[]> {
+  const results: ParallelResult[] = [];
+  for (const model of models) {
+    console.log(`  ${model} · loading …`);
+    await bench.explain(samples[0]!, model);
+    const result: ParallelResult = { model, levels: [] };
+    const jobs = levelJobs(samples, runs, levels);
+    for (const atOnce of levels) {
+      process.stdout.write(
+        `  ${model} · ${atOnce} at once · ${jobs.length} answers and a click … `,
+      );
+      const level = await runLevel(atOnce, jobs, samples[0]!, (sample, onFirstToken) =>
+        bench.explain(sample, model, onFirstToken),
+      );
+      result.levels.push(level);
+      const s = summarizeLevel(level);
+      console.log(
+        `${formatRate(s.perMinute)} answers/min, median ${formatMs(s.medianMs)} per answer, ` +
+          `${s.ranTogether} ran together, click ${s.clickError ? `failed: ${s.clickError}` : formatMs(s.clickMs)}` +
+          (s.failed ? ` (${s.failed} failed)` : ''),
+      );
+    }
+    const ranOn = await bench.ranOn(model);
+    if (ranOn) result.ranOn = ranOn;
     results.push(result);
   }
   return results;

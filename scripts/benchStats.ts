@@ -108,7 +108,7 @@ function formatCount(n: number | undefined): string {
   return n === undefined ? NONE : Math.round(n).toLocaleString('en-US');
 }
 
-function formatRate(n: number | undefined): string {
+export function formatRate(n: number | undefined): string {
   return n === undefined ? NONE : n.toFixed(1);
 }
 
@@ -441,6 +441,274 @@ export function formatAheadReport(report: AheadReport): string {
   return out.join('\n') + '\n';
 }
 
+// --- Requests at once (PR 10.1) --------------------------------------------
+
+/**
+ * One request of the parallel mode, with when it happened. Times are in
+ * milliseconds from the start of its level.
+ */
+export interface TimedRun {
+  run: BenchRun;
+  startMs: number;
+  endMs: number;
+  /** When the first piece of the answer arrived, if any did. */
+  firstTokenAtMs?: number;
+}
+
+/** One level of the parallel mode: `atOnce` requests kept going until every answer was in. */
+export interface LevelResult {
+  atOnce: number;
+  answers: TimedRun[];
+  /** The extra request sent while the others were running, timed as a click. */
+  click?: TimedRun;
+}
+
+/** The parallel mode's results for one model. */
+export interface ParallelResult {
+  model: string;
+  levels: LevelResult[];
+  /** Where the model ran, worded like `ollama ps`. */
+  ranOn?: string;
+}
+
+/**
+ * Two requests count as running together only when Ollama worked on both for
+ * longer than this, so the gap between one answer ending and the next
+ * starting, seen from the script, is not taken for overlap.
+ */
+export const OVERLAP_SLACK_MS = 250;
+
+/**
+ * When Ollama was working on a request: from Ollama's own reading and writing
+ * time counted back from the end, since a request waiting in Ollama's queue
+ * looks the same as a running one from outside. Falls back to the first
+ * token, then to when it was sent.
+ */
+function busySpan({ run, startMs, endMs, firstTokenAtMs }: TimedRun): [number, number] {
+  const t = run.ok ? run.timings : undefined;
+  const working =
+    t?.answerMs !== undefined || t?.promptMs !== undefined
+      ? (t.promptMs ?? 0) + (t.answerMs ?? 0)
+      : undefined;
+  const from =
+    working !== undefined && working > 0
+      ? Math.max(startMs, endMs - working)
+      : (firstTokenAtMs ?? startMs);
+  return [from, endMs];
+}
+
+/**
+ * The most finished requests Ollama worked on at the same moment. 1 means it
+ * ran them one after another however many were sent; 0 when none finished.
+ */
+export function mostAtOnce(runs: readonly TimedRun[], slackMs = OVERLAP_SLACK_MS): number {
+  const events = runs
+    .filter((r) => r.run.ok)
+    .map(busySpan)
+    .filter(([from, to]) => to - from > slackMs)
+    .flatMap(([from, to]) => [
+      { at: from + slackMs, step: 1 },
+      { at: to, step: -1 },
+    ])
+    // An end before a start at the same moment, so touching spans do not count.
+    .sort((a, b) => a.at - b.at || a.step - b.step);
+  let now = 0;
+  let most = 0;
+  for (const { step } of events) {
+    now += step;
+    most = Math.max(most, now);
+  }
+  return Math.max(most, runs.some((r) => r.run.ok) ? 1 : 0);
+}
+
+export interface LevelSummary {
+  atOnce: number;
+  answers: number;
+  failed: number;
+  /** From the start of the level to the last answer. */
+  wallMs: number;
+  /** Finished answers per minute of wall time, the total for the level. */
+  perMinute?: number;
+  /** Per answer, from sending it to its whole answer. */
+  medianMs?: number;
+  slowestMs?: number;
+  /** The most requests Ollama worked on together (see mostAtOnce). */
+  ranTogether: number;
+  /** How long the click took, from sending it to its whole answer. */
+  clickMs?: number;
+  clickError?: string;
+}
+
+export function summarizeLevel(level: LevelResult): LevelSummary {
+  const done = level.answers.filter((a) => a.run.ok);
+  const totals = done.map((a) => (a.run as Extract<BenchRun, { ok: true }>).totalMs);
+  const wallMs = Math.max(0, ...level.answers.map((a) => a.endMs));
+  const summary: LevelSummary = {
+    atOnce: level.atOnce,
+    answers: level.answers.length,
+    failed: level.answers.length - done.length,
+    wallMs,
+    ranTogether: mostAtOnce(level.answers),
+  };
+  const values = {
+    perMinute: done.length && wallMs > 0 ? (done.length / wallMs) * 60_000 : undefined,
+    medianMs: median(totals),
+    slowestMs: slowest(totals),
+    clickMs: level.click?.run.ok ? level.click.run.totalMs : undefined,
+  };
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined) (summary as unknown as Record<string, number>)[key] = value;
+  }
+  if (level.click && !level.click.run.ok) summary.clickError = level.click.run.error;
+  return summary;
+}
+
+/** True when more than one request was sent at once but Ollama ran them one at a time. */
+export function ranOneAtATime(s: LevelSummary): boolean {
+  return s.atOnce > 1 && s.answers - s.failed > 1 && s.ranTogether === 1;
+}
+
+/** How much more throughput 2 at once must give to be worth it: 20% more answers per minute. */
+export const PARALLEL_MIN_GAIN = 1.2;
+/** How much slower the click may get at 2 at once: 10%, about the noise between runs. */
+export const PARALLEL_MAX_CLICK_SLOWDOWN = 1.1;
+
+const percent = (ratio: number) => `${Math.round(Math.abs(ratio - 1) * 100)}%`;
+
+/**
+ * Which level PR 10.6 should use for `model`: 1 unless 2 at once gives
+ * clearly more answers per minute without slowing the click.
+ */
+export function recommendAtOnce(levels: readonly LevelSummary[]): {
+  atOnce: 1 | 2;
+  why: string;
+} {
+  const one = levels.find((l) => l.atOnce === 1);
+  const two = levels.find((l) => l.atOnce === 2);
+  if (!one?.perMinute || !two?.perMinute) {
+    return { atOnce: 1, why: 'levels 1 and 2 were not both measured, so the safe choice' };
+  }
+  // A default must not trade failed explanations for speed (review on #60).
+  const failures = [one, two].filter((l) => l.failed > 0);
+  if (failures.length) {
+    const which = failures
+      .map((l) => `${l.failed} of ${l.answers} failed at ${l.atOnce} at once`)
+      .join(' and ');
+    return { atOnce: 1, why: `${which}, so the safe choice` };
+  }
+  const gain = two.perMinute / one.perMinute;
+  const more = gain >= 1 ? `${percent(gain)} more` : `${percent(gain)} fewer`;
+  if (gain < PARALLEL_MIN_GAIN) {
+    return { atOnce: 1, why: `2 at once gave ${more} answers per minute` };
+  }
+  if (one.clickMs === undefined || two.clickMs === undefined) {
+    return { atOnce: 1, why: `2 at once gave ${more} answers per minute, but a click failed` };
+  }
+  const slowdown = two.clickMs / one.clickMs;
+  const click = `the click took ${percent(slowdown)} ${slowdown >= 1 ? 'longer' : 'less'}`;
+  return slowdown <= PARALLEL_MAX_CLICK_SLOWDOWN
+    ? { atOnce: 2, why: `2 at once gave ${more} answers per minute and ${click}` }
+    : { atOnce: 1, why: `2 at once gave ${more} answers per minute, but ${click}` };
+}
+
+export const PARALLEL_TABLE_HEADER = [
+  'Model',
+  'At once',
+  'Answers',
+  'Answers/min',
+  'Median per answer',
+  'Slowest per answer',
+  'Ran together',
+  'Click',
+] as const;
+
+/** A row per model and level. */
+export function formatParallelTable(results: readonly ParallelResult[]): string {
+  const line = (cells: readonly string[]) => `| ${cells.map(cell).join(' | ')} |`;
+  return [
+    line(PARALLEL_TABLE_HEADER),
+    line(PARALLEL_TABLE_HEADER.map((_, i) => (i === 0 ? '---' : '---:'))),
+    ...results.flatMap(({ model, levels, ranOn }) =>
+      levels.map((level) => {
+        const s = summarizeLevel(level);
+        return line([
+          ranOn ? `${model} (${ranOn})` : model,
+          String(s.atOnce),
+          formatRuns({ runs: s.answers, failed: s.failed }),
+          formatRate(s.perMinute),
+          formatMs(s.medianMs),
+          formatMs(s.slowestMs),
+          String(s.ranTogether),
+          s.clickError ? 'failed' : formatMs(s.clickMs),
+        ]);
+      }),
+    ),
+  ].join('\n');
+}
+
+export interface ParallelReport {
+  startedAt: Date;
+  machine: MachineInfo;
+  llmUrl: string;
+  temperature: number;
+  maxResponseTokens: number;
+  /** OLLAMA_NUM_PARALLEL as this shell has it, if set. */
+  numParallel?: string;
+  results: ParallelResult[];
+}
+
+/** The section `npm run bench -- --parallel …` adds to docs/latency.md. */
+export function formatParallelReport(report: ParallelReport): string {
+  const answers = report.results[0]?.levels[0]?.answers.length ?? 0;
+  const out = [
+    `## ${formatDate(report.startedAt)} · Requests at once · ${report.results.map((r) => r.model).join(', ')}`,
+    '',
+    ...machineLines(report),
+    `- **Settings:** temperature ${report.temperature}, answers up to ${report.maxResponseTokens} ` +
+      `tokens, ${answers} answers per level`,
+    report.numParallel !== undefined
+      ? `- **OLLAMA_NUM_PARALLEL:** ${report.numParallel} in this shell (Ollama uses the value it was started with)`
+      : '- **OLLAMA_NUM_PARALLEL:** not set in this shell (Ollama uses the value it was started ' +
+        'with, or its own default)',
+    '- **How:** at each level, that many requests are kept going at once until every answer is ' +
+      'in. Once the model is writing, one more request (a click) is sent and timed. ' +
+      '**Answers/min** is the total for the level. **Ran together** is the most requests Ollama ' +
+      'worked on at the same moment, from its own timings; 1 means it ran them one after another. ' +
+      'The extension will cancel background requests for a click (PR 10.3), so **Click** is the ' +
+      'worst case.',
+    '',
+    formatParallelTable(report.results),
+  ];
+  const notes: string[] = [];
+  for (const { model, levels } of report.results) {
+    const summaries = levels.map(summarizeLevel);
+    const serial = summaries.filter(ranOneAtATime).map((s) => s.atOnce);
+    if (serial.length) {
+      notes.push(
+        `- ${model}: at ${serial.join(' and ')} at once, Ollama ran the requests one after ` +
+          'another anyway (OLLAMA_NUM_PARALLEL is probably 1 on the server).',
+      );
+    }
+    const { atOnce, why } = recommendAtOnce(summaries);
+    notes.push(
+      `- **For PR 10.6, ${model}: ${atOnce} at once.** ${why[0]!.toUpperCase()}${why.slice(1)}.`,
+    );
+  }
+  out.push('', ...notes);
+  const failures = report.results.flatMap(({ model, levels }) =>
+    levels.flatMap(({ atOnce, answers, click }) => [
+      ...answers.flatMap((a, i) =>
+        a.run.ok ? [] : [`- ${model}, ${atOnce} at once, answer ${i + 1}: ${a.run.error}`],
+      ),
+      ...(click && !click.run.ok
+        ? [`- ${model}, ${atOnce} at once, click: ${click.run.error}`]
+        : []),
+    ]),
+  );
+  if (failures.length) out.push('', 'Failed requests:', '', ...failures);
+  return out.join('\n') + '\n';
+}
+
 export const LATENCY_DOC_INTRO = `# Explanation latency
 
 Measured with \`npm run bench\` (roadmap PR 8.2), which sends the extension's real explain
@@ -473,9 +741,33 @@ export interface BenchArgs {
   save: boolean;
   /** Run the ahead mode (PR 9.11) instead of timing each sample. */
   ahead: boolean;
+  /**
+   * How many requests to send at once, one level after another (PR 10.1),
+   * instead of timing each sample alone. Left out when not asked for.
+   */
+  parallel?: number[];
 }
 
-/** Reads `[model ...] [--runs N] [--url URL] [--no-save] [--ahead]`. Throws on anything else. */
+/** The most requests `--parallel` sends at once. */
+export const MAX_AT_ONCE = 8;
+
+/** Reads "1,2,4": whole numbers from 1 to MAX_AT_ONCE, smallest first, each once. */
+export function parseLevels(text: string): number[] {
+  const parts = text.split(',').map((p) => p.trim());
+  const levels = parts.map(Number);
+  const bad = parts.some((p) => !/^\d+$/.test(p));
+  if (bad || levels.some((n) => n < 1 || n > MAX_AT_ONCE)) {
+    throw new Error(
+      `--parallel must be a list of whole numbers from 1 to ${MAX_AT_ONCE}, such as 1,2,4`,
+    );
+  }
+  return [...new Set(levels)].sort((a, b) => a - b);
+}
+
+/**
+ * Reads `[model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4]`.
+ * Throws on anything else.
+ */
 export function parseBenchArgs(argv: readonly string[]): BenchArgs {
   const args: BenchArgs = { models: [], runs: 3, save: true, ahead: false };
   for (let i = 0; i < argv.length; i++) {
@@ -498,11 +790,16 @@ export function parseBenchArgs(argv: readonly string[]): BenchArgs {
       args.save = false;
     } else if (flag === '--ahead') {
       args.ahead = true;
+    } else if (flag === '--parallel') {
+      args.parallel = parseLevels(value());
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown option ${arg}`);
     } else {
       args.models.push(arg);
     }
+  }
+  if (args.ahead && args.parallel) {
+    throw new Error('--ahead and --parallel cannot be used together');
   }
   return args;
 }

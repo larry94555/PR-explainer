@@ -17,8 +17,14 @@ import {
   formatShare,
   goalVerdicts,
   formatTable,
+  formatParallelReport,
   LATENCY_DOC_INTRO,
   median,
+  mostAtOnce,
+  PARALLEL_TABLE_HEADER,
+  ranOneAtATime,
+  recommendAtOnce,
+  summarizeLevel,
   parseBenchArgs,
   parseSample,
   slowest,
@@ -28,6 +34,10 @@ import {
   type AheadLineResult,
   type BenchReport,
   type BenchRun,
+  type BenchSample,
+  type LevelResult,
+  type LevelSummary,
+  type TimedRun,
 } from '../scripts/benchStats.ts';
 import { buildFittedExplainPrompt } from '../src/explain/fitPrompt';
 import { toFileContext } from '../src/explain/explainHandler';
@@ -520,5 +530,306 @@ describe('the lines the ahead mode explains', () => {
       /^File: tests\/manifest\.test\.ts \(TypeScript\)\nClicked line: added, line 48 of the new file\n/,
     );
     expect(lines[0]!.context).toContain('Surrounding diff (the clicked line starts with >):');
+  });
+});
+
+describe('requests at once (PR 10.1)', () => {
+  // A finished answer that Ollama worked on from `from` to `to` (its own
+  // reading and writing time), sent at `sent`.
+  const timed = (from: number, to: number, sent = 0): TimedRun => ({
+    run: ok(to - sent, { timings: { promptMs: 100, answerMs: to - from - 100 } }),
+    startMs: sent,
+    endMs: to,
+  });
+  const failedRun = (to: number): TimedRun => ({ run: failed(), startMs: 0, endMs: to });
+
+  describe('mostAtOnce', () => {
+    it('is 1 when the answers came one after another, even if all were sent at once', () => {
+      expect(mostAtOnce([timed(0, 4000), timed(4000, 8000), timed(8010, 12_000)])).toBe(1);
+    });
+
+    it('does not count a short overlap from timing noise', () => {
+      expect(mostAtOnce([timed(0, 4000), timed(3900, 8000)])).toBe(1);
+    });
+
+    it('counts the requests Ollama worked on together', () => {
+      expect(mostAtOnce([timed(0, 6000), timed(0, 6000), timed(3000, 9000)])).toBe(3);
+      expect(mostAtOnce([timed(0, 6000), timed(0, 6000), timed(6000, 12_000)])).toBe(2);
+    });
+
+    it('falls back to the first token, then to when it was sent, without Ollama timings', () => {
+      const plain = (sent: number, end: number, firstTokenAtMs?: number): TimedRun => ({
+        run: ok(end - sent),
+        startMs: sent,
+        endMs: end,
+        ...(firstTokenAtMs !== undefined && { firstTokenAtMs }),
+      });
+      expect(mostAtOnce([plain(0, 4000, 1000), plain(0, 8000, 4000)])).toBe(1);
+      expect(mostAtOnce([plain(0, 4000), plain(0, 8000)])).toBe(2);
+    });
+
+    it('leaves out failed requests, and is 0 when none finished', () => {
+      expect(mostAtOnce([timed(0, 4000), failedRun(4000)])).toBe(1);
+      expect(mostAtOnce([failedRun(10)])).toBe(0);
+      expect(mostAtOnce([])).toBe(0);
+    });
+  });
+
+  describe('summarizeLevel', () => {
+    it('works out answers per minute, the time per answer and the click', () => {
+      const level: LevelResult = {
+        atOnce: 2,
+        answers: [timed(0, 6000), timed(0, 8000), timed(6000, 12_000, 6000), failedRun(12_000)],
+        click: { run: ok(9000), startMs: 1000, endMs: 10_000 },
+      };
+      expect(summarizeLevel(level)).toEqual({
+        atOnce: 2,
+        answers: 4,
+        failed: 1,
+        wallMs: 12_000,
+        perMinute: 15, // 3 finished in 12 s
+        medianMs: 6000,
+        slowestMs: 8000,
+        ranTogether: 2,
+        clickMs: 9000,
+      });
+    });
+
+    it('notes a failed click and a level with no finished answers', () => {
+      const s = summarizeLevel({
+        atOnce: 1,
+        answers: [failedRun(500)],
+        click: { run: failed('boom'), startMs: 0, endMs: 10 },
+      });
+      expect(s).toEqual({
+        atOnce: 1,
+        answers: 1,
+        failed: 1,
+        wallMs: 500,
+        ranTogether: 0,
+        clickError: 'boom',
+      });
+    });
+  });
+
+  describe('ranOneAtATime', () => {
+    const at = (atOnce: number, ranTogether: number, answers = 4, failedCount = 0) =>
+      ({ atOnce, ranTogether, answers, failed: failedCount, wallMs: 1 }) as LevelSummary;
+    it('is true only when more than one was sent but Ollama ran one at a time', () => {
+      expect(ranOneAtATime(at(2, 1))).toBe(true);
+      expect(ranOneAtATime(at(4, 1))).toBe(true);
+      expect(ranOneAtATime(at(1, 1))).toBe(false);
+      expect(ranOneAtATime(at(2, 2))).toBe(false);
+      // One finished answer cannot show anything either way.
+      expect(ranOneAtATime(at(2, 1, 2, 1))).toBe(false);
+    });
+  });
+
+  describe('recommendAtOnce', () => {
+    const level = (atOnce: number, perMinute?: number, clickMs?: number) =>
+      ({
+        atOnce,
+        answers: 15,
+        failed: 0,
+        wallMs: 1,
+        ranTogether: atOnce,
+        ...(perMinute !== undefined && { perMinute }),
+        ...(clickMs !== undefined && { clickMs }),
+      }) as LevelSummary;
+
+    it('picks 2 when it gives clearly more answers without slowing the click', () => {
+      expect(recommendAtOnce([level(1, 10, 5000), level(2, 13, 5200), level(4, 14, 9000)])).toEqual(
+        {
+          atOnce: 2,
+          why: '2 at once gave 30% more answers per minute and the click took 4% longer',
+        },
+      );
+      expect(recommendAtOnce([level(1, 10, 5000), level(2, 12, 4000)]).atOnce).toBe(2);
+    });
+
+    it('keeps 1 when 2 gives little more, or slows the click', () => {
+      expect(recommendAtOnce([level(1, 10, 5000), level(2, 11, 5000)])).toEqual({
+        atOnce: 1,
+        why: '2 at once gave 10% more answers per minute',
+      });
+      expect(recommendAtOnce([level(1, 10, 5000), level(2, 9, 5000)]).why).toBe(
+        '2 at once gave 10% fewer answers per minute',
+      );
+      expect(recommendAtOnce([level(1, 10, 5000), level(2, 15, 6000)])).toEqual({
+        atOnce: 1,
+        why: '2 at once gave 50% more answers per minute, but the click took 20% longer',
+      });
+      expect(recommendAtOnce([level(1, 10, 5000), level(2, 15)]).atOnce).toBe(1);
+    });
+
+    it('keeps 1 when either level had failed answers, however fast 2 was (review on #60)', () => {
+      const withFailures = (l: LevelSummary, failedCount: number) => ({
+        ...l,
+        failed: failedCount,
+      });
+      expect(recommendAtOnce([level(1, 10, 5000), withFailures(level(2, 15, 4000), 2)])).toEqual({
+        atOnce: 1,
+        why: '2 of 15 failed at 2 at once, so the safe choice',
+      });
+      expect(
+        recommendAtOnce([withFailures(level(1, 10, 5000), 1), withFailures(level(2, 15, 4000), 3)]),
+      ).toEqual({
+        atOnce: 1,
+        why: '1 of 15 failed at 1 at once and 3 of 15 failed at 2 at once, so the safe choice',
+      });
+    });
+
+    it('keeps 1 when level 1 or 2 was not measured', () => {
+      expect(recommendAtOnce([level(1, 10, 5000), level(4, 30, 5000)])).toEqual({
+        atOnce: 1,
+        why: 'levels 1 and 2 were not both measured, so the safe choice',
+      });
+      expect(recommendAtOnce([level(1), level(2, 10, 1)]).atOnce).toBe(1);
+    });
+  });
+
+  it('writes the section npm run bench -- --parallel adds to docs/latency.md', () => {
+    const serial: LevelResult = {
+      atOnce: 2,
+      answers: [timed(0, 4000), timed(4000, 8000)],
+      click: { run: ok(7000), startMs: 500, endMs: 7500 },
+    };
+    const one: LevelResult = {
+      atOnce: 1,
+      answers: [timed(0, 4000), timed(4000, 8000, 4000)],
+      click: { run: failed('boom'), startMs: 500, endMs: 600 },
+    };
+    const text = formatParallelReport({
+      startedAt: new Date(2026, 10, 4, 7, 5),
+      machine: {
+        os: 'Windows 11 Pro',
+        cpu: 'CPU (16 threads)',
+        ramBytes: 16 * 1024 ** 3,
+        gpus: [],
+      },
+      llmUrl: 'http://localhost:11434',
+      temperature: 0.2,
+      maxResponseTokens: 120,
+      numParallel: '2',
+      results: [{ model: 'm', ranOn: '100% CPU', levels: [one, serial] }],
+    });
+    expect(text).toMatch(/^## 2026-11-04 07:05 · Requests at once · m\n/);
+    expect(text).toContain(
+      '- **Settings:** temperature 0.2, answers up to 120 tokens, 2 answers per level',
+    );
+    expect(text).toContain('- **OLLAMA_NUM_PARALLEL:** 2 in this shell');
+    expect(text).toContain(`| ${PARALLEL_TABLE_HEADER.join(' | ')} |`);
+    expect(text).toContain('| m (100% CPU) | 1 | 2 | 15.0 | 4.0 s | 4.0 s | 1 | failed |');
+    expect(text).toContain('| m (100% CPU) | 2 | 2 | 15.0 | 6.0 s | 8.0 s | 1 | 7.0 s |');
+    expect(text).toContain('- m: at 2 at once, Ollama ran the requests one after another anyway');
+    expect(text).toContain(
+      '- **For PR 10.6, m: 1 at once.** 2 at once gave 0% more answers per minute.',
+    );
+    expect(text).toContain('Failed requests:\n\n- m, 1 at once, click: boom\n');
+    // Without the variable in this shell.
+    const unset = formatParallelReport({
+      startedAt: new Date(2026, 10, 4),
+      machine: { os: 'o', cpu: 'c', ramBytes: 0, gpus: [] },
+      llmUrl: 'u',
+      temperature: 0.2,
+      maxResponseTokens: 120,
+      results: [{ model: 'm', levels: [one] }],
+    });
+    expect(unset).toContain('- **OLLAMA_NUM_PARALLEL:** not set in this shell');
+  });
+
+  describe('runLevel', () => {
+    // A fake Ollama on a fake clock: each answer takes 1000 ms of its own,
+    // and `slots` requests are worked on together.
+    function fakeOllama(slots: number) {
+      let clock = 0;
+      let running = 0;
+      let mostRunning = 0;
+      const waiting: (() => void)[] = [];
+      const sent: string[] = [];
+      const tick = () => new Promise<void>((r) => setImmediate(r));
+      const ask = async (sample: BenchSample, onFirstToken: () => void): Promise<BenchRun> => {
+        sent.push(sample.name);
+        if (running >= slots) await new Promise<void>((r) => waiting.push(r));
+        else running++;
+        mostRunning = Math.max(mostRunning, running);
+        const from = clock;
+        await tick();
+        onFirstToken();
+        clock += 1000 / slots;
+        await tick();
+        const next = waiting.shift();
+        if (next) next();
+        else running--;
+        return ok(clock - from, { timings: { answerMs: clock - from } });
+      };
+      return { ask, sent, now: () => clock, most: () => mostRunning };
+    }
+    const sample = (name: string): BenchSample => ({ name, context: [name] });
+    const samples = ['a', 'b', 'c'].map(sample);
+
+    it('sends every sample `runs` times, and whole rounds until two of the highest level', async () => {
+      const { levelJobs } = await import('../scripts/benchExplain.ts');
+      const names = (jobs: BenchSample[]) => jobs.map((s) => s.name);
+      expect(names(levelJobs(samples, 2, [1, 2]))).toEqual(['a', 'b', 'c', 'a', 'b', 'c']);
+      // Two rounds of 4 need 8 requests, so three whole rounds of the samples.
+      expect(names(levelJobs(samples, 1, [1, 2, 4]))).toEqual([
+        ...['a', 'b', 'c'],
+        ...['a', 'b', 'c'],
+        ...['a', 'b', 'c'],
+      ]);
+    });
+
+    it('gives every level the same work, also with --runs 1 and 1,2,4 (review on #60)', async () => {
+      const { levelJobs } = await import('../scripts/benchExplain.ts');
+      const five = ['1', '2', '3', '4', '5'].map(sample);
+      const jobs = levelJobs(five, 1, [1, 2, 4]);
+      // One list for every level, with each sample the same number of times.
+      expect(jobs).toHaveLength(10);
+      for (const s of five) expect(jobs.filter((j) => j === s)).toHaveLength(2);
+    });
+
+    it('keeps at most `atOnce` requests going, then sends one click once the model is writing', async () => {
+      const { runLevel } = await import('../scripts/benchExplain.ts');
+      const fake = fakeOllama(8);
+      const level = await runLevel(2, levelJobs(samples), sample('click'), fake.ask, fake.now);
+      expect(level.answers).toHaveLength(6);
+      expect(level.answers.every((a) => a.run.ok && a.firstTokenAtMs !== undefined)).toBe(true);
+      // Two background requests and the click.
+      expect(fake.most()).toBe(3);
+      expect(fake.sent.filter((n) => n === 'click')).toHaveLength(1);
+      expect(fake.sent.indexOf('click')).toBe(2);
+      expect(level.click?.run.ok).toBe(true);
+      function levelJobs(s: BenchSample[]) {
+        return [...s, ...s];
+      }
+    });
+
+    it('shows a server that works one at a time as 1 ran together', async () => {
+      const { runLevel } = await import('../scripts/benchExplain.ts');
+      const fake = fakeOllama(1);
+      const level = await runLevel(
+        4,
+        [...samples, ...samples],
+        sample('click'),
+        fake.ask,
+        fake.now,
+      );
+      const s = summarizeLevel(level);
+      expect(s).toMatchObject({ atOnce: 4, answers: 6, failed: 0, ranTogether: 1 });
+      expect(ranOneAtATime(s)).toBe(true);
+    });
+
+    it('still sends the click when the first request fails before writing', async () => {
+      const { runLevel } = await import('../scripts/benchExplain.ts');
+      const asked: string[] = [];
+      const level = await runLevel(1, [sample('a')], sample('click'), async (s) => {
+        asked.push(s.name);
+        return s.name === 'a' ? failed() : ok(5);
+      });
+      expect(asked).toEqual(['a', 'click']);
+      expect(level.answers[0]!.run.ok).toBe(false);
+      expect(level.click?.run).toEqual(ok(5));
+    });
   });
 });

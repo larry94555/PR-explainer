@@ -1,7 +1,7 @@
 // `npm run bench` (PR 8.2): times explanations on the local Ollama, so each
 // latency change in Milestone 8 has a repeatable before and after.
 //
-//   npm run bench -- [model ...] [--runs N] [--url URL] [--no-save] [--ahead]
+//   npm run bench -- [model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4]
 //
 // Sends the real explain prompt for each sample in bench/ to each model named
 // (or the first installed model when none is), N times each (3 by default),
@@ -14,6 +14,10 @@
 // saved GitHub diff page is explained ahead, as Explain ahead does, and then a
 // click on each line is timed, to show how many clicks are answered within
 // 2 seconds once Explain ahead has run.
+//
+// With --parallel 1,2,4 (PR 10.1) it sends the samples that many at a time,
+// one level after another, and times a click sent while they run, to show
+// whether more than one background request at once pays off on this computer.
 import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -25,6 +29,7 @@ import {
   appendReport,
   formatAheadReport,
   formatMs,
+  formatParallelReport,
   formatReport,
   parseBenchArgs,
   parseSample,
@@ -165,6 +170,34 @@ async function main(): Promise<number> {
     console.log(`\n${section}`);
     if (!aheadResults.some((r) => r.lines.some((l) => l.click.ok))) {
       console.error('Every click failed, so docs/latency.md was not changed.');
+      return 1;
+    }
+    if (args.save) {
+      const existing = existsSync(LATENCY_DOC) ? readFileSync(LATENCY_DOC, 'utf8') : null;
+      writeFileSync(LATENCY_DOC, appendReport(existing, section));
+      console.log('Added to docs/latency.md');
+    }
+    return 0;
+  }
+  if (args.parallel) {
+    const numParallel = process.env.OLLAMA_NUM_PARALLEL?.trim() || undefined;
+    console.log(
+      `Requests at once (${args.parallel.join(', ')}) with ${models.join(', ')} at ${llmUrl}; ` +
+        `OLLAMA_NUM_PARALLEL ${numParallel ? `is ${numParallel}` : 'is not set'} in this shell`,
+    );
+    const results = await bench.runParallel(explainer, models, samples, args.parallel, args.runs);
+    const section = formatParallelReport({
+      startedAt,
+      machine,
+      llmUrl,
+      temperature: settings.temperature,
+      maxResponseTokens: settings.maxResponseTokens,
+      ...(numParallel && { numParallel }),
+      results,
+    });
+    console.log(`\n${section}`);
+    if (!results.some((r) => r.levels.some((l) => l.answers.some((a) => a.run.ok)))) {
+      console.error('Every request failed, so docs/latency.md was not changed.');
       return 1;
     }
     if (args.save) {
