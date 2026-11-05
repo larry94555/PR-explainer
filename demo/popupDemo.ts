@@ -439,6 +439,13 @@ function explainRow(row: Element): void {
     onClose: () => (status.textContent = 'Last event: closed'),
     // As with the Debug window setting on (PR 9.4); `npm run demo:debug` shows the window.
     onDebug: () => (status.textContent = 'Last event: Debug (opens the debug window)'),
+    // 👍 and 👎 (PR 11.11); the extension saves them in the service worker.
+    onRate: (rating) =>
+      (status.textContent = `Last event: rated ${rating ?? 'nothing (taken back)'}`),
+    onRegenerate: () => {
+      status.textContent = 'Last event: Regenerate';
+      setTimeout(() => popup.showExplanation(SAMPLE, MODEL), 600);
+    },
     onAsk: () => {
       const session = new ChatSession({
         context: LINES.map(([marker, code]) => marker + code).join('\n'),

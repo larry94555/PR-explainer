@@ -41,6 +41,7 @@ import {
 import { isSameModel } from './llm/types';
 import { createWarmup } from './llm/warmup';
 import { MessageRouter } from './messaging/router';
+import { createRatings } from './ratings';
 import { listenForChatPorts, listenForExplainPorts } from './messaging/streamPort';
 import { listenForWorkerPorts } from './messaging/workerPort';
 import type { RoundTripSink } from './net/roundTrips';
@@ -327,6 +328,9 @@ void restart.then(({ restarted, restored }) => {
   if (restarted) console.info(`[PR Explainer] worker restarted, ${restored} jobs restored`);
 });
 
+// Answer ratings (PR 11.11). The worker writes them one at a time, from every tab.
+const ratings = createRatings(chrome.storage.local);
+
 // Listeners must be added on the first run of the worker, before it goes idle,
 // so Chrome can wake it for later messages.
 new MessageRouter()
@@ -360,6 +364,13 @@ new MessageRouter()
   // The settings page's Clear saved answers button (PR 10.9).
   .on('clearSavedAnswers', async () => {
     await explainCache.clear();
+    return { cleared: true as const };
+  })
+  // A 👍 or 👎 on an answer (PR 11.11), kept in chrome.storage.local.
+  .on('rateAnswer', async (payload) => ({ kept: await ratings.rate(payload) }))
+  // The settings page's Clear ratings button (PR 11.11).
+  .on('clearRatings', async () => {
+    await ratings.clear();
     return { cleared: true as const };
   })
   .on('openDebugWindow', async () => ({ window: await debugWindow.open() }))

@@ -76,6 +76,7 @@ function fakeDeps(client: LlmClient, saved: Settings = SAVED, kept: Measurement[
     createClient: vi.fn<OptionsPageDeps['createClient']>(() => client),
     now: vi.fn().mockReturnValueOnce(1000).mockReturnValueOnce(1250),
     clearSavedAnswers: vi.fn<OptionsPageDeps['clearSavedAnswers']>(async () => {}),
+    clearRatings: vi.fn<OptionsPageDeps['clearRatings']>(async () => {}),
     loadMeasurements: vi.fn<OptionsPageDeps['loadMeasurements']>(async () => [...measured]),
     saveMeasurement: vi.fn<OptionsPageDeps['saveMeasurement']>(async (m) => {
       measured = addMeasurement(measured, m);
@@ -328,6 +329,34 @@ describe('options page', () => {
     await vi.waitFor(() => expect(button.disabled).toBe(false));
     expect(text('clear-status')).toBe(
       'Could not clear saved answers: No answer from the extension.',
+    );
+  });
+
+  it('Clear ratings asks the service worker to remove every rating and says so (PR 11.11)', async () => {
+    const deps = fakeDeps(fakeClient());
+    await initOptionsPage(document, deps);
+    const button = $<HTMLButtonElement>('clear-ratings');
+    expect(button.textContent).toBe('Clear ratings');
+    expect(button.type).toBe('button');
+
+    let finish!: () => void;
+    deps.clearRatings.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    button.click();
+    expect(button.disabled).toBe(true);
+    expect(text('clear-ratings-status')).toBe('Clearing…');
+    finish();
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(deps.clearRatings).toHaveBeenCalledTimes(1);
+    expect(text('clear-ratings-status')).toBe('Ratings cleared.');
+    // Neither the form nor the saved answers are touched.
+    expect(deps.saveSettings).not.toHaveBeenCalled();
+    expect(deps.clearSavedAnswers).not.toHaveBeenCalled();
+
+    deps.clearRatings.mockRejectedValueOnce(new Error('No answer from the extension.'));
+    button.click();
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(text('clear-ratings-status')).toBe(
+      'Could not clear ratings: No answer from the extension.',
     );
   });
 

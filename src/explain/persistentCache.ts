@@ -24,7 +24,12 @@
 // IndexedDB must never break an explanation: a failure to open, read or
 // write is a miss or is ignored, and the session cache still works.
 
-import type { CachedExplanation, ExplainCache, ListedExplanation } from './explainCache';
+import {
+  cachedKind,
+  type CachedExplanation,
+  type ExplainCache,
+  type ListedExplanation,
+} from './explainCache';
 import type { Explanation } from './parseExplanation';
 
 export const DB_NAME = 'pr-explainer';
@@ -124,12 +129,14 @@ const pick = ({
   elapsedMs,
   savedAt,
   prefetched,
+  kind,
 }: CachedExplanation): CachedExplanation => ({
   explanation: { what: explanation.what, why: explanation.why, concerns: explanation.concerns },
   model,
   elapsedMs,
   savedAt,
   ...(prefetched === true && { prefetched }),
+  ...cachedKind(kind),
 });
 
 /** An IDBRequest as a promise. */

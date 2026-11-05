@@ -107,7 +107,7 @@ describe('explaining a whole hunk in one request', () => {
       expect(click).toMatchObject({
         status: 'done',
         // Background work wrote it, so the popup says "Prefetched" (PR 10.7).
-        cached: expect.objectContaining({ prefetched: true }),
+        cached: expect.objectContaining({ prefetched: true, kind: 'hunk' }),
         explanation: { what: `Line ${i + 1}.`, why: `Why ${i + 1}.` },
       });
     }

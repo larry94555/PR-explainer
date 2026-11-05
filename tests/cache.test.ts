@@ -437,7 +437,7 @@ describe('explain handler with the cache', () => {
     expect(second).toEqual({
       ...first,
       timings: undefined,
-      cached: { elapsedMs: 9800, savedAt: 10_800 },
+      cached: { elapsedMs: 9800, savedAt: 10_800, kind: 'click' },
       // A cached answer's trace has no model task (PR 9.1).
       trace: expect.objectContaining({ totalMs: 0 }),
     });
@@ -458,11 +458,32 @@ describe('explain handler with the cache', () => {
     expect(again.status === 'done' && again.cached).toEqual({
       elapsedMs: expect.any(Number),
       savedAt: expect.any(Number),
+      kind: 'click',
     });
     // Explain on hover is not background work.
     await handler({ ...payload, context: 'File: a.ts\n+y', cause: 'hover' });
     const hovered = await handler({ ...payload, context: 'File: a.ts\n+y' });
     expect(hovered.status === 'done' && hovered.cached).not.toHaveProperty('prefetched');
+  });
+
+  it('saves what wrote each answer and returns its cache key, for ratings (PR 11.11)', async () => {
+    const { handler } = setup();
+    const fresh = await handler(payload);
+    // The key is a SHA-256 hash, the same for the cached answer.
+    const key = fresh.status === 'done' ? fresh.key : undefined;
+    expect(key).toMatch(/^[0-9a-f]{64}$/);
+    const click = await handler(payload);
+    expect(click).toMatchObject({ key, cached: { kind: 'click' } });
+    for (const cause of ['hover', 'ahead'] as const) {
+      const context = `File: a.ts\n+${cause}`;
+      await handler({ ...payload, context, cause });
+      expect(await handler({ ...payload, context })).toMatchObject({ cached: { kind: cause } });
+    }
+  });
+
+  it('returns no cache key when the answer is not cached', async () => {
+    const { handler } = setup();
+    expect(await handler({ context: payload.context })).not.toHaveProperty('key');
   });
 
   it("saves the answer under the request's PR, so it is the open PR's (PR 10.2)", async () => {

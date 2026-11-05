@@ -1376,6 +1376,115 @@ describe('Copy and Pin (PR 11.10)', () => {
   });
 });
 
+describe('Rate an answer (PR 11.11)', () => {
+  const rootOf = (popup: { host: HTMLElement }) => popup.host.shadowRoot!;
+  const up = (popup: { host: HTMLElement }) =>
+    rootOf(popup).querySelector<HTMLButtonElement>('button.rate-button[data-rating="up"]')!;
+  const down = (popup: { host: HTMLElement }) =>
+    rootOf(popup).querySelector<HTMLButtonElement>('button.rate-button[data-rating="down"]')!;
+  const retry = (popup: { host: HTMLElement }) =>
+    rootOf(popup).querySelector<HTMLButtonElement>('button.retry')!;
+  const status = (popup: { host: HTMLElement }) =>
+    rootOf(popup).querySelector('[role="status"]')!.textContent;
+
+  afterEach(() => {
+    closeAllPopups();
+    document.body.innerHTML = '';
+  });
+
+  it('has no rating buttons without onRate', () => {
+    const popup = openPopup(ANCHOR);
+    popup.showExplanation(SAMPLE, 'm');
+    expect(rootOf(popup).querySelector('.rate')).toBeNull();
+  });
+
+  it('shows the buttons only once an answer is finished, in the footer', () => {
+    const popup = openPopup(ANCHOR, { onRate: vi.fn() });
+    const panel = rootOf(popup).querySelector<HTMLElement>('.popup')!;
+    // The footer, and so the buttons, is hidden outside the done state.
+    const style = rootOf(popup).querySelector('style')!.textContent!;
+    expect(style).toContain(".popup:not([data-state='done']) .footer { display: none; }");
+    expect(up(popup).closest('.footer')).not.toBeNull();
+    for (const step of [
+      () => popup.showPartial('Adds'),
+      () => popup.showError('Broke.', 'Fix it.'),
+    ]) {
+      step();
+      expect(panel.dataset.state).not.toBe('done');
+    }
+    const other = openPopup(ANCHOR, { onRate: vi.fn() });
+    other.showExplanation(SAMPLE, 'm');
+    expect(rootOf(other).querySelector<HTMLElement>('.popup')!.dataset.state).toBe('done');
+  });
+
+  it('labels the buttons for screen readers', () => {
+    const popup = openPopup(ANCHOR, { onRate: vi.fn() });
+    popup.showExplanation(SAMPLE, 'm');
+    const group = rootOf(popup).querySelector('.rate')!;
+    expect(group.getAttribute('role')).toBe('group');
+    expect(group.getAttribute('aria-label')).toBe('Rate this answer');
+    expect(up(popup).textContent).toBe('👍');
+    expect(up(popup).getAttribute('aria-label')).toBe('Helpful');
+    expect(down(popup).textContent).toBe('👎');
+    expect(down(popup).getAttribute('aria-label')).toBe('Not helpful');
+    expect(up(popup).getAttribute('aria-pressed')).toBe('false');
+    expect(down(popup).getAttribute('aria-pressed')).toBe('false');
+    expect(up(popup).type).toBe('button');
+  });
+
+  it('reports each rating, a change, and taking it back', () => {
+    const onRate = vi.fn();
+    const popup = openPopup(ANCHOR, { onRate });
+    popup.showExplanation(SAMPLE, 'm');
+    up(popup).click();
+    expect(onRate).toHaveBeenLastCalledWith('up');
+    expect(up(popup).getAttribute('aria-pressed')).toBe('true');
+    expect(status(popup)).toBe('Rated helpful');
+    down(popup).click();
+    expect(onRate).toHaveBeenLastCalledWith('down');
+    expect(up(popup).getAttribute('aria-pressed')).toBe('false');
+    expect(down(popup).getAttribute('aria-pressed')).toBe('true');
+    down(popup).click();
+    expect(onRate).toHaveBeenLastCalledWith(null);
+    expect(down(popup).getAttribute('aria-pressed')).toBe('false');
+    expect(status(popup)).toBe('Rating removed');
+    expect(onRate).toHaveBeenCalledTimes(3);
+  });
+
+  it('offers Regenerate after 👎, which asks again and starts the new answer unrated', () => {
+    const onRegenerate = vi.fn();
+    const onRate = vi.fn();
+    const popup = openPopup(ANCHOR, { onRate, onRegenerate });
+    popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+    expect(retry(popup).hidden).toBe(true);
+    up(popup).click();
+    expect(retry(popup).hidden).toBe(true);
+    down(popup).click();
+    expect(retry(popup).hidden).toBe(false);
+    expect(retry(popup).textContent).toBe('Regenerate');
+    expect(status(popup)).toBe('Rated not helpful. Regenerate asks the model again.');
+    retry(popup).click();
+    expect(onRegenerate).toHaveBeenCalledOnce();
+    expect(popup.state).toBe('loading');
+    popup.showExplanation(SAMPLE, 'qwen2.5-coder:7b');
+    expect(down(popup).getAttribute('aria-pressed')).toBe('false');
+    expect(retry(popup).hidden).toBe(true);
+    // Taking back 👎 hides the offer again.
+    down(popup).click();
+    down(popup).click();
+    expect(retry(popup).hidden).toBe(true);
+  });
+
+  it('ignores a press when no answer is shown', () => {
+    const onRate = vi.fn();
+    const popup = openPopup(ANCHOR, { onRate });
+    up(popup).click();
+    popup.showError('Broke.', 'Fix it.');
+    down(popup).click();
+    expect(onRate).not.toHaveBeenCalled();
+  });
+});
+
 describe('computePosition', () => {
   const viewport = { width: 1000, height: 800, scrollX: 0, scrollY: 0 };
   const size = { width: 400, height: 300 };

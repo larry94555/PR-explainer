@@ -160,6 +160,39 @@ export const POPUP_STYLE = `
     cursor: pointer;
   }
   .ask:hover, .ask:focus-visible { background: var(--pe-success-hover); }
+  /* Rating (PR 11.11): 👍 and 👎 at the footer's start, Regenerate after 👎. */
+  .rate { display: flex; align-items: center; gap: 4px; margin-right: auto; }
+  .rate-label { color: var(--pe-muted); font-size: 12px; margin-right: 2px; }
+  .rate-button {
+    border: 1px solid var(--pe-border);
+    background: var(--pe-bg);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    padding: 3px 7px;
+    border-radius: 6px;
+    cursor: pointer;
+    filter: grayscale(1);
+    opacity: 0.75;
+  }
+  .rate-button:hover, .rate-button:focus-visible { background: var(--pe-hover-bg); filter: none; opacity: 1; }
+  .rate-button[aria-pressed='true'] { filter: none; opacity: 1; }
+  .rate-button[data-rating='up'][aria-pressed='true'] { background: var(--pe-accent-bg); border-color: var(--pe-accent); }
+  .rate-button[data-rating='down'][aria-pressed='true'] { background: var(--pe-danger-bg); border-color: var(--pe-danger); }
+  .retry {
+    margin-left: 4px;
+    border: 1px solid var(--pe-border);
+    background: var(--pe-bg);
+    color: var(--pe-fg);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .retry[hidden] { display: none; }
+  .retry:hover, .retry:focus-visible { background: var(--pe-accent-bg); border-color: var(--pe-accent); color: var(--pe-accent); }
   .partial { padding-top: 8px; }
   /* A blinking caret after the newest text while the model is still writing. */
   .popup[data-state='streaming'] .partial > :last-child::after {

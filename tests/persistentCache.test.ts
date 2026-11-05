@@ -74,6 +74,20 @@ describe('saved answers (PR 10.9)', () => {
     expect(await second.cache.get('missing')).toBeNull();
   });
 
+  it('keeps what wrote an answer (PR 11.11), and drops a kind it does not know', async () => {
+    const env = setup();
+    const { cache } = env.start();
+    await cache.set('k', { ...answer('x'), kind: 'hunk' }, 'o/r#1');
+    await cache.set(
+      'j',
+      { ...answer('y'), kind: 'guess' } as unknown as CachedExplanation,
+      'o/r#1',
+    );
+    const later = env.start().cache;
+    expect(await later.get('k')).toEqual({ ...answer('x'), kind: 'hunk' });
+    expect(await later.get('j')).toEqual(answer('y'));
+  });
+
   it('keeps Prefetched, and only the fields the popup needs', async () => {
     const env = setup();
     const { cache } = env.start();
