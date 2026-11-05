@@ -8,7 +8,9 @@
 // priority, the tabs and PR, never the answers, which are in the cache) to
 // chrome.storage.session, which Chrome keeps in memory until it closes. When
 // the worker starts and finds them, it is a restart: it puts them back, the
-// one that was running first, leaving out jobs whose tabs have all closed.
+// one that was running first, leaving out jobs whose tabs have all closed or
+// no longer show the job's PR (review on #74). After that, a tab that leaves
+// its PR lets go of them (PrefetchQueue.releaseTab, from src/background.ts).
 // A job whose answer is now in the cache finishes at once without the model
 // when it comes up (the handler checks the cache first), and is logged as
 // skipped. Nothing is saved until what was kept has been put back, so a new
@@ -27,8 +29,11 @@ export interface SessionStorageLike {
 
 export interface SavedQueueDeps {
   storage: SessionStorageLike;
-  /** The ids of the tabs open now (chrome.tabs.query). */
-  openTabs(): Promise<number[]>;
+  /**
+   * The tabs open now (chrome.tabs.query). `url` is there only for the
+   * extension's own sites, so a tab without one is not on GitHub.
+   */
+  openTabs(): Promise<{ id: number; url?: string }[]>;
 }
 
 export interface RestartInfo {
@@ -45,6 +50,28 @@ export interface SavedQueue<P> {
   start(queue: Pick<PrefetchQueue<P, unknown>, 'saved' | 'restore'>): Promise<RestartInfo>;
   /** Settles once the latest change is written (for tests). */
   flushed(): Promise<void>;
+}
+
+/**
+ * Whether `url` is a page of `pr` ("owner/repo#17"): its Conversation, Files
+ * changed or Commits tab. A job with no PR goes with any open tab.
+ */
+export function showsPr(url: string | undefined, pr: string | undefined): boolean {
+  if (pr === undefined) return true;
+  if (url === undefined) return false;
+  const match = /^([^/#]+)\/([^/#]+)#(\d+)$/.exec(pr);
+  if (!match) return false;
+  let path: string;
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'github.com') return false;
+    path = parsed.pathname.toLowerCase();
+  } catch {
+    return false;
+  }
+  const [, owner, repo, number] = match;
+  const base = `/${owner!.toLowerCase()}/${repo!.toLowerCase()}/pull/${number}`;
+  return path === base || path.startsWith(`${base}/`);
 }
 
 const isTabList = (value: unknown): value is number[] =>
@@ -95,12 +122,14 @@ export function createSavedQueue<P>(deps: SavedQueueDeps): SavedQueue<P> {
     }
     let info: RestartInfo = { restarted: false, restored: 0 };
     if (Array.isArray(kept)) {
-      const open = new Set(await deps.openTabs().catch(() => [] as number[]));
+      const open = new Map(
+        (await deps.openTabs().catch(() => [])).map((tab) => [tab.id, tab.url] as const),
+      );
       const jobs = kept.flatMap((value) => {
         const job = toSavedJob<P>(value);
         if (!job) return [];
-        // Only the tabs still open; a job nobody's tab waits for is dropped.
-        const tabs = job.tabs.filter((tab) => open.has(tab));
+        // Only the tabs still open on the job's PR; a job no such tab waits for is dropped.
+        const tabs = job.tabs.filter((tab) => open.has(tab) && showsPr(open.get(tab), job.spec.pr));
         return tabs.length ? [{ ...job, tabs }] : [];
       });
       // The job that was running goes first.

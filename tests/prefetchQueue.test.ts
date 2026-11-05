@@ -8,7 +8,7 @@ import {
   type QueueDeps,
   type QueueEvent,
 } from '../src/explain/prefetchQueue';
-import { createSavedQueue, SAVED_QUEUE_KEY } from '../src/explain/savedQueue';
+import { createSavedQueue, SAVED_QUEUE_KEY, showsPr } from '../src/explain/savedQueue';
 
 interface Result {
   status: 'done' | 'failed';
@@ -770,6 +770,8 @@ function fakeSession() {
   };
 }
 
+const PR_URL = 'https://github.com/o/r/pull/1/files';
+
 /**
  * One run of the service worker on `session`: a queue, its saver, and the
  * restart started as background.ts starts it. A new call is the worker
@@ -777,10 +779,11 @@ function fakeSession() {
  */
 function worker(
   session: ReturnType<typeof fakeSession>,
-  openTabs: number[] = [1, 2],
+  openTabs: (number | { id: number; url?: string })[] = [1, 2],
   overrides: Partial<QueueDeps<string, Result>> = {},
 ) {
-  const saver = createSavedQueue<string>({ storage: session, openTabs: async () => openTabs });
+  const tabs = openTabs.map((tab) => (typeof tab === 'number' ? { id: tab, url: PR_URL } : tab));
+  const saver = createSavedQueue<string>({ storage: session, openTabs: async () => tabs });
   const env = setup({ onChange: () => saver.changed(), ...overrides });
   const restart = saver.start(env.queue);
   return { ...env, saver, restart };
@@ -984,5 +987,71 @@ describe('the background queue across a worker restart (PR 11.5)', () => {
     expect(await broken.start(env.queue)).toEqual({ restarted: false, restored: 0 });
     void env.queue.add(env.job('a', 'rest', { tab: 1 }));
     await expect(broken.flushed()).resolves.toBeUndefined();
+  });
+
+  it('drops restored jobs whose tab is still open but no longer shows their PR (review on #74)', async () => {
+    const session = fakeSession();
+    const first = worker(session);
+    await first.restart;
+    void first.queue.add(first.job('busy', 'on-screen', { tab: 9, pr: 'o/r#1' }));
+    void first.queue.add(first.job('pr-1', 'rest', { tab: 1, pr: 'o/r#1' }));
+    void first.queue.add(first.job('other-site', 'rest', { tab: 2, pr: 'o/r#1' }));
+    void first.queue.add(first.job('other-pr', 'rest', { tab: 3, pr: 'o/r#1' }));
+    await first.saver.flushed();
+    const second = worker(session, [
+      { id: 1, url: 'https://github.com/O/R/pull/1' },
+      // Not on GitHub: Chrome gives no url without host permission.
+      { id: 2 },
+      { id: 3, url: 'https://github.com/o/r/pull/2/files' },
+    ]);
+    expect(await second.restart).toEqual({ restarted: true, restored: 1 });
+    expect(second.queue.state()).toEqual({ running: ['pr-1'], waiting: [] });
+  });
+
+  it('lets go of restored work when its open tab leaves the PR, keeping work another tab shares (review on #74)', async () => {
+    const session = fakeSession();
+    const first = worker(session);
+    await first.restart;
+    void first.queue.add(first.job('only-1', 'on-screen', { tab: 1, pr: 'o/r#1' }));
+    void first.queue.add(first.job('also-1', 'rest', { tab: 1, pr: 'o/r#1' }));
+    void first.queue.add(first.job('shared', 'rest', { tab: 1, pr: 'o/r#1' }));
+    void first.queue.add(first.job('shared', 'rest', { tab: 2, pr: 'o/r#1' }));
+    await first.saver.flushed();
+    const second = worker(session);
+    await second.restart;
+    expect(second.queue.state()).toEqual({ running: ['only-1'], waiting: ['also-1', 'shared'] });
+    const running = second.live()[0]!;
+    // A move within the same PR keeps it.
+    expect(second.queue.releaseTab(1, 'o/r#1')).toBe(0);
+    // Tab 1 moves to another PR (or loads another page) without closing.
+    expect(second.queue.releaseTab(1, 'o/r#2')).toBe(2);
+    expect(running.signal.aborted).toBe(true);
+    expect(second.queue.state()).toEqual({ running: ['shared'], waiting: [] });
+    await second.saver.flushed();
+    expect(ids(session)).toEqual(['shared']);
+    // Tab 2 loads another page too: nothing is left, saved or running.
+    expect(second.queue.releaseTab(2)).toBe(1);
+    await second.saver.flushed();
+    expect(session.data[SAVED_QUEUE_KEY]).toEqual([]);
+    expect(second.live()).toEqual([]);
+  });
+
+  it("does not let go of a page's own request when its tab moves, only held work", async () => {
+    const env = setup();
+    const answer = env.queue.add(env.job('asked', 'on-screen', { tab: 1, pr: 'o/r#1' }));
+    expect(env.queue.releaseTab(1)).toBe(0);
+    env.live()[0]!.finish();
+    await expect(answer).resolves.toMatchObject({ text: 'answer to asked' });
+  });
+
+  it('tells which tab urls show a PR', () => {
+    expect(showsPr('https://github.com/o/r/pull/1', 'o/r#1')).toBe(true);
+    expect(showsPr('https://github.com/O/R/pull/1/files?w=1#diff-1', 'o/r#1')).toBe(true);
+    expect(showsPr('https://github.com/o/r/pull/12', 'o/r#1')).toBe(false);
+    expect(showsPr('https://github.com/o/r/issues/1', 'o/r#1')).toBe(false);
+    expect(showsPr('https://example.com/o/r/pull/1', 'o/r#1')).toBe(false);
+    expect(showsPr(undefined, 'o/r#1')).toBe(false);
+    expect(showsPr('not a url', 'o/r#1')).toBe(false);
+    expect(showsPr(undefined, undefined)).toBe(true);
   });
 });

@@ -155,6 +155,15 @@ export interface PrefetchQueue<P, R> {
    */
   dropTab(tab: number): number;
   /**
+   * Lets go of the jobs the queue holds for a tab that left its PR (it
+   * loaded another page, or moved to another PR or off GitHub's PR pages)
+   * without closing (review on #74): restored jobs and hunk follow-ups have
+   * no page port that closes by itself. Jobs for `keepPr`, the PR the tab
+   * shows now, are kept; null keeps none. As with dropTab, a job another tab
+   * also waits for keeps running. Returns how many jobs were dropped.
+   */
+  releaseTab(tab: number, keepPr?: string | null): number;
+  /**
    * Pauses or resumes background jobs (PR 11.3). While paused, only clicks
    * start; running background jobs are let finish.
    */
@@ -190,6 +199,12 @@ const SAVED_PRIORITIES: readonly JobPriority[] = ['on-screen', 'near-screen', 'r
 
 interface Caller<R> {
   click: boolean;
+  /**
+   * Kept for a tab by the queue itself, with no page waiting on a port that
+   * would close when it leaves: a restored job (PR 11.5) or a hunk's
+   * follow-up. `releaseTab` lets go of these.
+   */
+  held?: true;
   /** The tab that asked, so closing it lets go of only its own callers. */
   tab?: number;
   onChunk?(text: string): void;
@@ -337,6 +352,7 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
         callers: new Set(
           [...tabs].map((tab) => ({
             click: false,
+            held: true,
             ...(tab !== undefined && { tab }),
             resolve: () => {},
             reject: () => {},
@@ -467,6 +483,7 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
   /** A caller that waits for nothing: the answer goes to the cache. */
   const placeholder = (tab?: number): Caller<R> => ({
     click: false,
+    held: true,
     ...(tab !== undefined && { tab }),
     resolve: () => {},
     reject: () => {},
@@ -546,6 +563,17 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       for (const job of [...jobs.values()]) {
         for (const caller of [...job.callers]) {
           if (caller.tab === tab && leave(job, caller)) dropped += 1;
+        }
+      }
+      if (dropped) pump();
+      return dropped;
+    },
+    releaseTab(tab, keepPr = null) {
+      let dropped = 0;
+      for (const job of [...jobs.values()]) {
+        if (keepPr !== null && job.spec.pr === keepPr) continue;
+        for (const caller of [...job.callers]) {
+          if (caller.held && caller.tab === tab && leave(job, caller)) dropped += 1;
         }
       }
       if (dropped) pump();

@@ -565,6 +565,20 @@ const ahead = createExplainAhead({
 // from stopping it (PR 11.5, src/workerPort.ts). If Chrome stops it anyway,
 // the worker puts its queue back when it starts again, and Explain ahead
 // carries on at once instead of waiting for a click or a scroll.
+// Tells the service worker which PR this tab shows when that changes, so
+// its queue lets go of jobs it holds for this tab and another PR (review on
+// #74). A full page load does the same in the worker by itself.
+let reportedPr: string | null | undefined;
+function reportPr(): void {
+  const pr = prName(location.href) ?? null;
+  if (pr === reportedPr) return;
+  const first = reportedPr === undefined;
+  reportedPr = pr;
+  // A new page held nothing yet; only a move away from a PR needs saying.
+  if (first) return;
+  sendRequest('tabPr', { pr }).catch(() => {});
+}
+
 const workerPort = createWorkerPort({
   runtime: chrome.runtime,
   hasWork: () => ahead.runningAll().length > 0 || ahead.queued().length > 0,
@@ -720,6 +734,7 @@ const features = new DiffPageFeatures(() => {
 update();
 features.sync(location.href);
 reportPause();
+reportPr();
 // Read the description ahead of the first click, so it does not wait.
 readDescriptionAhead();
 
@@ -741,6 +756,8 @@ function onPageChanged(url: string): void {
   features.sync(url);
   // Off a PR's diffs, the tab lets go of the pause (review on #71).
   reportPause();
+  // Off this PR, the queue lets go of work held for it (review on #74).
+  reportPr();
   prMetadata.forget();
   fileContexts.forget();
   patchRequests.forget();

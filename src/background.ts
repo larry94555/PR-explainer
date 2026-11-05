@@ -159,7 +159,10 @@ const requestsAtOnce = followRequestsAtOnce(chrome.storage.sync, chrome.storage.
 // (PR 11.5, src/explain/savedQueue.ts).
 const savedQueue = createSavedQueue<ExplainPayload>({
   storage: chrome.storage.session,
-  openTabs: async () => (await chrome.tabs.query({})).flatMap((tab) => tab.id ?? []),
+  openTabs: async () =>
+    (await chrome.tabs.query({})).flatMap((tab) =>
+      tab.id === undefined ? [] : [{ id: tab.id, ...(tab.url !== undefined && { url: tab.url }) }],
+    ),
 });
 const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult | HunkResult>({
   concurrency: () => requestsAtOnce.current(),
@@ -214,6 +217,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // A tab that loads a new page (a reload, or leaving GitHub) lets go of the
 // pause; its new page says again if it holds it (review on #71).
 forgetTabOnLoad(chrome.tabs.onUpdated, backgroundPause);
+// A tab that loads a new page lets go of the jobs the queue holds for it
+// with no page port (restored ones, PR 11.5, and hunk follow-ups); its new
+// page asks again for what it wants (review on #74).
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') explainQueue.releaseTab(tabId);
+});
 // Put back the jobs from before a restart (PR 11.5), once the battery pause
 // kept from before is read, so they do not start while it holds. The debug
 // window shows "worker restarted, N jobs restored".
@@ -248,6 +257,14 @@ new MessageRouter()
     const tabId = sender.tab?.id;
     if (tabId !== undefined) backgroundPause.report(tabId, payload.paused);
     return { paused: backgroundPause.paused() };
+  })
+  // GitHub's own page changes load no page: the tab says which PR it shows
+  // now, and work held for another one goes (review on #74).
+  .on('tabPr', (payload, sender) => {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) return { released: 0 };
+    const pr = typeof payload?.pr === 'string' ? payload.pr : null;
+    return { released: explainQueue.releaseTab(tabId, pr) };
   })
   .on('aheadProgress', async (payload, sender) => {
     const tabId = sender.tab?.id;

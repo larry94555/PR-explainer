@@ -32,6 +32,9 @@ export interface RequestMap {
   // Empties the session cache and the answers saved on disk (the settings
   // page's Clear saved answers button, PR 10.9).
   clearSavedAnswers: { payload: undefined; result: { cleared: true } };
+  // The PR the sending tab shows now ("owner/repo#17"), or null off a PR,
+  // so the background queue lets go of work it holds for another one (PR 11.5).
+  tabPr: { payload: { pr: string | null }; result: { released: number } };
 }
 
 export type RequestType = keyof RequestMap;
