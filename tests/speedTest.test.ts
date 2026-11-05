@@ -1,6 +1,16 @@
 import { SAMPLE_CONTEXT } from '../src/explain/sampleContext';
 import { buildExplainPrompt } from '../src/explain/explainPrompt';
 import {
+  addMeasurement,
+  compareMeasurements,
+  loadMeasurements,
+  MAX_MEASURED_MODELS,
+  measurementFrom,
+  measurementsFor,
+  MEASUREMENTS_KEY,
+  parseMeasurements,
+  saveMeasurement,
+  type Measurement,
   fastestUnderGoal,
   rankResults,
   runSpeedTest,
@@ -257,5 +267,106 @@ describe('ranking (PR 8.6)', () => {
     expect(fastestUnderGoal([done('just under', 1999)])).toBe('just under');
     expect(fastestUnderGoal([{ model: 'x', status: 'failed', message: 'x' }])).toBeUndefined();
     expect(fastestUnderGoal([])).toBeUndefined();
+  });
+});
+
+describe('Measure results (PR 11.7)', () => {
+  const m = (model: string, totalMs: number, at: number): Measurement => ({ model, totalMs, at });
+
+  function fakeStorage(initial: Record<string, unknown> = {}) {
+    const data: Record<string, unknown> = { ...initial };
+    return {
+      data,
+      get: vi.fn(async (keys: string[]) =>
+        Object.fromEntries(keys.filter((k) => k in data).map((k) => [k, data[k]])),
+      ),
+      set: vi.fn(async (items: Record<string, unknown>) => {
+        Object.assign(data, items);
+      }),
+    };
+  }
+
+  it('makes a measurement from a finished result, with its speed and where it ran', () => {
+    expect(
+      measurementFrom(
+        {
+          model: 'a',
+          status: 'done',
+          totalMs: 1234,
+          tokensPerSecond: 20,
+          gpu: { kind: 'gpu', processor: '100% GPU', message: '', fix: '' },
+        },
+        99,
+      ),
+    ).toEqual({ model: 'a', totalMs: 1234, tokensPerSecond: 20, processor: '100% GPU', at: 99 });
+    expect(measurementFrom({ model: 'a', status: 'done', totalMs: 5 }, 1)).toEqual(m('a', 5, 1));
+    expect(measurementFrom({ model: 'a', status: 'failed', message: 'x' }, 1)).toBeUndefined();
+    expect(measurementFrom({ model: 'a', status: 'stopped' }, 1)).toBeUndefined();
+  });
+
+  it('keeps the last two results of each model: before and after', () => {
+    let list = addMeasurement([], m('a', 3000, 1));
+    list = addMeasurement(list, m('b', 900, 2));
+    list = addMeasurement(list, m('a', 2500, 3));
+    list = addMeasurement(list, m('a', 2000, 4));
+    expect(list).toEqual([m('b', 900, 2), m('a', 2500, 3), m('a', 2000, 4)]);
+    expect(measurementsFor(list, 'a')).toEqual({
+      previous: m('a', 2500, 3),
+      latest: m('a', 2000, 4),
+    });
+    expect(measurementsFor(list, 'b')).toEqual({ latest: m('b', 900, 2) });
+    expect(measurementsFor(list, 'c')).toEqual({});
+  });
+
+  it('treats a model with and without :latest as the same', () => {
+    const list = addMeasurement([m('llama3', 3000, 1)], m('llama3:latest', 2000, 2));
+    expect(measurementsFor(list, 'llama3').previous?.totalMs).toBe(3000);
+  });
+
+  it(`keeps the ${MAX_MEASURED_MODELS} models measured most recently`, () => {
+    let list: Measurement[] = [];
+    for (let i = 0; i <= MAX_MEASURED_MODELS; i++) list = addMeasurement(list, m(`m${i}`, 1000, i));
+    expect(new Set(list.map((x) => x.model)).size).toBe(MAX_MEASURED_MODELS);
+    expect(measurementsFor(list, 'm0')).toEqual({});
+    expect(measurementsFor(list, `m${MAX_MEASURED_MODELS}`).latest).toBeDefined();
+  });
+
+  it('compares the latest with the one before', () => {
+    expect(compareMeasurements(m('a', 4000, 1), m('a', 3000, 2))).toEqual({
+      diffMs: -1000,
+      share: -0.25,
+      kind: 'faster',
+      text: '1.0 s faster than before (25% less time).',
+    });
+    expect(compareMeasurements(m('a', 2000, 1), m('a', 3000, 2))).toMatchObject({
+      kind: 'slower',
+      text: '1.0 s slower than before (50% more time).',
+    });
+  });
+
+  it('calls a change under 5% the same, as it is within run-to-run noise', () => {
+    expect(compareMeasurements(m('a', 2000, 1), m('a', 2060, 2))).toMatchObject({
+      kind: 'same',
+      text: 'About the same as before (3% difference), which is within run-to-run noise.',
+    });
+  });
+
+  it('saves to and loads from chrome.storage.local', async () => {
+    const storage = fakeStorage();
+    expect(await loadMeasurements(storage)).toEqual([]);
+    await saveMeasurement(storage, m('a', 3000, 1));
+    const list = await saveMeasurement(storage, m('a', 2000, 2));
+    expect(list).toEqual([m('a', 3000, 1), m('a', 2000, 2)]);
+    expect(storage.data[MEASUREMENTS_KEY]).toEqual(list);
+    expect(await loadMeasurements(storage)).toEqual(list);
+  });
+
+  it('ignores stored values that are not measurements, and storage that fails', async () => {
+    expect(parseMeasurements('nope')).toEqual([]);
+    expect(
+      parseMeasurements([m('a', 1, 1), { model: 'b' }, null, { model: 3, totalMs: 1, at: 1 }]),
+    ).toEqual([m('a', 1, 1)]);
+    const broken = { get: vi.fn(async () => Promise.reject(new Error('x'))), set: vi.fn() };
+    expect(await loadMeasurements(broken)).toEqual([]);
   });
 });

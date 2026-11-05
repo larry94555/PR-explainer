@@ -160,3 +160,146 @@ export function fastestUnderGoal(results: readonly SpeedResult[]): string | unde
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+// --- Measure (PR 11.7) ---
+//
+// The Make Ollama faster section times the picked model alone and keeps the
+// result, so a time taken after changing an Ollama setting and restarting
+// Ollama can be shown next to the one from before. Only the last two times of
+// each model are kept: before and after.
+
+/** The chrome.storage.local key holding the saved measurements. */
+export const MEASUREMENTS_KEY = 'speedMeasurements';
+
+/** How many models keep measurements; the oldest model is dropped after that. */
+export const MAX_MEASURED_MODELS = 20;
+
+/** One saved Measure result. */
+export interface Measurement {
+  model: string;
+  /** From asking to the full answer, with the model already loaded. */
+  totalMs: number;
+  tokensPerSecond?: number;
+  /** Where the model ran, as `ollama ps` writes it ("100% GPU"). */
+  processor?: string;
+  /** When it was measured, in milliseconds since 1970. */
+  at: number;
+}
+
+/** The part of chrome.storage.local the measurements use. */
+export interface MeasurementStorage {
+  get(keys: string[]): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+}
+
+/** The measurement a finished Speed test result gives, or undefined when it did not answer. */
+export function measurementFrom(result: SpeedResult, at: number): Measurement | undefined {
+  if (result.status !== 'done') return undefined;
+  return {
+    model: result.model,
+    totalMs: result.totalMs,
+    ...(result.tokensPerSecond !== undefined && { tokensPerSecond: result.tokensPerSecond }),
+    ...(result.gpu && { processor: result.gpu.processor }),
+    at,
+  };
+}
+
+/** Keeps only well-formed measurements from whatever storage held. */
+export function parseMeasurements(raw: unknown): Measurement[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (m): m is Measurement =>
+      typeof m === 'object' &&
+      m !== null &&
+      typeof (m as Measurement).model === 'string' &&
+      Number.isFinite((m as Measurement).totalMs) &&
+      Number.isFinite((m as Measurement).at),
+  );
+}
+
+/**
+ * Adds `added`, keeping the last two of each model (before and after) and the
+ * MAX_MEASURED_MODELS models measured most recently. Oldest first.
+ */
+export function addMeasurement(list: readonly Measurement[], added: Measurement): Measurement[] {
+  const sameModel = list.filter((m) => isSameModel(m.model, added.model));
+  const previous = sameModel.at(-1);
+  const others = list.filter((m) => !isSameModel(m.model, added.model));
+  const kept = [...others, ...(previous ? [previous] : []), added];
+  const models = [...new Set(kept.map((m) => m.model))];
+  const dropped = new Set(models.slice(0, Math.max(0, models.length - MAX_MEASURED_MODELS)));
+  return kept.filter((m) => !dropped.has(m.model));
+}
+
+/** The last two measurements of `model`: the one before and the latest. */
+export function measurementsFor(
+  list: readonly Measurement[],
+  model: string,
+): { previous?: Measurement; latest?: Measurement } {
+  const own = list.filter((m) => isSameModel(m.model, model));
+  const latest = own.at(-1);
+  const previous = own.length > 1 ? own.at(-2) : undefined;
+  return { ...(previous && { previous }), ...(latest && { latest }) };
+}
+
+/** A change under this share of the time is within run-to-run noise. */
+export const SAME_SPEED_SHARE = 0.05;
+
+export interface Comparison {
+  /** The latest time minus the previous one: below 0 is faster. */
+  diffMs: number;
+  /** diffMs as a share of the previous time, from -1 up. */
+  share: number;
+  kind: 'faster' | 'slower' | 'same';
+  /** One sentence for the user. */
+  text: string;
+}
+
+/** How the latest measurement compares with the one before. */
+export function compareMeasurements(previous: Measurement, latest: Measurement): Comparison {
+  const diffMs = latest.totalMs - previous.totalMs;
+  const share = previous.totalMs > 0 ? diffMs / previous.totalMs : 0;
+  const seconds = `${(Math.abs(diffMs) / 1000).toFixed(1)} s`;
+  const percent = `${Math.round(Math.abs(share) * 100)}%`;
+  if (Math.abs(share) < SAME_SPEED_SHARE) {
+    return {
+      diffMs,
+      share,
+      kind: 'same',
+      text: `About the same as before (${percent} difference), which is within run-to-run noise.`,
+    };
+  }
+  return diffMs < 0
+    ? {
+        diffMs,
+        share,
+        kind: 'faster',
+        text: `${seconds} faster than before (${percent} less time).`,
+      }
+    : {
+        diffMs,
+        share,
+        kind: 'slower',
+        text: `${seconds} slower than before (${percent} more time).`,
+      };
+}
+
+/** The saved measurements, oldest first; none when storage fails. */
+export async function loadMeasurements(storage: MeasurementStorage): Promise<Measurement[]> {
+  try {
+    const stored = await storage.get([MEASUREMENTS_KEY]);
+    return parseMeasurements(stored[MEASUREMENTS_KEY]);
+  } catch {
+    return [];
+  }
+}
+
+/** Saves `added` with the ones kept before, and returns the new list. */
+export async function saveMeasurement(
+  storage: MeasurementStorage,
+  added: Measurement,
+): Promise<Measurement[]> {
+  const list = addMeasurement(await loadMeasurements(storage), added);
+  await storage.set({ [MEASUREMENTS_KEY]: list });
+  return list;
+}

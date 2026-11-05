@@ -303,6 +303,39 @@
         </table>
       </section>
 
+      <section id="faster" class="speed faster" aria-labelledby="faster-title">
+        <h2 id="faster-title">Make Ollama faster</h2>
+        <p class="hint">
+          Ollama has settings of its own that can make answers faster on a laptop. They are set
+          outside the extension, and how much they help depends on the model and the computer, so
+          click Measure before and after.
+        </p>
+        <p id="faster-shell"></p>
+        <ul id="faster-tips" class="tips"></ul>
+        <p id="faster-restart"></p>
+        <div class="row">
+          <button id="measure" type="button">Measure</button>
+        </div>
+        <p class="hint">
+          Times one short explanation on the model picked above, already loaded, and keeps the
+          result. Change a setting, start Ollama again and click Measure again to see both times.
+        </p>
+        <p id="measure-status" role="status"></p>
+        <table id="measure-results" hidden>
+          <thead>
+            <tr>
+              <th scope="col"><span class="visually-hidden">Measurement</span></th>
+              <th scope="col">When</th>
+              <th scope="col">Time</th>
+              <th scope="col">Tokens/s</th>
+              <th scope="col">Runs on</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p id="measure-compare" role="status"></p>
+      </section>
+
       <section id="privacy" class="privacy" aria-labelledby="privacy-title">
         <h2 id="privacy-title">Privacy</h2>
         <p>
