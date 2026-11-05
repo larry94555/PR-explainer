@@ -9,6 +9,8 @@ import type { ChatResult } from '../src/chat/chatHandler';
 import { openChatPanel } from '../src/chat/chatPanel';
 import { startChat, type ActiveChat } from '../src/chat/chatFlow';
 import { ChatSession } from '../src/chat/chatSession';
+import { BUILT_IN_OFFER } from '../src/clickHandler';
+import { CHROME_BUILT_IN_MODEL } from '../src/llm/chromeAiClient';
 import { describeLlmError } from '../src/llm/describeLlmError';
 import type { ChatMessage, LlmTimings } from '../src/llm/types';
 import { LlmError } from '../src/llm/types';
@@ -25,6 +27,8 @@ import { parseExplanation, type Explanation } from '../src/explain/parseExplanat
 import { formatExplanation } from '../src/chat/chatSession';
 
 const MODEL = 'qwen2.5-coder:7b';
+/** Set by the offer of Chrome's built-in model (PR 11.13): Regenerate then answers with it. */
+let builtInPicked = false;
 
 const SAMPLE: Explanation = {
   what:
@@ -444,7 +448,13 @@ function explainRow(row: Element): void {
       (status.textContent = `Last event: rated ${rating ?? 'nothing (taken back)'}`),
     onRegenerate: () => {
       status.textContent = 'Last event: Regenerate';
-      setTimeout(() => popup.showExplanation(SAMPLE, MODEL), 600);
+      setTimeout(
+        () =>
+          builtInPicked
+            ? popup.showExplanation(ONE_SENTENCE, CHROME_BUILT_IN_MODEL)
+            : popup.showExplanation(SAMPLE, MODEL),
+        600,
+      );
     },
     onAsk: () => {
       const session = new ChatSession({
@@ -602,6 +612,28 @@ function explainRow(row: Element): void {
     case 'cutoff':
       popup.showExplanation(CUT_OFF, MODEL);
       break;
+    case 'builtin':
+      // An answer from Chrome's built-in model (PR 11.13), named in the header.
+      fakeTime = 1_900;
+      popup.showExplanation(ONE_SENTENCE, CHROME_BUILT_IN_MODEL);
+      break;
+    case 'offer': {
+      // Ollama is not running and Chrome's built-in model is ready (PR 11.13).
+      fakeTime = 120;
+      const { message, fix } = describeLlmError(new LlmError('connection', 'fetch failed'), {
+        url: 'http://localhost:11434',
+        platform: 'windows',
+      });
+      popup.showError(message, fix, {
+        label: BUILT_IN_OFFER,
+        run: async () => {
+          status.textContent = 'Last event: Model server set to Chrome built-in';
+          // The popup then asks again, as Regenerate does; the built-in model answers.
+          builtInPicked = true;
+        },
+      });
+      break;
+    }
     case 'short':
       // A loaded model that does not think, writing about 70 tokens.
       fakeTime = 2_400;

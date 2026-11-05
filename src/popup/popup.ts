@@ -186,6 +186,13 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, '0')} s`;
 }
 
+/** A button under an error's fix (PR 11.13). */
+export interface ErrorAction {
+  label: string;
+  /** Runs before the popup asks again; a failure is shown under the button. */
+  run(): Promise<void>;
+}
+
 export type PopupState = 'loading' | 'streaming' | 'done' | 'failed' | 'stopped' | 'closed';
 
 /** Shown in place of the reply when Stop is pressed before any text arrived. */
@@ -272,7 +279,12 @@ export interface Popup {
     model?: string,
     cached?: { elapsedMs: number; prefetched?: boolean },
   ): void;
-  showError(message: string, fix: string): void;
+  /**
+   * Shows what went wrong and the fix. With `action`, a button under the fix
+   * (PR 11.13: Use Chrome's built-in model instead) runs it, then asks again
+   * as Regenerate does.
+   */
+  showError(message: string, fix: string, action?: ErrorAction): void;
   /**
    * Opens Details on the explanation's round trip, with the prompt's size
    * (the Show prompt setting). Call it after showTrace.
@@ -983,7 +995,7 @@ export function openPopup(
       }
       setBody('done', ...keys.map((key) => sectionNode(doc, key, explanation[key])), ...notes);
     },
-    showError(message, fix) {
+    showError(message, fix, action) {
       if (state === 'closed' || state === 'stopped') return;
       stopTicking('Failed after ');
       const error = doc.createElement('div');
@@ -996,6 +1008,23 @@ export function openPopup(
       fixEl.className = 'fix';
       appendInline(fixEl, fix);
       error.append(messageEl, fixEl);
+      if (action) {
+        const button = doc.createElement('button');
+        button.type = 'button';
+        button.className = 'error-action';
+        button.textContent = action.label;
+        const status = doc.createElement('p');
+        status.className = 'error-action-status';
+        button.addEventListener('click', () => {
+          button.disabled = true;
+          status.textContent = '';
+          action.run().then(regenerate, (failure: unknown) => {
+            button.disabled = false;
+            status.textContent = failure instanceof Error ? failure.message : String(failure);
+          });
+        });
+        error.append(button, status);
+      }
       setBody('failed', error);
     },
     showTrace({ tasks, timings, reply, thinking, roundTrips }) {

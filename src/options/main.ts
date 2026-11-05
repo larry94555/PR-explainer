@@ -1,5 +1,6 @@
 // Entry point for options.html: runs the settings page with the real
 // chrome.storage settings and the Ollama client.
+import { builtInAvailability, downloadBuiltIn, promptApi } from '../llm/chromeAiClient';
 import { createLlmClient } from '../llm/createClient';
 import { detectPlatform } from '../llm/describeLlmError';
 import { loadMeasurements, saveMeasurement } from '../llm/speedTest';
@@ -21,7 +22,18 @@ async function askWorker(type: 'clearSavedAnswers' | 'clearRatings'): Promise<vo
 void initOptionsPage(document, {
   getSettings: () => getSettings(),
   saveSettings: (update) => saveSettings(update),
-  createClient: (settings) => createLlmClient(settings),
+  // The page's own Speed test, Measure and Test connection talk to Ollama.
+  createClient: (settings) => createLlmClient({ llmUrl: settings.llmUrl }),
+  // Chrome's built-in model (PR 11.13), asked from this page, which has the
+  // Prompt API and the button press Chrome needs to start the download.
+  builtIn: {
+    availability: () => builtInAvailability(promptApi()),
+    download: async (onProgress) => {
+      const api = promptApi();
+      if (!api) throw new Error('This version of Chrome has no built-in model for extensions.');
+      await downloadBuiltIn(api, onProgress);
+    },
+  },
   platform: detectPlatform(navigator.userAgent),
   loadMeasurements: () => loadMeasurements(chrome.storage.local),
   saveMeasurement: (measurement) => saveMeasurement(chrome.storage.local, measurement),

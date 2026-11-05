@@ -45,7 +45,7 @@
       "description": "Open chat"
     }
   },
-  "permissions": ["storage", "contextMenus", "sidePanel"],
+  "permissions": ["storage", "contextMenus", "sidePanel", "offscreen"],
   "host_permissions": [
     "https://github.com/*",
     "http://localhost/*",

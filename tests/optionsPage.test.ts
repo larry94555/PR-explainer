@@ -1,3 +1,4 @@
+import type { BuiltInAvailability } from '../src/llm/chromeAiClient';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { addMeasurement, type Measurement } from '../src/llm/speedTest';
@@ -23,6 +24,7 @@ import {
 const html = readFileSync(resolve(import.meta.dirname, '../src/options.html'), 'utf8');
 
 const SAVED: Settings = {
+  modelServer: 'ollama',
   llmUrl: 'http://localhost:11434',
   model: 'qwen2.5-coder:7b',
   chatModel: '',
@@ -794,6 +796,7 @@ describe('options page', () => {
     await page.save();
 
     expect(deps.saveSettings).toHaveBeenCalledWith({
+      modelServer: 'ollama',
       llmUrl: 'http://localhost:11434',
       model: 'llama3.2:3b',
       chatModel: '',
@@ -1666,5 +1669,165 @@ describe('Keyboard shortcuts (PR 11.9)', () => {
     expect(document.getElementById('shortcuts')!.textContent).toContain(
       'Explain with PR Explainer',
     );
+  });
+});
+
+describe('options page Model server (PR 11.13)', () => {
+  const builtIn = (
+    state: BuiltInAvailability,
+    download = vi.fn<(onProgress: (loaded: number) => void) => Promise<void>>(async () => {}),
+  ) => ({
+    availability: vi.fn(async () => state),
+    download,
+  });
+  const panel = () => $('builtin-panel');
+  const download = () => $<HTMLButtonElement>('builtin-download');
+
+  it('is Ollama by default, with the built-in model hidden and not asked about', async () => {
+    const deps = { ...fakeDeps(fakeClient()), builtIn: builtIn('available') };
+    await initOptionsPage(document, deps);
+    expect($<HTMLSelectElement>('modelServer').value).toBe('ollama');
+    expect(panel().hidden).toBe(true);
+    expect(deps.builtIn.availability).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['available', 'is ready on this computer', false],
+    ['downloadable', 'not downloaded yet', true],
+    ['downloading', 'still downloading', true],
+    ['unavailable', 'cannot run on this computer', false],
+  ] as const)('says when it is %s', async (state, says, offersDownload) => {
+    const deps = {
+      ...fakeDeps(fakeClient(), { ...SAVED, modelServer: 'chrome' }),
+      builtIn: builtIn(state),
+    };
+    await initOptionsPage(document, deps);
+    expect(panel().hidden).toBe(false);
+    expect(panel().dataset.state).toBe(state);
+    expect(text('builtin-status')).toContain(says);
+    expect(download().hidden).toBe(!offersDownload);
+  });
+
+  it('does not ask Ollama with Chrome built-in, so a computer without Ollama shows no Ollama errors (review on #82)', async () => {
+    const down = fakeClient({
+      listModels: vi.fn(async () => {
+        throw new LlmError('connection', 'fetch failed');
+      }),
+    });
+    const deps = {
+      ...fakeDeps(down, { ...SAVED, modelServer: 'chrome' }),
+      builtIn: builtIn('available'),
+    };
+    const page = await initOptionsPage(document, deps);
+    expect(down.listModels).not.toHaveBeenCalled();
+    expect(text('models-status')).toBe('');
+    expect(text('gpu-status')).toBe('');
+    expect(text('builtin-status')).toContain('is ready on this computer');
+    // The Ollama controls keep the saved model, and saving works.
+    expect($<HTMLSelectElement>('model').value).toBe(SAVED.model);
+    await page.save();
+    expect(text('save-status')).toBe('Saved.');
+  });
+
+  it('clears the Ollama lines when Chrome built-in is picked, and asks Ollama again when it is picked back (review on #82)', async () => {
+    const down = fakeClient({
+      listModels: vi.fn(async () => {
+        throw new LlmError('connection', 'fetch failed');
+      }),
+    });
+    const deps = { ...fakeDeps(down), builtIn: builtIn('available') };
+    await initOptionsPage(document, deps);
+    expect(text('models-status')).toContain('Could not load models.');
+    const select = $<HTMLSelectElement>('modelServer');
+    select.value = 'chrome';
+    select.dispatchEvent(new Event('change'));
+    expect(text('models-status')).toBe('');
+    await vi.waitFor(() => expect(panel().dataset.state).toBe('available'));
+    expect(down.listModels).toHaveBeenCalledTimes(1);
+    select.value = 'ollama';
+    select.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(text('models-status')).toContain('Could not load models.'));
+    expect(down.listModels).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a slow Ollama answer from showing after Chrome built-in is picked (review on #82)', async () => {
+    let answer!: (models: { name: string }[]) => void;
+    const slow = fakeClient({
+      listModels: vi.fn(() => new Promise<{ name: string }[]>((resolve) => (answer = resolve))),
+    });
+    const deps = { ...fakeDeps(slow), builtIn: builtIn('available') };
+    const started = initOptionsPage(document, deps);
+    await vi.waitFor(() => expect(slow.listModels).toHaveBeenCalled());
+    const select = $<HTMLSelectElement>('modelServer');
+    select.value = 'chrome';
+    select.dispatchEvent(new Event('change'));
+    answer([]);
+    await started;
+    expect(text('models-status')).toBe('');
+  });
+
+  it('says this Chrome has none when the page has no Prompt API', async () => {
+    await initOptionsPage(document, fakeDeps(fakeClient(), { ...SAVED, modelServer: 'chrome' }));
+    expect(panel().dataset.state).toBe('unsupported');
+    expect(text('builtin-status')).toContain('Chrome 138 or later');
+    expect(download().hidden).toBe(true);
+  });
+
+  it('checks when Chrome built-in is picked, and saves it with Save', async () => {
+    const deps = { ...fakeDeps(fakeClient()), builtIn: builtIn('available') };
+    const page = await initOptionsPage(document, deps);
+    const select = $<HTMLSelectElement>('modelServer');
+    select.value = 'chrome';
+    select.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(panel().dataset.state).toBe('available'));
+    await page.save();
+    expect(deps.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ modelServer: 'chrome' }),
+    );
+    select.value = 'ollama';
+    select.dispatchEvent(new Event('change'));
+    expect(panel().hidden).toBe(true);
+  });
+
+  it('downloads with progress, then shows the new state', async () => {
+    let finish!: () => void;
+    let progress!: (loaded: number) => void;
+    const fetching = vi.fn(
+      (onProgress: (loaded: number) => void) =>
+        new Promise<void>((resolve) => {
+          progress = onProgress;
+          finish = resolve;
+        }),
+    );
+    const api = builtIn('downloadable', fetching);
+    const deps = { ...fakeDeps(fakeClient(), { ...SAVED, modelServer: 'chrome' }), builtIn: api };
+    const page = await initOptionsPage(document, deps);
+    download().click();
+    expect(download().disabled).toBe(true);
+    expect($('builtin-progress').hidden).toBe(false);
+    progress(0.42);
+    expect(text('builtin-status')).toContain('42%');
+    expect($<HTMLProgressElement>('builtin-progress').value).toBeCloseTo(0.42);
+    api.availability.mockResolvedValue('available');
+    finish();
+    await vi.waitFor(() => expect(panel().dataset.state).toBe('available'));
+    expect($('builtin-progress').hidden).toBe(true);
+    expect(download().hidden).toBe(true);
+    await page.checkBuiltIn();
+  });
+
+  it('says why a download failed and offers it again', async () => {
+    const api = builtIn(
+      'downloadable',
+      vi.fn(async () => {
+        throw new DOMException('Not enough disk space.', 'NotAllowedError');
+      }),
+    );
+    const deps = { ...fakeDeps(fakeClient(), { ...SAVED, modelServer: 'chrome' }), builtIn: api };
+    const page = await initOptionsPage(document, deps);
+    await page.downloadBuiltIn();
+    expect(text('builtin-status')).toBe('Could not download it: Not enough disk space.');
+    expect(download().disabled).toBe(false);
+    expect(download().hidden).toBe(false);
   });
 });

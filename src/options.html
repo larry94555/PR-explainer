@@ -11,6 +11,29 @@
       <h1>PR Explainer settings</h1>
       <form id="settings-form" novalidate>
         <div class="field">
+          <label for="modelServer">Model server</label>
+          <select id="modelServer" name="modelServer">
+            <option value="ollama">Ollama</option>
+            <option value="chrome">Chrome built-in</option>
+          </select>
+          <p class="hint">
+            <strong>Ollama</strong> runs the model you pick below. <strong>Chrome built-in</strong>
+            uses the small model that comes with recent versions of Chrome (Gemini Nano), so you can
+            try PR Explainer without installing Ollama. It also runs on this computer, but it is
+            smaller than a coding model, so its answers are simpler; Model, Chat model and Context
+            size apply to Ollama only.
+          </p>
+          <div id="builtin-panel" class="builtin" hidden>
+            <p id="builtin-status" class="hint" role="status"></p>
+            <div class="row">
+              <button id="builtin-download" type="button" hidden>Download</button>
+              <progress id="builtin-progress" max="1" value="0" hidden></progress>
+            </div>
+          </div>
+          <p class="error" data-error-for="modelServer" role="alert"></p>
+        </div>
+
+        <div class="field">
           <label for="llmUrl">Ollama URL</label>
           <input id="llmUrl" name="llmUrl" type="url" spellcheck="false" />
           <p class="error" data-error-for="llmUrl" role="alert"></p>

@@ -756,6 +756,10 @@ const explainDeps: ClickHandlerDeps = {
       console.warn('[PR Explainer] could not save the rating', error);
     });
   },
+  // A click that failed while Ollama is down can switch to Chrome's built-in model (PR 11.13).
+  useBuiltInModel: async () => {
+    await sendRequest('useBuiltInModel', undefined);
+  },
   // While the chat is open, clicked code in its PR joins the conversation (PR 5.4).
   addToChat: ({ text, subject }) => currentChat.addCode(prName(location.href), text, subject),
   // Dev builds also log the context block sent to the model.

@@ -8,6 +8,7 @@
 |---|---|---|
 | The script on GitHub pages | `https://github.com`, `https://raw.githubusercontent.com` and, for one address only, `https://api.github.com` | Requests for the PR's description and the full files it changes, from raw.githubusercontent.com (public repositories) or from the file's page on github.com with your GitHub sign-in (private repositories). The list of the PR's changed files and their diffs from GitHub's API (`/repos/{owner}/{repo}/pulls/{n}/files`), sent without your GitHub sign-in, so it works for public repositories only. The repository's `.gitattributes` at the PR's head, from raw.githubusercontent.com without your sign-in, to leave generated and vendored files out of Explain ahead. This is what GitHub's own pages load. |
 | The service worker and the settings page | The LLM URL on the settings page only (default `http://localhost:11434`) | The prompt: the clicked code, the code around it, the PR's title and description, and your chat questions. |
+| Chrome's built-in model (only with **Model server** set to **Chrome built-in**) | Nothing: the model runs inside Chrome on this computer, through Chrome's Prompt API, in the service worker or an offscreen page of the extension | The same prompt, handed to Chrome rather than sent over the network. The extension makes no new network requests for it. Chrome downloads the model itself, once, when you click **Download** on the settings page. |
 
 Nothing else is contacted: no analytics, no tracking, no error reporting, no update checks, and no fonts, scripts or images from the web.
 
@@ -17,7 +18,7 @@ Nothing else is contacted: no analytics, no tracking, no error reporting, no upd
 - Every request goes through one of two guarded fetches (`src/net/githubFetch.ts` and `src/net/llmFetch.ts`). A request to any other address is refused before it is sent, and the LLM side refuses any address but the one you set. On `api.github.com` only a PR's changed files may be read, and never with your cookies.
 - Redirects are refused, not followed: a server that answers with a redirect elsewhere makes the request fail, so the browser never sends anything to the new address. Tests check this against real HTTP servers. (GitHub's `/raw/` file links always redirect, so they are not used; private files are read from the file's page instead.)
 - A unit test (`tests/networkGuard.test.ts`) scans the source and fails if any code reaches the network another way (a direct `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `sendBeacon`, or a script, image or stylesheet loaded from the web).
-- The manifest asks Chrome for access to `github.com` and this computer only, and `tests/manifest.test.ts` fails if a broader permission is added. Its only other permissions are `storage` and `contextMenus` (the **Open debug window** item on the toolbar button's menu), which read nothing from any page.
+- The manifest asks Chrome for access to `github.com` and this computer only, and `tests/manifest.test.ts` fails if a broader permission is added. Its only other permissions are `storage`, `contextMenus` (the **Open debug window** item on the toolbar button's menu), `sidePanel` (the chat next to the page) and `offscreen` (a hidden extension page that runs Chrome's built-in model when the service worker cannot), which read nothing from any page.
 
 ## What is stored
 

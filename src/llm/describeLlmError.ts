@@ -108,6 +108,19 @@ export function describeLlmError(error: unknown, context: ErrorContext = {}): Er
         message: `Nothing was sent${where}: PR Explainer only sends code to an LLM on this computer.`,
         fix: 'Set the URL to a local address, such as `http://localhost:11434`.',
       };
+    // Chrome's built-in model (PR 11.13): the client's message says which state it is in.
+    case 'unavailable':
+      return {
+        message: error.message,
+        fix:
+          'In the PR Explainer settings, under **Model server**, click **Download** if it is ' +
+          'offered, or pick **Ollama** instead.',
+      };
+    case 'built-in-error':
+      return {
+        message: `Chrome's built-in model failed: ${error.message}`,
+        fix: 'Try again, or set **Model server** back to **Ollama** in the settings.',
+      };
   }
 }
 

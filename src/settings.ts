@@ -13,9 +13,17 @@
 // The service worker and (from PR 2.3) the options page read settings through
 // this module. The content script never imports it.
 
+import { CHROME_BUILT_IN_MODEL } from './llm/chromeAiClient';
 import { isSameModel } from './llm/types';
 
 export interface Settings {
+  /**
+   * Model server (PR 11.13): `ollama` (the default) or `chrome`, Chrome's
+   * built-in model (src/llm/chromeAiClient.ts). With `chrome`, the service
+   * worker reads the settings through serverSettings, so Model, Chat model
+   * and Context size, which are Ollama's, do not apply.
+   */
+  modelServer: ModelServer;
   /** Base URL of the LLM server, for example the Ollama default. */
   llmUrl: string;
   /** Model name as the server lists it. Empty until the user picks one. */
@@ -146,6 +154,10 @@ export type AheadMode = (typeof AHEAD_MODES)[number];
 export const BATTERY_MODES = ['pause', 'keep'] as const;
 export type BatteryMode = (typeof BATTERY_MODES)[number];
 
+/** The choices of Model server (PR 11.13). */
+export const MODEL_SERVERS = ['ollama', 'chrome'] as const;
+export type ModelServer = (typeof MODEL_SERVERS)[number];
+
 /** The choices of Chat opens in (PR 11.8). */
 export const CHAT_PLACES = ['sidepanel', 'page'] as const;
 export type ChatPlace = (typeof CHAT_PLACES)[number];
@@ -173,6 +185,7 @@ export const DEFAULT_SKIP_PATTERNS: readonly string[] = Object.freeze([
 export const SKIP_IN_BACKGROUND_MAX_LENGTH = 4000;
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
+  modelServer: 'ollama',
   llmUrl: 'http://localhost:11434',
   model: '',
   chatModel: '',
@@ -224,6 +237,19 @@ export function chatModelOf(settings: Pick<Settings, 'model' | 'chatModel'>): st
  */
 export function chatSettings(settings: Settings): Settings {
   return { ...settings, model: chatModelOf(settings) };
+}
+
+/**
+ * The settings as the service worker uses them (PR 11.13): with Model server
+ * on Chrome built-in, explanations and chat both go to Chrome's built-in
+ * model, and the context window is the built-in model's own (Context size
+ * on automatic reads it from the model), so the prompt budget (PR 6.2) fits
+ * it. Anything else is unchanged, so the cache key, ratings and the popup
+ * name the built-in model.
+ */
+export function serverSettings(settings: Settings): Settings {
+  if (settings.modelServer !== 'chrome') return settings;
+  return { ...settings, model: CHROME_BUILT_IN_MODEL, chatModel: '', contextTokens: 0 };
 }
 
 /**
@@ -282,6 +308,10 @@ function defaultStorage(): StorageAreaLike {
 // Returns an error message for one field, or null if the value is valid.
 function checkField(field: SettingsField, value: unknown): string | null {
   switch (field) {
+    case 'modelServer':
+      return (MODEL_SERVERS as readonly unknown[]).includes(value)
+        ? null
+        : 'Model server must be Ollama or Chrome built-in.';
     case 'llmUrl':
       return checkLlmUrl(value);
     case 'model':

@@ -244,4 +244,17 @@ export const POPUP_STYLE = `
   pre code { background: none; padding: 0; }
   .error { padding-top: 12px; }
   .error .message { color: var(--pe-danger); font-weight: 600; }
+  .error-action {
+    border: 1px solid var(--pe-accent);
+    background: var(--pe-accent-bg);
+    color: var(--pe-accent);
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 8px;
+  }
+  .error-action:disabled { opacity: 0.6; cursor: default; }
+  .error-action-status:empty { display: none; }
 `;

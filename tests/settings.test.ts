@@ -16,6 +16,7 @@ import {
   saveSettings,
   storageKey,
   SettingsValidationError,
+  serverSettings,
   validateSettings,
   type Settings,
   type StorageAreaLike,
@@ -25,6 +26,9 @@ import {
   SKIP_SETTING_KEY,
   skipPatternsOf,
 } from '../src/skipFiles';
+import { ChromeAiClient, CHROME_BUILT_IN_MODEL } from '../src/llm/chromeAiClient';
+import { createLlmClient } from '../src/llm/createClient';
+import { OllamaClient } from '../src/llm/ollamaClient';
 import { STREAM_SETTING_KEY, trackStreamSetting } from '../src/streamSetting';
 import { CHAT_PLACE_KEY, chatPlaceOf as contentChatPlaceOf } from '../src/chat/sidePanelChat';
 import {
@@ -88,6 +92,62 @@ describe('settings', () => {
     });
   });
 
+  describe('Model server (PR 11.13)', () => {
+    it('saves Chrome built-in and rejects anything else', async () => {
+      const storage = fakeStorage();
+      await saveSettings({ modelServer: 'chrome' }, storage);
+      expect(storage.data).toEqual({ [storageKey('modelServer')]: 'chrome' });
+      await expectRejectedFields(
+        saveSettings({ modelServer: 'lmstudio' as unknown as 'chrome' }, storage),
+        ['modelServer'],
+      );
+      // A bad stored value reads as the default.
+      storage.data[storageKey('modelServer')] = 'cloud';
+      expect((await getSettings(storage)).modelServer).toBe('ollama');
+    });
+
+    it('leaves the settings as they are with Ollama', () => {
+      const settings = { ...DEFAULT_SETTINGS, model: 'qwen2.5-coder:1.5b', contextTokens: 8192 };
+      expect(serverSettings(settings)).toBe(settings);
+    });
+
+    it('sends explanations and chat to the built-in model, with its own context window', () => {
+      const settings = {
+        ...DEFAULT_SETTINGS,
+        modelServer: 'chrome' as const,
+        model: 'qwen2.5-coder:1.5b',
+        chatModel: 'qwen2.5-coder:7b',
+        contextTokens: 8192,
+        temperature: 0.5,
+      };
+      const used = serverSettings(settings);
+      expect(used).toEqual({
+        ...settings,
+        model: CHROME_BUILT_IN_MODEL,
+        chatModel: '',
+        contextTokens: 0,
+      });
+      expect(chatSettings(used).model).toBe(CHROME_BUILT_IN_MODEL);
+      expect(hasOwnChatModel(used)).toBe(false);
+    });
+
+    it('builds the client for the server picked', () => {
+      const builtIn = new ChromeAiClient(() => undefined);
+      expect(createLlmClient({ llmUrl: 'http://localhost:11434' })).toBeInstanceOf(OllamaClient);
+      expect(
+        createLlmClient(
+          { llmUrl: 'http://localhost:11434', modelServer: 'chrome' },
+          {
+            chromeAi: () => builtIn,
+          },
+        ),
+      ).toBe(builtIn);
+      expect(
+        createLlmClient({ llmUrl: 'http://localhost:11434', modelServer: 'chrome' }),
+      ).toBeInstanceOf(ChromeAiClient);
+    });
+  });
+
   describe('Chat model (PR 9.14)', () => {
     it('is "Same as explanations" by default, so chat uses Model', () => {
       const settings = { ...DEFAULT_SETTINGS, model: 'qwen2.5-coder:1.5b' };
@@ -137,6 +197,8 @@ describe('settings', () => {
   describe('defaults', () => {
     it('uses the Ollama default URL, no model, temperature 0.2, 120-token answers, keep loaded 30 minutes', () => {
       expect(DEFAULT_SETTINGS).toEqual({
+        // Ollama until Chrome built-in is picked (PR 11.13).
+        modelServer: 'ollama',
         llmUrl: 'http://localhost:11434',
         model: '',
         // "Same as explanations" (PR 9.14).
@@ -198,6 +260,7 @@ describe('settings', () => {
     it('saves values and reads them back', async () => {
       const storage = fakeStorage();
       const update = {
+        modelServer: 'chrome' as const,
         llmUrl: 'http://127.0.0.1:8080',
         model: 'qwen2.5-coder:1.5b',
         chatModel: 'qwen2.5-coder:7b',

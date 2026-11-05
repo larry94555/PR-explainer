@@ -74,10 +74,11 @@ describe('manifest.json', () => {
     expect(matchesContentScript(url)).toBe(false);
   });
 
-  it('requests only storage, the toolbar menu, the side panel, github.com, and this computer for the LLM', () => {
+  it('requests only storage, the toolbar menu, the side panel, an offscreen page, github.com, and this computer for the LLM', () => {
     // contextMenus: Open debug window on the toolbar button's menu (PR 9.4).
     // sidePanel: the chat in Chrome's side panel (PR 11.8).
-    expect(manifest.permissions).toEqual(['storage', 'contextMenus', 'sidePanel']);
+    // offscreen: runs Chrome's built-in model for the service worker (PR 11.13).
+    expect(manifest.permissions).toEqual(['storage', 'contextMenus', 'sidePanel', 'offscreen']);
     // Loopback only, matching the hosts settings.ts accepts for the LLM URL.
     // A match pattern with no port covers every port, so any local port works.
     expect(manifest.host_permissions).toEqual([
