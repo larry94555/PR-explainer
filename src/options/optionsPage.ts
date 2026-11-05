@@ -74,6 +74,8 @@ export interface OptionsPageDeps {
    * in the service worker, which owns both.
    */
   clearSavedAnswers(): Promise<void>;
+  /** Removes every answer rating (PR 11.11), in the service worker, which owns them. */
+  clearRatings(): Promise<void>;
   /** The saved Measure results, oldest first (PR 11.7). */
   loadMeasurements(): Promise<Measurement[]>;
   /** Saves one Measure result and returns the list as now kept. */
@@ -102,6 +104,8 @@ export interface OptionsPage {
   stopSpeedTest(): void;
   /** Clear saved answers (PR 10.9). */
   clearSavedAnswers(): Promise<void>;
+  /** Clear ratings (PR 11.11). */
+  clearRatings(): Promise<void>;
   /** Times the picked model and saves the result (PR 11.7). */
   measure(): Promise<void>;
 }
@@ -135,6 +139,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const keepAnswersInput = el<HTMLInputElement>(doc, 'keepAnswersDays');
   const clearButton = el<HTMLButtonElement>(doc, 'clear-answers');
   const clearStatus = el(doc, 'clear-status');
+  const clearRatingsButton = el<HTMLButtonElement>(doc, 'clear-ratings');
+  const clearRatingsStatus = el(doc, 'clear-ratings-status');
   const thinkInput = el<HTMLInputElement>(doc, 'letModelThink');
   const streamInput = el<HTMLInputElement>(doc, 'streamAnswers');
   const thinkingLine = el(doc, 'thinking-status');
@@ -347,6 +353,20 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       clearStatus.textContent = `Could not clear saved answers: ${errorMessage(error)}`;
     } finally {
       clearButton.disabled = false;
+    }
+  }
+
+  // Removes every 👍 and 👎 (PR 11.11).
+  async function clearRatings(): Promise<void> {
+    clearRatingsButton.disabled = true;
+    clearRatingsStatus.textContent = 'Clearing…';
+    try {
+      await deps.clearRatings();
+      clearRatingsStatus.textContent = 'Ratings cleared.';
+    } catch (error) {
+      clearRatingsStatus.textContent = `Could not clear ratings: ${errorMessage(error)}`;
+    } finally {
+      clearRatingsButton.disabled = false;
     }
   }
 
@@ -768,6 +788,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   stopButton.addEventListener('click', stopSpeedTest);
   measureButton.addEventListener('click', () => void measure());
   clearButton.addEventListener('click', () => void clearSavedAnswers());
+  clearRatingsButton.addEventListener('click', () => void clearRatings());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     void save();
@@ -798,6 +819,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     speedTest,
     stopSpeedTest,
     clearSavedAnswers,
+    clearRatings,
     measure,
   };
 }

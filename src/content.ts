@@ -749,6 +749,13 @@ const explainDeps: ClickHandlerDeps = {
       showChat(place, pr, chatSessionFor(chats, pr, seed, { regenerated }), subject, note);
     });
   },
+  // 👍 and 👎 on an answer (PR 11.11): the service worker keeps them in
+  // chrome.storage.local. Never the code or the answer.
+  rate: (update) => {
+    sendRequest('rateAnswer', update).catch((error: unknown) => {
+      console.warn('[PR Explainer] could not save the rating', error);
+    });
+  },
   // While the chat is open, clicked code in its PR joins the conversation (PR 5.4).
   addToChat: ({ text, subject }) => currentChat.addCode(prName(location.href), text, subject),
   // Dev builds also log the context block sent to the model.

@@ -46,6 +46,12 @@
 // many are, the other popups' Pin buttons are turned off. The content script
 // closes pinned popups when the user leaves the PR (closeAllPopups).
 //
+// Rating (PR 11.11). With onRate passed, a finished answer's footer also has
+// 👍 and 👎 (toggle buttons; pressing the pressed one again takes the rating
+// back), and onRate hears each change. 👎 also offers Regenerate beside it.
+// The popup only reports the rating; the caller saves it (src/ratings.ts).
+// A new answer, after Regenerate, starts unrated.
+//
 // It follows GitHub's light or dark mode, and changes with it while open
 // (src/theme.ts). Opening it moves keyboard focus into it, so Tab reaches its
 // buttons and screen readers announce it; closing it while focus is inside
@@ -95,6 +101,7 @@ import { appendInline, renderMarkdown } from './renderMarkdown';
 import { POPUP_STYLE } from './popupStyle';
 import { restoreFocus } from '../a11y';
 import { followTheme } from '../theme';
+import type { RatingValue } from '../ratings';
 
 export const POPUP_ID = 'pr-explainer-popup';
 
@@ -158,6 +165,12 @@ export interface PopupOptions {
   facts?: CodeFacts;
   /** Clock in milliseconds, for the elapsed time. Tests pass a fake one. */
   now?: () => number;
+  /**
+   * Called when 👍 or 👎 is pressed on a finished answer (PR 11.11), with the
+   * rating, or null when the pressed one is pressed again to take it back.
+   * The buttons are shown only when this is passed.
+   */
+  onRate?: (rating: RatingValue | null) => void;
   /** Writes Copy's text to the clipboard (PR 11.10). Tests pass a fake one. */
   writeClipboard?: (text: string) => Promise<void>;
 }
@@ -574,6 +587,42 @@ export function openPopup(
   // Shown only once the explanation is shown (see popupStyle.ts).
   const footer = doc.createElement('div');
   footer.className = 'footer';
+  // 👍 and 👎 (PR 11.11), at the footer's start, with Regenerate offered after 👎.
+  let rating: RatingValue | null = null;
+  const rateGroup = doc.createElement('div');
+  rateGroup.className = 'rate';
+  rateGroup.setAttribute('role', 'group');
+  rateGroup.setAttribute('aria-label', 'Rate this answer');
+  const rateLabel = doc.createElement('span');
+  rateLabel.className = 'rate-label';
+  rateLabel.setAttribute('aria-hidden', 'true');
+  rateLabel.textContent = 'Helpful?';
+  const rateButton = (value: RatingValue, emoji: string, label: string, tip: string) => {
+    const button = doc.createElement('button');
+    button.className = 'rate-button';
+    button.type = 'button';
+    button.dataset.rating = value;
+    button.textContent = emoji;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-pressed', 'false');
+    button.title = tip;
+    return button;
+  };
+  const upButton = rateButton('up', '👍', 'Helpful', 'This answer was helpful');
+  const downButton = rateButton('down', '👎', 'Not helpful', 'This answer was not helpful');
+  const retryButton = doc.createElement('button');
+  retryButton.className = 'retry';
+  retryButton.type = 'button';
+  retryButton.textContent = 'Regenerate';
+  retryButton.title = 'Ask the model again, without the cache';
+  retryButton.hidden = true;
+  rateGroup.append(rateLabel, upButton, downButton, retryButton);
+  const showRating = () => {
+    upButton.setAttribute('aria-pressed', String(rating === 'up'));
+    downButton.setAttribute('aria-pressed', String(rating === 'down'));
+    retryButton.hidden = rating !== 'down';
+  };
+  if (options.onRate) footer.append(rateGroup);
   footer.append(copyButton);
   if (options.onAsk) {
     const askButton = doc.createElement('button');
@@ -811,11 +860,28 @@ export function openPopup(
   });
   let stopDragging: (() => void) | undefined;
 
-  regenerateButton.addEventListener('click', () => {
+  const regenerate = () => {
     if (state !== 'done' && state !== 'failed' && state !== 'stopped') return;
     popup.showLoading(modelLabel.textContent || undefined);
     options.onRegenerate?.();
-  });
+  };
+  regenerateButton.addEventListener('click', regenerate);
+  retryButton.addEventListener('click', regenerate);
+
+  const rate = (value: RatingValue) => {
+    if (state !== 'done') return;
+    rating = rating === value ? null : value;
+    showRating();
+    copyStatus.textContent =
+      rating === 'up'
+        ? 'Rated helpful'
+        : rating === 'down'
+          ? 'Rated not helpful. Regenerate asks the model again.'
+          : 'Rating removed';
+    options.onRate?.(rating);
+  };
+  upButton.addEventListener('click', () => rate('up'));
+  downButton.addEventListener('click', () => rate('down'));
 
   // Keeps the newest text in view while it streams in, unless the user has
   // scrolled up to read something.
@@ -858,6 +924,9 @@ export function openPopup(
       hideTimings();
       written = '';
       answer = undefined;
+      // A new answer starts unrated.
+      rating = null;
+      showRating();
       shown.clear();
       setBody('loading', ...loadingBody(doc, model || undefined));
     },

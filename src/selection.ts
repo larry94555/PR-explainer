@@ -131,7 +131,7 @@ export function selectionCode(context: SelectionContext): CodeSpan | undefined {
 
 export interface SelectionDeps extends Pick<
   ClickHandlerDeps,
-  'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat'
+  'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat' | 'rate'
 > {
   /** False while click-to-explain is off (toolbar button). */
   isEnabled?(): boolean;

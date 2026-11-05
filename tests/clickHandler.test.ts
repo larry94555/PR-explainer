@@ -6,6 +6,7 @@ import {
   isInteractive,
   listenForClicks,
   PRESS_CLICK_WAIT_MS,
+  ratingOf,
   type ClickHandlerDeps,
   type ExplainTiming,
 } from '../src/clickHandler';
@@ -1185,6 +1186,127 @@ describe('click handler with the real popup', () => {
     answer.resolve(DONE);
     await flush();
     expect(root.querySelectorAll('section')).toHaveLength(3);
+  });
+});
+
+describe('rating an answer (PR 11.11)', () => {
+  const KEY = 'b'.repeat(64);
+  const LENGTH =
+    DONE.status === 'done'
+      ? DONE.explanation.what.length +
+        DONE.explanation.why.length +
+        DONE.explanation.concerns.length
+      : 0;
+  let cleanup = () => {};
+
+  afterEach(() => {
+    cleanup();
+    currentPopup()?.close();
+    document.body.innerHTML = '';
+  });
+
+  function clickWithRatings(results: ExplainResult[], rate?: ClickHandlerDeps['rate']) {
+    document.body.innerHTML = fixture('github-diff-classic.html');
+    const explain = vi.fn(() => ({
+      result: Promise.resolve(results.shift() ?? DONE),
+      stop: vi.fn(),
+    }));
+    const handler = createClickHandler({
+      explain,
+      openPopup: (anchor, options) => openPopup(anchor, options),
+      ...(rate && { rate }),
+    });
+    document.addEventListener('click', handler);
+    cleanup = () => document.removeEventListener('click', handler);
+    click(
+      document.getElementById(`${ANCHOR}R44`)!.closest('tr')!.querySelector('.blob-code-inner')!,
+    );
+    const root = document.getElementById(POPUP_ID)!.shadowRoot!;
+    const button = (selector: string) => root.querySelector<HTMLButtonElement>(selector)!;
+    return {
+      explain,
+      up: () => button('button.rate-button[data-rating="up"]'),
+      down: () => button('button.rate-button[data-rating="down"]'),
+      retry: () => button('button.retry'),
+      root,
+    };
+  }
+
+  it('saves the model, kind, length, time and key of the answer, but not its text', async () => {
+    const rate = vi.fn<NonNullable<ClickHandlerDeps['rate']>>();
+    const page = clickWithRatings([{ ...DONE, key: KEY } as ExplainResult], rate);
+    await flush();
+    page.up().click();
+    expect(rate).toHaveBeenCalledOnce();
+    const sent = rate.mock.calls[0]![0];
+    expect(sent).toEqual({
+      id: expect.any(String),
+      rating: 'up',
+      model: 'qwen2.5-coder:7b',
+      kind: 'click',
+      length: LENGTH,
+      elapsedMs: expect.any(Number),
+      key: KEY,
+      ratedAt: expect.any(Number),
+    });
+    expect(JSON.stringify(sent)).not.toContain('Marks 2.4');
+    // Changing the rating keeps the same answer id.
+    page.down().click();
+    expect(rate.mock.calls[1]![0]).toMatchObject({ id: sent.id, rating: 'down' });
+  });
+
+  it('after 👎, Regenerate asks again without the cache, and the new answer is rated on its own', async () => {
+    const rate = vi.fn<NonNullable<ClickHandlerDeps['rate']>>();
+    const page = clickWithRatings([DONE, DONE], rate);
+    await flush();
+    page.down().click();
+    page.retry().click();
+    expect(page.explain).toHaveBeenCalledTimes(2);
+    expect((page.explain.mock.calls[1] as unknown[])[2]).toMatchObject({ fresh: true });
+    await flush();
+    page.up().click();
+    const [first, second] = rate.mock.calls.map(([update]) => update);
+    expect(first!.rating).toBe('down');
+    expect(second!.rating).toBe('up');
+    expect(second!.id).not.toBe(first!.id);
+  });
+
+  it('shows no rating buttons without rate', async () => {
+    const page = clickWithRatings([DONE]);
+    await flush();
+    expect(page.root.querySelector('.rate')).toBeNull();
+  });
+});
+
+describe('ratingOf', () => {
+  const done = DONE as Extract<ExplainResult, { status: 'done' }>;
+
+  it('says a fresh answer is a click, with how long this click waited', () => {
+    expect(ratingOf(done, 1834.6, 'id-1')).toEqual({
+      id: 'id-1',
+      model: 'qwen2.5-coder:7b',
+      kind: 'click',
+      length: 'Marks 2.4 as done.It merged.None found.'.length,
+      elapsedMs: 1835,
+    });
+  });
+
+  it('takes the kind and the first time from a cached answer', () => {
+    const cached = (info: object) =>
+      ratingOf({ ...done, cached: { elapsedMs: 9800, savedAt: 1, ...info } }, 5, 'id');
+    expect(cached({ kind: 'hover' })).toMatchObject({
+      kind: 'hover',
+      elapsedMs: 9800,
+      cached: true,
+    });
+    expect(cached({ kind: 'hunk', prefetched: true })).toMatchObject({ kind: 'hunk' });
+    // Saved before kinds existed: prefetched means Explain ahead, otherwise a click.
+    expect(cached({ prefetched: true })).toMatchObject({ kind: 'ahead' });
+    expect(cached({})).toMatchObject({ kind: 'click' });
+  });
+
+  it('gives each answer its own id', () => {
+    expect(ratingOf(done, 1).id).not.toBe(ratingOf(done, 1).id);
   });
 });
 

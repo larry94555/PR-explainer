@@ -264,6 +264,7 @@ export function createHunkExplainHandler(deps: ExplainDeps) {
               elapsedMs,
               savedAt: now(),
               prefetched: true as const,
+              kind: 'hunk' as const,
             };
             await cache.set(key, saved, pr).then(
               () => (statuses[i] = 'done'),

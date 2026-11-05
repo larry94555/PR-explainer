@@ -34,7 +34,8 @@ import type { Popup, PopupAnchor, PopupOptions } from './popup/popup';
 import { createClickTrace, type ClickTrace } from './trace/clickTrace';
 import type { TraceTask } from './trace/types';
 import type { DebugLogPayload } from './debug/types';
-import type { ExplainJobInfo } from './explain/explainHandler';
+import type { ExplainJobInfo, ExplainResult } from './explain/explainHandler';
+import type { AnswerKind, RatingUpdate } from './ratings';
 
 export interface ClickHandlerDeps {
   /**
@@ -77,7 +78,7 @@ export interface ClickHandlerDeps {
   openPopup(
     anchor: PopupAnchor,
     options: Required<Pick<PopupOptions, 'onStop' | 'onClose' | 'onRegenerate'>> &
-      Pick<PopupOptions, 'onAsk' | 'facts'>,
+      Pick<PopupOptions, 'onAsk' | 'facts' | 'onRate'>,
   ): Popup;
   /**
    * Opens the chat about an explanation (the popup's Ask a question button).
@@ -90,6 +91,11 @@ export interface ClickHandlerDeps {
    * in the popup as usual. Leaving it out means there is never a chat to add to.
    */
   addToChat?(request: ExplainRequest): boolean;
+  /**
+   * Saves a 👍 or 👎 on an answer, or takes it back (PR 11.11). Never given
+   * the code or the answer. Leaving it out hides the rating buttons.
+   */
+  rate?(update: RatingUpdate): void;
   /** Called with each context block sent to the model (dev logging). */
   onContext?(context: string): void;
   /**
@@ -438,7 +444,7 @@ export function listenForClicks(handler: ClickHandler, doc: Document = document)
 export function explainLineAt(
   deps: Pick<
     ClickHandlerDeps,
-    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat'
+    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat' | 'rate'
   >,
   target: EventTarget | null,
 ): boolean {
@@ -494,7 +500,7 @@ export function requestFromHunk(hunk: DiffHunk): ExplainRequest {
 export function explainCode(
   deps: Pick<
     ClickHandlerDeps,
-    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat'
+    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat' | 'rate'
   >,
   request: ExplainRequest,
   anchor: PopupAnchor,
@@ -517,7 +523,10 @@ export function explainCode(
  * a new one starts when it is left out, and on Regenerate.
  */
 export function explainInPopup(
-  deps: Pick<ClickHandlerDeps, 'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat'>,
+  deps: Pick<
+    ClickHandlerDeps,
+    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'rate'
+  >,
   { text, subject, code, facts }: ExplainRequest,
   anchor: PopupAnchor,
   onClose?: () => void,
@@ -534,7 +543,9 @@ export function explainInPopup(
   // The explanation the popup shows, for Ask a question.
   let explanation: Explanation | undefined;
   let regenerated = false;
-  const { openChat } = deps;
+  // What a rating says about the answer shown (PR 11.11): never its text.
+  let rated: Omit<RatingUpdate, 'rating' | 'ratedAt'> | undefined;
+  const { openChat, rate } = deps;
   // The popup's callbacks only run after a user action, by which time
   // `stream` (below) is set.
   const popup = deps.openPopup(anchor, {
@@ -554,6 +565,12 @@ export function explainInPopup(
       trace = createClickTrace();
       stream = ask(true);
     },
+    // The popup shows the buttons only once an answer is shown.
+    ...(rate && {
+      onRate: (rating) => {
+        if (rated) rate({ ...rated, rating, ratedAt: Date.now() });
+      },
+    }),
     // The popup has closed when this runs, and shows the button only once an
     // explanation is shown.
     ...(openChat && {
@@ -583,6 +600,7 @@ export function explainInPopup(
   const ask = (fresh: boolean): ExplainStream => {
     firstChunkMs = undefined;
     explanation = undefined;
+    rated = undefined;
     regenerated = fresh;
     let reply = '';
     const requestTrace = trace;
@@ -604,6 +622,7 @@ export function explainInPopup(
         requestTrace.addWorker(result.trace);
         if (result.status === 'done') {
           explanation = result.explanation;
+          rated = ratingOf(result, popup.elapsedMs);
           popup.showExplanation(result.explanation, result.model, result.cached);
         } else popup.showError(result.message, result.fix);
         requestTrace.finish();
@@ -638,6 +657,36 @@ export function explainInPopup(
     return request;
   };
   let stream = ask(false);
+}
+
+/** A new id for an answer shown, so rating it again replaces its rating. */
+export function newAnswerId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * What a rating of a finished answer says (PR 11.11): the model, the kind of
+ * answer, its length, how long the model took (the first time, for a cached
+ * one) and its cache key. `elapsedMs` is how long this click waited.
+ */
+export function ratingOf(
+  result: Extract<ExplainResult, { status: 'done' }>,
+  elapsedMs: number,
+  id: string = newAnswerId(),
+): Omit<RatingUpdate, 'rating' | 'ratedAt'> {
+  const { explanation, cached } = result;
+  const kind: AnswerKind = cached
+    ? (cached.kind ?? (cached.prefetched ? 'ahead' : 'click'))
+    : 'click';
+  return {
+    id,
+    model: result.model,
+    kind,
+    length: explanation.what.length + explanation.why.length + explanation.concerns.length,
+    elapsedMs: Math.round(cached ? cached.elapsedMs : elapsedMs),
+    ...(result.key && { key: result.key }),
+    ...(cached && { cached: true }),
+  };
 }
 
 /** "src/app.ts:12", or "src/app.ts:12-18" for a block, for the debug log. */

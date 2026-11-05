@@ -55,7 +55,22 @@ export interface CachedExplanation {
    * rather than for a click or hover, so the popup says "Prefetched" (PR 10.7).
    */
   prefetched?: true;
+  /**
+   * What wrote it (PR 11.11): a click, a hover, Explain ahead for one line,
+   * or a whole hunk at once, so a rating says what kind of answer it rated.
+   * Left out for answers saved before it existed.
+   */
+  kind?: CachedKind;
 }
+
+/** What can write an answer to the cache (PR 11.11). */
+export type CachedKind = 'click' | 'hover' | 'ahead' | 'hunk';
+
+const CACHED_KINDS: readonly string[] = ['click', 'hover', 'ahead', 'hunk'];
+
+/** `kind` when it is one the cache knows, otherwise nothing. */
+export const cachedKind = (kind: unknown): { kind?: CachedKind } =>
+  CACHED_KINDS.includes(kind as string) ? { kind: kind as CachedKind } : {};
 
 /** An answer as the cache lists it (the debug helper). */
 export interface ListedExplanation extends CachedExplanation {
@@ -154,12 +169,14 @@ const pick = ({
   elapsedMs,
   savedAt,
   prefetched,
+  kind,
 }: CachedExplanation): CachedExplanation => ({
   explanation,
   model,
   elapsedMs,
   savedAt,
   ...(prefetched === true && { prefetched }),
+  ...cachedKind(kind),
 });
 
 /** One index row, stored as a short array so the index stays small. */

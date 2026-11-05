@@ -69,7 +69,7 @@ import type { LoadedWindowMemory } from '../llm/loadedWindow';
 import { chooseNumCtx } from '../llm/numCtx';
 import type { ChatMessage, LlmClient, LlmErrorKind, LlmTimings } from '../llm/types';
 import type { Settings } from '../settings';
-import { explainCacheKey, type ExplainCache } from './explainCache';
+import { cachedKind, explainCacheKey, type CachedKind, type ExplainCache } from './explainCache';
 import type { FileContext, PrInfo } from './explainPrompt';
 import { buildFittedExplainPrompt, type PromptReport } from './fitPrompt';
 import { parseExplanation, type Explanation } from './parseExplanation';
@@ -160,6 +160,8 @@ export interface CachedInfo {
   savedAt: number;
   /** Written by Explain ahead rather than for a click or hover (PR 10.7). */
   prefetched?: true;
+  /** What wrote it (PR 11.11). Left out for answers saved before it existed. */
+  kind?: CachedKind;
 }
 
 export type ExplainResult =
@@ -168,6 +170,11 @@ export type ExplainResult =
       explanation: Explanation;
       model: string;
       cached?: CachedInfo;
+      /**
+       * The answer's cache key (PR 11.11), so a rating can name the answer
+       * without its text. Left out when the answer is not cached.
+       */
+      key?: string;
       /** The prompt as sent, when the Show prompt setting is on. */
       prompt?: PromptReport;
       /** Where the server's time went (PR 8.1). Left out for a cached answer. */
@@ -428,7 +435,9 @@ export function createExplainHandler(deps: ExplainDeps) {
             elapsedMs: hit.elapsedMs,
             savedAt: hit.savedAt,
             ...(hit.prefetched && { prefetched: true }),
+            ...cachedKind(hit.kind),
           },
+          key,
           ...(prompt && { prompt }),
           trace: trace(),
         };
@@ -523,6 +532,7 @@ export function createExplainHandler(deps: ExplainDeps) {
                 elapsedMs,
                 savedAt: now(),
                 ...(payload.cause === 'ahead' && { prefetched: true }),
+                kind: cause,
               },
               payload.pr,
             )
@@ -533,6 +543,7 @@ export function createExplainHandler(deps: ExplainDeps) {
         status: 'done',
         explanation,
         model,
+        ...(cache && key && { key }),
         ...(prompt && { prompt }),
         ...(timings && { timings }),
         ...(thinking && { thinking }),

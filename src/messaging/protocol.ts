@@ -11,6 +11,7 @@ import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
 import type { AheadProgress } from '../explainAhead';
 import type { OllamaStatus } from '../llm/ollamaStatus';
 import type { OpenSidePanelResult } from '../chat/sidePanelChat';
+import type { RatingUpdate } from '../ratings';
 import type { WarmupPayload, WarmupResult } from '../llm/warmup';
 
 // Each request type maps to the payload it takes and the result it returns.
@@ -44,6 +45,11 @@ export interface RequestMap {
   // Opens the chat in Chrome's side panel for the sending tab (PR 11.8, the
   // popup's Ask a question button). Chrome may refuse; the reason comes back.
   openSidePanel: { payload: undefined; result: OpenSidePanelResult };
+  // A 👍 or 👎 on an answer, or `rating: null` to take it back (PR 11.11).
+  // Never the code or the answer itself.
+  rateAnswer: { payload: RatingUpdate; result: { kept: number } };
+  // Removes every rating (the settings page's Clear ratings button, PR 11.11).
+  clearRatings: { payload: undefined; result: { cleared: true } };
 }
 
 export type RequestType = keyof RequestMap;
