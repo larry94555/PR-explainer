@@ -17,6 +17,7 @@ const SAVED: Settings = {
   llmUrl: 'http://localhost:11434',
   model: 'qwen2.5-coder:7b',
   chatModel: '',
+  chatOpensIn: 'sidepanel',
   temperature: 0.4,
   maxResponseTokens: 512,
   contextTokens: 0,
@@ -523,6 +524,22 @@ describe('options page', () => {
     expect($<HTMLSelectElement>('model').value).toBe('gone:1b');
   });
 
+  it('loads and saves Chat opens in, Side panel by default (PR 11.8)', async () => {
+    const deps = fakeDeps(fakeClient());
+    const page = await initOptionsPage(document, deps);
+    const select = $<HTMLSelectElement>('chatOpensIn');
+    expect([...select.options].map((o) => [o.value, o.textContent])).toEqual([
+      ['sidepanel', 'Side panel'],
+      ['page', 'On the page'],
+    ]);
+    expect(select.value).toBe('sidepanel');
+    select.value = 'page';
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ chatOpensIn: 'page' });
+    await initOptionsPage(document, deps);
+    expect($<HTMLSelectElement>('chatOpensIn').value).toBe('page');
+  });
+
   describe('Chat model (PR 9.14)', () => {
     const chatOptions = () =>
       [...$<HTMLSelectElement>('chatModel').options].map((o) => [o.value, o.textContent]);
@@ -687,6 +704,7 @@ describe('options page', () => {
       llmUrl: 'http://localhost:11434',
       model: 'llama3.2:3b',
       chatModel: '',
+      chatOpensIn: 'sidepanel',
       temperature: 1.5,
       maxResponseTokens: 2048,
       contextTokens: 0,

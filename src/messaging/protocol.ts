@@ -10,6 +10,7 @@ import type { DebugLogPayload } from '../debug/types';
 import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
 import type { AheadProgress } from '../explainAhead';
 import type { OllamaStatus } from '../llm/ollamaStatus';
+import type { OpenSidePanelResult } from '../chat/sidePanelChat';
 import type { WarmupPayload, WarmupResult } from '../llm/warmup';
 
 // Each request type maps to the payload it takes and the result it returns.
@@ -40,6 +41,9 @@ export interface RequestMap {
   // asks without `retry` (the worker checks unless Ollama is known to be
   // up); the banner's Try again sends `retry: true`, which checks at once.
   ollamaStatus: { payload: { retry?: boolean } | undefined; result: OllamaStatus };
+  // Opens the chat in Chrome's side panel for the sending tab (PR 11.8, the
+  // popup's Ask a question button). Chrome may refuse; the reason comes back.
+  openSidePanel: { payload: undefined; result: OpenSidePanelResult };
 }
 
 export type RequestType = keyof RequestMap;

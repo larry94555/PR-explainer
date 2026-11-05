@@ -8,6 +8,15 @@ import { THEME_VARS } from '../theme';
 export const CHAT_PANEL_STYLE = `
   :host { all: initial; position: fixed; right: 16px; bottom: 16px; z-index: 2147483646; }
   ${THEME_VARS}
+  /* In Chrome's side panel (PR 11.8) the chat fills the page. */
+  :host([data-layout='fill']) { position: static; display: block; height: 100vh; }
+  :host([data-layout='fill']) .chat {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
   .chat {
     box-sizing: border-box;
     display: flex;

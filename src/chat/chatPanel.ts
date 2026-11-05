@@ -31,6 +31,12 @@
 // opened. The message list is marked aria-busy while an answer is being
 // written (PR 7.3).
 //
+// The same panel draws the chat in Chrome's side panel (PR 11.8,
+// src/sidepanel/sidePanelPage.ts): `layout: 'fill'` makes it fill the page it
+// is on instead of floating in a corner, and `theme` gives it GitHub's light
+// or dark mode, which the side panel's own page cannot read. There it is a
+// region rather than a dialog, and Esc does not close it.
+//
 // The panel does not talk to the LLM or keep the conversation: it reports
 // each question through onSend, and the caller adds the answer with
 // addMessage and fills it in with update. src/chat/chatFlow.ts does that with
@@ -41,7 +47,7 @@ import { appendInline, renderMarkdown } from '../popup/renderMarkdown';
 import { formatElapsed, TICK_MS } from '../popup/popup';
 import { CHAT_PANEL_STYLE } from './chatPanelStyle';
 import { restoreFocus } from '../a11y';
-import { followTheme } from '../theme';
+import { followTheme, type Theme } from '../theme';
 
 export const CHAT_PANEL_ID = 'pr-explainer-chat';
 
@@ -112,6 +118,16 @@ export interface ChatPanelOptions {
   streamAnswers?: boolean;
   /** Clock in milliseconds, for an answer's elapsed time. Tests pass a fake one. */
   now?: () => number;
+  /**
+   * `docked` (the default) floats over the bottom right of the page; `fill`
+   * fills the page, for Chrome's side panel (PR 11.8).
+   */
+  layout?: 'docked' | 'fill';
+  /**
+   * Light or dark, set by the caller (the side panel, PR 11.8). Left out, the
+   * panel follows the page it is on (src/theme.ts).
+   */
+  theme?: Theme;
 }
 
 export interface ChatPanel {
@@ -158,13 +174,15 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
 
   const host = doc.createElement('div');
   host.id = CHAT_PANEL_ID;
+  const fill = options.layout === 'fill';
+  if (fill) host.dataset.layout = 'fill';
   const shadow = host.attachShadow({ mode: 'open' });
   const style = doc.createElement('style');
   style.textContent = CHAT_PANEL_STYLE;
 
   const panel = doc.createElement('div');
   panel.className = 'chat';
-  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('role', fill ? 'region' : 'dialog');
   panel.setAttribute('aria-label', 'PR Explainer chat');
 
   const header = doc.createElement('div');
@@ -229,7 +247,9 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   panel.append(header, list, form);
   shadow.append(style, panel);
   doc.body.append(host);
-  const stopFollowingTheme = followTheme(host, doc);
+  let stopFollowingTheme = () => {};
+  if (options.theme) host.dataset.theme = options.theme;
+  else stopFollowingTheme = followTheme(host, doc);
 
   let open = true;
   let busy = false;
@@ -406,7 +426,7 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   }
   // isComposing: Esc that cancels an input method (IME) word keeps the panel open.
   panel.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !event.isComposing) chat.close();
+    if (event.key === 'Escape' && !event.isComposing && !fill) chat.close();
   });
 
   for (const message of options.messages ?? []) {

@@ -24,8 +24,10 @@ import {
   showStatusBanner,
 } from './statusBanner';
 import { chatSessionFor, CurrentChat, startChat } from './chat/chatFlow';
-import { currentChatPanel, openChatPanel } from './chat/chatPanel';
+import { currentChatPanel, openChatPanel, type ChatPanel } from './chat/chatPanel';
 import { ChatSessions } from './chat/chatSession';
+import { createChatOpener, createSidePanelLink, trackChatPlace } from './chat/sidePanelChat';
+import { resolveTheme, watchTheme } from './theme';
 import { createClickHandler, listenForClicks, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
 import {
@@ -198,6 +200,17 @@ if (import.meta.env.MODE === 'development') {
 }
 
 let workerStatus = 'Service worker: checking…';
+// The chat in Chrome's side panel (PR 11.8, src/chat/sidePanelChat.ts): the
+// side panel connects to this tab while it is the active one, and draws its
+// chat. The conversation stays here either way.
+const sidePanel = createSidePanelLink({
+  runtime: chrome.runtime,
+  theme: () => resolveTheme(document),
+  onPr: () => prName(location.href) !== undefined,
+});
+watchTheme(document, (theme) => sidePanel.themeChanged(theme));
+/** The open chat, on the page or in the side panel. */
+const openChat = (): ChatPanel | null => currentChatPanel() ?? sidePanel.current();
 // The chat panel opened last; clicks on other code in its PR go to it while
 // it is open (PR 5.4).
 const currentChat = new CurrentChat();
@@ -209,7 +222,7 @@ const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (va
   // ignored.
   if (!value) {
     currentPopup()?.close();
-    currentChatPanel()?.close();
+    openChat()?.close();
     prefetcher.cancel();
     onClick.cancelPress();
     ahead.cancel();
@@ -310,6 +323,7 @@ function readDescriptionAhead(): void {
 function update(): void {
   // Moving to another PR (or off PRs) without a reload closes its chat.
   currentChat.leave(prName(location.href));
+  sidePanel.pageChanged();
   if (!syncBadge(document, location.href)) return;
   pingWorker();
   warmUpModel();
@@ -553,7 +567,7 @@ const ahead = createExplainAhead({
     return (
       state === 'loading' ||
       state === 'streaming' ||
-      currentChatPanel()?.isBusy === true ||
+      openChat()?.isBusy === true ||
       prefetcher.running() !== undefined ||
       document.visibilityState === 'hidden'
     );
@@ -648,7 +662,7 @@ const prefetcher = createPrefetcher({
   // not while the chat is open (a click then goes to the chat).
   isBusy: () => {
     const state = currentPopup()?.state;
-    return state === 'loading' || state === 'streaming' || currentChatPanel() !== null;
+    return state === 'loading' || state === 'streaming' || openChat() !== null;
   },
   // Every build logs prefetches, like the timing of each explanation below.
   onEvent: (event) => console.info(`[PR Explainer] ${describePrefetch(event)}`),
@@ -659,6 +673,13 @@ const prefetcher = createPrefetcher({
 const debugSetting = trackDebugSetting(chrome.storage.sync, chrome.storage.onChanged, (on) => {
   if (on) readPatchAhead();
 });
+// Chat opens in (PR 11.8): the side panel (the default) or the page.
+const chatPlace = trackChatPlace(chrome.storage.sync, chrome.storage.onChanged);
+const placeChat = createChatOpener({
+  place: () => chatPlace.current(),
+  sidePanelShown: () => sidePanel.shown,
+  openSidePanel: () => sendRequest('openSidePanel', undefined),
+});
 // Show answers as they are written (PR 9.6): off, the popup and the chat show
 // each answer whole once it is ready. Read again for each popup and chat.
 const streamSetting = trackStreamSetting(chrome.storage.sync, chrome.storage.onChanged);
@@ -666,7 +687,7 @@ const streamSetting = trackStreamSetting(chrome.storage.sync, chrome.storage.onC
 const explainDeps: ClickHandlerDeps = {
   isEnabled: () => enabled.current() === true,
   // A press sends nothing while the chat is open: the click goes to the chat (PR 11.1).
-  isChatOpen: () => currentChatPanel() !== null,
+  isChatOpen: () => openChat() !== null,
   // A click joins a running prefetch of the same line instead of asking again.
   explain: prefetcher.explain,
   // With the Debug window setting on, the popup's Debug button opens the
@@ -685,21 +706,32 @@ const explainDeps: ClickHandlerDeps = {
     }),
   // The popup's Ask a question button: chat about the explained code, with
   // answers streamed from the service worker (src/chat/chatFlow.ts).
+  // With Chat opens in on Side panel (PR 11.8), the side panel is asked for
+  // at once, from the click; if Chrome refuses, the chat opens on the page.
   openChat: ({ subject, regenerated, ...seed }) => {
     const pr = prName(location.href);
-    const session = chatSessionFor(chats, pr, seed, { regenerated });
-    const chat = startChat(
-      {
-        ask: (messages, onChunk) => openChatStream({ messages }, onChunk),
-        openPanel: (options) =>
-          openChatPanel({ ...options, streamAnswers: streamSetting.current() }),
-      },
-      session,
-      subject,
-    );
-    currentChat.set(chat, pr);
-    chat.focus();
     warmUpChatModel(pr);
+    placeChat((place, note) => {
+      // The page may have moved on while the side panel opened.
+      if (prName(location.href) !== pr) return;
+      const session = chatSessionFor(chats, pr, seed, { regenerated });
+      // One chat at a time, wherever it is.
+      openChat()?.close();
+      const chat = startChat(
+        {
+          ask: (messages, onChunk) => openChatStream({ messages }, onChunk),
+          openPanel: (options) => {
+            const withSetting = { ...options, streamAnswers: streamSetting.current() };
+            return place === 'sidepanel' ? sidePanel.open(withSetting) : openChatPanel(withSetting);
+          },
+        },
+        session,
+        subject,
+      );
+      if (note) chat.addNote(note);
+      currentChat.set(chat, pr);
+      chat.focus();
+    });
   },
   // While the chat is open, clicked code in its PR joins the conversation (PR 5.4).
   addToChat: ({ text, subject }) => currentChat.addCode(prName(location.href), text, subject),

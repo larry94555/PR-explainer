@@ -120,6 +120,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const modelSelect = el<HTMLSelectElement>(doc, 'model');
   const chatModelSelect = el<HTMLSelectElement>(doc, 'chatModel');
   const chatModelNote = el(doc, 'chat-model-note');
+  const chatPlaceSelect = el<HTMLSelectElement>(doc, 'chatOpensIn');
   const temperatureInput = el<HTMLInputElement>(doc, 'temperature');
   const temperatureValue = el<HTMLOutputElement>(doc, 'temperature-value');
   const maxTokensInput = el<HTMLInputElement>(doc, 'maxResponseTokens');
@@ -161,6 +162,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     urlInput.value = settings.llmUrl;
     setModelOptions(null, settings.model);
     setChatModelOptions(null, settings.chatModel);
+    chatPlaceSelect.value = settings.chatOpensIn;
     temperatureInput.value = String(settings.temperature);
     temperatureValue.textContent = String(settings.temperature);
     maxTokensInput.value = String(settings.maxResponseTokens);
@@ -191,6 +193,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       llmUrl: urlInput.value.trim().replace(/\/+$/, ''),
       model: modelSelect.value,
       chatModel: chatModelSelect.value,
+      chatOpensIn: chatPlaceSelect.value as Settings['chatOpensIn'],
       temperature: Number(temperatureInput.value),
       // An empty box becomes NaN so validation reports it instead of using 0.
       maxResponseTokens: maxTokens === '' ? NaN : Number(maxTokens),

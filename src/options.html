@@ -40,6 +40,21 @@
         </div>
 
         <div class="field">
+          <label for="chatOpensIn">Chat opens in</label>
+          <select id="chatOpensIn" name="chatOpensIn">
+            <option value="sidepanel">Side panel</option>
+            <option value="page">On the page</option>
+          </select>
+          <p class="hint">
+            Where Ask a question opens the chat. <strong>Side panel</strong> shows it in Chrome's
+            side panel, next to the PR, so it covers no code and stays open while you move between
+            the PR's tabs; it follows the PR in the tab you are on. <strong>On the page</strong>
+            floats it over the bottom right of the page, as before.
+          </p>
+          <p class="error" data-error-for="chatOpensIn" role="alert"></p>
+        </div>
+
+        <div class="field">
           <label for="temperature">
             Temperature <output id="temperature-value" for="temperature"></output>
           </label>
