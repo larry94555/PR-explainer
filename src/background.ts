@@ -2,7 +2,7 @@
 // src/messaging/). All calls to the local LLM run here (see src/llm/).
 import { createBackgroundPause, forgetTabOnLoad } from './backgroundPause';
 import { createChatHandler } from './chat/chatHandler';
-import { followChatPlace, setupCommands, setupExplainMenu } from './commands';
+import { setupCommands, setupExplainMenu } from './commands';
 import {
   clearWhenTurnedOff,
   createDebugLog,
@@ -46,6 +46,7 @@ import { listenForWorkerPorts } from './messaging/workerPort';
 import type { RoundTripSink } from './net/roundTrips';
 import {
   DEFAULT_SETTINGS,
+  followChatPlace,
   hasOwnChatModel,
   followRequestsAtOnce,
   getSettings,

@@ -2,15 +2,13 @@
 // Explain and Open chat commands to the active PR tab, and the tab acts on them.
 import {
   EXPLAIN_COMMAND,
-  followChatPlace,
   isPrPage,
   OPEN_CHAT_COMMAND,
   setupCommands,
-  type ChatPlace,
   type CommandTabsLike,
   type TabLike,
 } from '../src/commands';
-import type { StorageChangedLike } from '../src/debug/debugLog';
+import type { ChatPlace } from '../src/settings';
 import type { MessageListener } from '../src/messaging/protocol';
 import type { SidePanelLike } from '../src/sidePanelOpener';
 import { listenForTabCommands } from '../src/tabCommands';
@@ -113,11 +111,21 @@ describe('setupCommands', () => {
     expect(sent.map((s) => s.tabId)).toEqual([9]);
   });
 
-  it('opens Open chat in the side panel at once, before anything is awaited', () => {
+  it('opens Open chat in the side panel at once, then tells the page to draw its chat there', async () => {
     const { press, sent, sidePanel } = setup();
     press(OPEN_CHAT_COMMAND, { id: 4, url: PR, windowId: 1 });
+    // Before anything is awaited, so Chrome counts the key press.
     expect(sidePanel!.open).toHaveBeenCalledWith({ tabId: 4 });
     expect(sent).toEqual([]);
+    await flush();
+    // The page keeps the conversation, so it reopens it in the side panel (review on #78).
+    expect(sent).toEqual([
+      {
+        tabId: 4,
+        message: { type: 'pr-explainer:command', command: 'open-chat', sidePanel: true },
+        options: { frameId: 0 },
+      },
+    ]);
   });
 
   it('sends Open chat to the page, with the reason, when Chrome refuses the side panel', async () => {
@@ -157,41 +165,6 @@ describe('setupCommands', () => {
   });
 });
 
-describe('followChatPlace', () => {
-  function fakeChanged() {
-    const listeners: Parameters<StorageChangedLike['addListener']>[0][] = [];
-    return {
-      onChanged: { addListener: (l: (typeof listeners)[number]) => void listeners.push(l) },
-      fire: (value: unknown) =>
-        listeners.forEach((l) => l({ 'settings.chatOpensIn': { newValue: value } }, 'sync')),
-    };
-  }
-
-  it('is Side panel until read, then follows the stored value and each save', async () => {
-    const { onChanged, fire } = fakeChanged();
-    const place = followChatPlace(
-      { get: async () => ({ 'settings.chatOpensIn': 'page' }) },
-      onChanged,
-    );
-    expect(place.current()).toBe('sidepanel');
-    await flush();
-    expect(place.current()).toBe('page');
-    fire('sidepanel');
-    expect(place.current()).toBe('sidepanel');
-  });
-
-  it('lets a save made before the read win', async () => {
-    const { onChanged, fire } = fakeChanged();
-    const place = followChatPlace(
-      { get: async () => ({ 'settings.chatOpensIn': 'sidepanel' }) },
-      onChanged,
-    );
-    fire('page');
-    await flush();
-    expect(place.current()).toBe('page');
-  });
-});
-
 describe('listenForTabCommands', () => {
   function setupPage() {
     let listener: MessageListener = () => false;
@@ -212,7 +185,8 @@ describe('listenForTabCommands', () => {
     send({ type: 'pr-explainer:command', command: 'open-chat', reason: 'why' });
     expect(handlers.explain).toHaveBeenCalledTimes(1);
     expect(handlers.explainAtPointer).toHaveBeenCalledTimes(1);
-    expect(handlers.openChat).toHaveBeenCalledWith('why');
+    send({ type: 'pr-explainer:command', command: 'open-chat', sidePanel: true });
+    expect(handlers.openChat.mock.calls).toEqual([[{ reason: 'why' }], [{ sidePanel: true }]]);
   });
 
   it('ignores other messages and other extensions', () => {

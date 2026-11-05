@@ -6,6 +6,8 @@ import {
   hasOwnChatModel,
   DEFAULT_SETTINGS,
   DEFAULT_SKIP_PATTERNS,
+  chatPlaceOf,
+  followChatPlace,
   followRequestsAtOnce,
   HOVER_WAIT_MS_RANGE,
   REQUESTS_AT_ONCE_RANGE,
@@ -24,7 +26,7 @@ import {
   skipPatternsOf,
 } from '../src/skipFiles';
 import { STREAM_SETTING_KEY, trackStreamSetting } from '../src/streamSetting';
-import { CHAT_PLACE_KEY, chatPlaceOf } from '../src/chat/sidePanelChat';
+import { CHAT_PLACE_KEY, chatPlaceOf as contentChatPlaceOf } from '../src/chat/sidePanelChat';
 import {
   AHEAD_SETTING_KEY,
   REQUESTS_AT_ONCE,
@@ -467,6 +469,42 @@ describe('settings', () => {
       expect(followed.current()).toBe(4);
       listener({ [key]: { newValue: 7 } }, 'sync');
       expect(followed.current()).toBe(1);
+    });
+
+    it('follows Chat opens in in the service worker: Side panel until read, then each save (PR 11.9)', async () => {
+      const key = storageKey('chatOpensIn');
+      let listener: (
+        changes: Record<string, { newValue?: unknown }>,
+        area: string,
+      ) => void = () => {};
+      const followed = followChatPlace(fakeStorage({ [key]: 'page' }), {
+        addListener: (l) => void (listener = l),
+      });
+      expect(followed.current()).toBe('sidepanel');
+      await new Promise((r) => setTimeout(r, 0));
+      expect(followed.current()).toBe('page');
+      listener({ [key]: { newValue: 'sidepanel' } }, 'sync');
+      expect(followed.current()).toBe('sidepanel');
+      listener({ [key]: { newValue: 'nonsense' } }, 'sync');
+      expect(followed.current()).toBe('sidepanel');
+      // Read the same way as the content script's copy of the setting.
+      expect(['page', 'sidepanel', undefined, 3].map(chatPlaceOf)).toEqual(
+        ['page', 'sidepanel', undefined, 3].map(contentChatPlaceOf),
+      );
+    });
+
+    it('lets a save of Chat opens in made before the read win (PR 11.9)', async () => {
+      const key = storageKey('chatOpensIn');
+      let listener: (
+        changes: Record<string, { newValue?: unknown }>,
+        area: string,
+      ) => void = () => {};
+      const followed = followChatPlace(fakeStorage({ [key]: 'sidepanel' }), {
+        addListener: (l) => void (listener = l),
+      });
+      listener({ [key]: { newValue: 'page' } }, 'sync');
+      await new Promise((r) => setTimeout(r, 0));
+      expect(followed.current()).toBe('page');
     });
 
     it('the content script reads Requests at once under its key, with the same limits (PR 10.6)', () => {

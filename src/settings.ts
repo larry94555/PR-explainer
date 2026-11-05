@@ -478,6 +478,36 @@ export interface SettingsChangedLike {
 }
 
 /**
+ * Follows one setting in the service worker without reading storage each
+ * time it is needed: `parse(undefined)` until the read answers, then the
+ * stored value and each save, parsed. A save that arrives first wins. (The
+ * content script has its own, trackSyncValue in src/syncFlag.ts: the two
+ * cannot share code, see src/content.ts.)
+ */
+export function followSetting<K extends SettingsField, T>(
+  field: K,
+  storage: StorageAreaLike,
+  onChanged: SettingsChangedLike,
+  parse: (stored: unknown) => T,
+): { current(): T } {
+  const key = storageKey(field);
+  let current = parse(undefined);
+  let changed = false;
+  onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'sync' || !Object.hasOwn(changes, key)) return;
+    changed = true;
+    current = parse(changes[key]?.newValue);
+  });
+  storage.get([key]).then(
+    (stored) => {
+      if (!changed) current = parse(stored[key]);
+    },
+    () => undefined,
+  );
+  return { current: () => current };
+}
+
+/**
  * Follows Requests at once in the service worker (PR 10.6), so the queue's
  * limit changes as soon as the setting is saved. The default until it is read.
  */
@@ -485,19 +515,21 @@ export function followRequestsAtOnce(
   storage: StorageAreaLike,
   onChanged: SettingsChangedLike,
 ): { current(): number } {
-  const key = storageKey('requestsAtOnce');
-  let current = DEFAULT_SETTINGS.requestsAtOnce;
-  let changed = false;
-  onChanged.addListener((changes, areaName) => {
-    if (areaName !== 'sync' || !Object.hasOwn(changes, key)) return;
-    changed = true;
-    current = requestsAtOnceOf(changes[key]?.newValue);
-  });
-  storage.get([key]).then(
-    (stored) => {
-      if (!changed) current = requestsAtOnceOf(stored[key]);
-    },
-    () => undefined,
-  );
-  return { current: () => current };
+  return followSetting('requestsAtOnce', storage, onChanged, requestsAtOnceOf);
+}
+
+/** Chat opens in as stored: `page`, or `sidepanel` (the default) for anything else. */
+export function chatPlaceOf(stored: unknown): ChatPlace {
+  return stored === 'page' ? 'page' : 'sidepanel';
+}
+
+/**
+ * Follows Chat opens in in the service worker (PR 11.9), so a shortcut can
+ * open the side panel before anything is awaited. Side panel until it is read.
+ */
+export function followChatPlace(
+  storage: StorageAreaLike,
+  onChanged: SettingsChangedLike,
+): { current(): ChatPlace } {
+  return followSetting('chatOpensIn', storage, onChanged, chatPlaceOf);
 }

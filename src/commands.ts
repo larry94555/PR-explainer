@@ -20,10 +20,9 @@
 //
 // Chrome's APIs are passed in so the tests can use fakes.
 
-import type { StorageChangedLike } from './debug/debugLog';
 import type { ContextMenusLike } from './debug/debugWindowOpener';
 import type { TabCommand, TabCommandType } from './messaging/protocol';
-import { storageKey } from './settings';
+import type { ChatPlace } from './settings';
 import { openSidePanel, type SidePanelLike } from './sidePanelOpener';
 
 export const EXPLAIN_COMMAND = 'explain';
@@ -60,42 +59,12 @@ export interface CommandTabsLike {
   sendMessage(tabId: number, message: unknown, options?: { frameId?: number }): Promise<unknown>;
 }
 
-/** Where the chat opens: Chat opens in (PR 11.8). */
-export type ChatPlace = 'sidepanel' | 'page';
-
 /** Sends `command` to the page in tab `tabId` (its top frame, where the content script runs). */
 function sendToTab(tabs: CommandTabsLike, tabId: number, command: TabCommand): void {
   tabs.sendMessage(tabId, command, { frameId: 0 }).catch((error: unknown) => {
     // A tab opened before the extension was loaded has no content script yet.
     console.warn(`[PR Explainer] could not send ${command.command} to the tab`, error);
   });
-}
-
-/**
- * Follows Chat opens in without reading storage when a key is pressed, since
- * the side panel must be opened before anything is awaited. Side panel (the
- * default) until the setting is read.
- */
-export function followChatPlace(
-  storage: { get(keys: string[]): Promise<Record<string, unknown>> },
-  onChanged: StorageChangedLike,
-): { current(): ChatPlace } {
-  const key = storageKey('chatOpensIn');
-  const placeOf = (value: unknown): ChatPlace => (value === 'page' ? 'page' : 'sidepanel');
-  let current: ChatPlace = 'sidepanel';
-  let changed = false;
-  onChanged.addListener((changes, areaName) => {
-    if (areaName !== 'sync' || !Object.hasOwn(changes, key)) return;
-    changed = true;
-    current = placeOf(changes[key]?.newValue);
-  });
-  storage.get([key]).then(
-    (stored) => {
-      if (!changed) current = placeOf(stored[key]);
-    },
-    () => undefined,
-  );
-  return { current: () => current };
 }
 
 /** Sends the Explain and Open chat shortcuts to the active tab, while it shows a PR. */
@@ -112,9 +81,16 @@ export function setupCommands(deps: {
       return;
     }
     // Called before anything is awaited, so Chrome counts the key press.
+    // Then the page draws its conversation there (it keeps the chat), or
+    // opens it on the page with the reason Chrome gave (review on #78).
     void openSidePanel(deps.sidePanel, { tabId: tab.id }).then((result) => {
-      if (result.opened) return;
-      sendToTab(tabs, tab.id, { type: COMMAND_TYPE, command: 'open-chat', reason: result.reason });
+      sendToTab(
+        tabs,
+        tab.id,
+        result.opened
+          ? { type: COMMAND_TYPE, command: 'open-chat', sidePanel: true }
+          : { type: COMMAND_TYPE, command: 'open-chat', reason: result.reason },
+      );
     });
   };
   const run = (command: string, tab: TabLike) => {

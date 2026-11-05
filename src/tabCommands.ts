@@ -16,8 +16,11 @@ export interface TabCommandHandlers {
   explain(): void;
   /** Explain with PR Explainer, on what was last right-clicked. */
   explainAtPointer(): void;
-  /** The Open chat shortcut, with why the side panel did not open, if it did not. */
-  openChat(reason?: string): void;
+  /**
+   * The Open chat shortcut: in the side panel Chrome just opened, or on the
+   * page, with why the side panel did not open, if it did not.
+   */
+  openChat(options: { sidePanel?: true; reason?: string }): void;
 }
 
 function isTabCommand(message: unknown): message is TabCommand {
@@ -37,7 +40,12 @@ export function listenForTabCommands(
     if (sender.id !== runtime.id || !isTabCommand(message)) return false;
     if (message.command === 'explain') handlers.explain();
     else if (message.command === 'explain-at-pointer') handlers.explainAtPointer();
-    else if (message.command === 'open-chat') handlers.openChat(message.reason);
+    else if (message.command === 'open-chat') {
+      handlers.openChat({
+        ...(message.sidePanel === true && { sidePanel: true as const }),
+        ...(typeof message.reason === 'string' && { reason: message.reason }),
+      });
+    }
     return false;
   });
 }

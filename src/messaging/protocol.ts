@@ -166,6 +166,8 @@ export type TabCommand =
   | { type: TabCommandType; command: 'explain' }
   // Explain with PR Explainer in the right-click menu: what was right-clicked.
   | { type: TabCommandType; command: 'explain-at-pointer' }
-  // The Open chat shortcut, when the chat opens on the page (Chat opens in
-  // is On the page, or Chrome did not open the side panel: `reason` says why).
-  | { type: TabCommandType; command: 'open-chat'; reason?: string };
+  // The Open chat shortcut. `sidePanel`: the side panel just opened, so the
+  // page draws its conversation there. Otherwise the chat opens on the page
+  // (Chat opens in is On the page, or Chrome did not open the side panel:
+  // `reason` says why).
+  | { type: TabCommandType; command: 'open-chat'; sidePanel?: true; reason?: string };

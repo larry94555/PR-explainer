@@ -24,6 +24,7 @@ import {
   showStatusBanner,
 } from './statusBanner';
 import { chatSessionFor, CurrentChat, startChat } from './chat/chatFlow';
+import { openChatFromShortcut } from './chat/chatShortcut';
 import {
   currentChatPanel,
   openChatPanel,
@@ -31,12 +32,7 @@ import {
   type ChatSubject,
 } from './chat/chatPanel';
 import { ChatSessions, type ChatSession } from './chat/chatSession';
-import {
-  createChatOpener,
-  createSidePanelLink,
-  fallbackNote,
-  trackChatPlace,
-} from './chat/sidePanelChat';
+import { createChatOpener, createSidePanelLink, trackChatPlace } from './chat/sidePanelChat';
 import { resolveTheme, watchTheme } from './theme';
 import { createClickHandler, listenForClicks, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
@@ -725,28 +721,6 @@ function showChat(
   chat.focus();
 }
 
-/**
- * The Open chat shortcut when the chat opens on the page (PR 11.9): the
- * open chat gets focus, or this PR's conversation opens again. A PR with no
- * conversation yet has nothing to open; Ask a question in a popup starts one.
- */
-function openChatOnPage(reason?: string): void {
-  const open = currentChatPanel();
-  if (open) {
-    open.focus();
-    return;
-  }
-  const pr = prName(location.href);
-  const session = pr === undefined ? undefined : chats.get(pr);
-  const subject = pr === undefined ? undefined : chatSubjects.get(pr);
-  if (!session || !subject) {
-    console.info('[PR Explainer] Open chat: no conversation on this PR yet');
-    return;
-  }
-  warmUpChatModel(pr);
-  showChat('page', pr, session, subject, reason ? fallbackNote(reason) : undefined);
-}
-
 const explainDeps: ClickHandlerDeps = {
   isEnabled: () => enabled.current() === true,
   // A press sends nothing while the chat is open: the click goes to the chat (PR 11.1).
@@ -846,7 +820,25 @@ listenForTabCommands(chrome.runtime, {
     const at = contextTarget.current();
     selection?.explainAt(at?.target ?? null, at?.point);
   },
-  openChat: openChatOnPage,
+  // The Open chat shortcut: this PR's conversation, in the side panel Chrome
+  // just opened or on the page (src/chat/chatShortcut.ts).
+  openChat: (options) => {
+    const outcome = openChatFromShortcut(
+      {
+        pr: () => prName(location.href),
+        sessions: chats,
+        subjects: chatSubjects,
+        openChat: (place) => (place === 'sidepanel' ? sidePanel.current() : currentChatPanel()),
+        show: (place, pr, session, subject, note) => {
+          warmUpChatModel(pr);
+          showChat(place, pr, session, subject, note);
+        },
+      },
+      options,
+    );
+    if (outcome === 'nothing')
+      console.info('[PR Explainer] Open chat: no conversation on this PR yet');
+  },
 });
 // Click-to-explain is attached only while a PR's diffs are shown, once
 // however often GitHub re-renders the page, and taken off when the user
