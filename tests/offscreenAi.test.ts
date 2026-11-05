@@ -132,6 +132,34 @@ describe('the built-in model through the offscreen document (PR 11.13)', () => {
     release();
   });
 
+  it('honours Stop while the document is still opening: nothing is sent (review on #82)', async () => {
+    let opened!: () => void;
+    const ensureDocument = vi.fn(() => new Promise<void>((resolve) => (opened = resolve)));
+    const { client, ports } = connected(fakeApi(['x']), ensureDocument);
+    const stop = new AbortController();
+    const answer = client.chat(MESSAGES, { model: '', signal: stop.signal });
+    await vi.waitFor(() => expect(ensureDocument).toHaveBeenCalled());
+    stop.abort();
+    await expect(answer).rejects.toMatchObject({ kind: 'aborted' });
+    opened();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ports).toHaveLength(0);
+  });
+
+  it('sends nothing when Stop comes as the document finishes opening (review on #82)', async () => {
+    const stop = new AbortController();
+    const { client, ports } = connected(
+      fakeApi(['x']),
+      vi.fn(async () => {
+        stop.abort();
+      }),
+    );
+    await expect(client.chat(MESSAGES, { model: '', signal: stop.signal })).rejects.toMatchObject({
+      kind: 'aborted',
+    });
+    expect(ports).toHaveLength(0);
+  });
+
   it('passes the error kind back, so the popup can say what to do', async () => {
     const { client } = connected(undefined);
     const error = await client.chat(MESSAGES, { model: '' }).catch((e: unknown) => e);

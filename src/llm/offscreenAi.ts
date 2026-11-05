@@ -113,16 +113,27 @@ export class OffscreenAiClient implements LlmClient {
     request: ChromeAiRequest,
     signal?: AbortSignal,
   ): AsyncGenerator<string, T, undefined> {
-    if (signal?.aborted) throw new LlmError('aborted', 'The request was cancelled.');
-    try {
-      await this.deps.ensureDocument();
-    } catch (error) {
-      throw new LlmError(
-        'built-in-error',
-        `Could not open the page that runs it: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error },
-      );
-    }
+    const cancelled = () => new LlmError('aborted', 'The request was cancelled.');
+    if (signal?.aborted) throw cancelled();
+    // Stop while the document is still opening ends the call at once, and
+    // nothing is sent to it (review on #82).
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => reject(cancelled());
+      signal?.addEventListener('abort', onAbort, { once: true });
+      this.deps
+        .ensureDocument()
+        .then(resolve, (error: unknown) =>
+          reject(
+            new LlmError(
+              'built-in-error',
+              `Could not open the page that runs it: ${error instanceof Error ? error.message : String(error)}`,
+              { cause: error },
+            ),
+          ),
+        )
+        .finally(() => signal?.removeEventListener('abort', onAbort));
+    });
+    if (signal?.aborted) throw cancelled();
     const port = this.deps.connect({ name: CHROME_AI_PORT });
     // Messages arrive as events; the generator takes them in order.
     const queue: (ChromeAiReply | 'closed')[] = [];

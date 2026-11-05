@@ -929,9 +929,28 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     }
   }
 
+  // With Chrome built-in, the page does not ask Ollama for its models on its
+  // own, so someone without Ollama sees no Ollama errors; the Ollama lines
+  // say nothing until Ollama is picked again or Refresh is pressed (review on #82).
+  function clearOllamaStatus(): void {
+    refreshCount++;
+    gpuCount++;
+    thinkingCount++;
+    modelsStatus.replaceChildren();
+    gpuLine.replaceChildren();
+    thinkingLine.replaceChildren();
+  }
+  function followServer(): Promise<void> {
+    if (serverSelect.value === 'chrome') {
+      clearOllamaStatus();
+      return checkBuiltIn();
+    }
+    return Promise.all([checkBuiltIn(), refreshModels()]).then(() => {});
+  }
+
   // --- Start up ---
 
-  serverSelect.addEventListener('change', () => void checkBuiltIn());
+  serverSelect.addEventListener('change', () => void followServer());
   builtInDownload.addEventListener('click', () => void downloadBuiltIn());
 
   temperatureInput.addEventListener('input', () => {
@@ -968,7 +987,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     saveStatus.textContent = `Could not load saved settings: ${errorMessage(error)}`;
   }
   fillForm(settings);
-  await Promise.all([refreshModels(), checkBuiltIn()]);
+  await followServer();
   try {
     measurements = await deps.loadMeasurements();
   } catch {

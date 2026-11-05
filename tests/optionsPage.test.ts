@@ -1708,6 +1708,64 @@ describe('options page Model server (PR 11.13)', () => {
     expect(download().hidden).toBe(!offersDownload);
   });
 
+  it('does not ask Ollama with Chrome built-in, so a computer without Ollama shows no Ollama errors (review on #82)', async () => {
+    const down = fakeClient({
+      listModels: vi.fn(async () => {
+        throw new LlmError('connection', 'fetch failed');
+      }),
+    });
+    const deps = {
+      ...fakeDeps(down, { ...SAVED, modelServer: 'chrome' }),
+      builtIn: builtIn('available'),
+    };
+    const page = await initOptionsPage(document, deps);
+    expect(down.listModels).not.toHaveBeenCalled();
+    expect(text('models-status')).toBe('');
+    expect(text('gpu-status')).toBe('');
+    expect(text('builtin-status')).toContain('is ready on this computer');
+    // The Ollama controls keep the saved model, and saving works.
+    expect($<HTMLSelectElement>('model').value).toBe(SAVED.model);
+    await page.save();
+    expect(text('save-status')).toBe('Saved.');
+  });
+
+  it('clears the Ollama lines when Chrome built-in is picked, and asks Ollama again when it is picked back (review on #82)', async () => {
+    const down = fakeClient({
+      listModels: vi.fn(async () => {
+        throw new LlmError('connection', 'fetch failed');
+      }),
+    });
+    const deps = { ...fakeDeps(down), builtIn: builtIn('available') };
+    await initOptionsPage(document, deps);
+    expect(text('models-status')).toContain('Could not load models.');
+    const select = $<HTMLSelectElement>('modelServer');
+    select.value = 'chrome';
+    select.dispatchEvent(new Event('change'));
+    expect(text('models-status')).toBe('');
+    await vi.waitFor(() => expect(panel().dataset.state).toBe('available'));
+    expect(down.listModels).toHaveBeenCalledTimes(1);
+    select.value = 'ollama';
+    select.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(text('models-status')).toContain('Could not load models.'));
+    expect(down.listModels).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a slow Ollama answer from showing after Chrome built-in is picked (review on #82)', async () => {
+    let answer!: (models: { name: string }[]) => void;
+    const slow = fakeClient({
+      listModels: vi.fn(() => new Promise<{ name: string }[]>((resolve) => (answer = resolve))),
+    });
+    const deps = { ...fakeDeps(slow), builtIn: builtIn('available') };
+    const started = initOptionsPage(document, deps);
+    await vi.waitFor(() => expect(slow.listModels).toHaveBeenCalled());
+    const select = $<HTMLSelectElement>('modelServer');
+    select.value = 'chrome';
+    select.dispatchEvent(new Event('change'));
+    answer([]);
+    await started;
+    expect(text('models-status')).toBe('');
+  });
+
   it('says this Chrome has none when the page has no Prompt API', async () => {
     await initOptionsPage(document, fakeDeps(fakeClient(), { ...SAVED, modelServer: 'chrome' }));
     expect(panel().dataset.state).toBe('unsupported');
