@@ -341,6 +341,48 @@ describe('popup', () => {
     expect(error.querySelector('.fix code')?.textContent).toBe('ollama serve');
   });
 
+  it("shows an error's action as a button that runs it, then asks again (PR 11.13)", async () => {
+    const onRegenerate = vi.fn();
+    const popup = openPopup(ANCHOR, { onRegenerate });
+    const run = vi.fn(async () => {});
+    popup.showError('Ollama is not running.', 'Start it.', {
+      label: "Use Chrome's built-in model instead",
+      run,
+    });
+    const button = shadow().querySelector<HTMLButtonElement>('[role="alert"] .error-action')!;
+    expect(button.textContent).toBe("Use Chrome's built-in model instead");
+    button.click();
+    expect(button.disabled).toBe(true);
+    await vi.waitFor(() => expect(onRegenerate).toHaveBeenCalledTimes(1));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(popup.state).toBe('loading');
+  });
+
+  it("says why an error's action failed and lets it be tried again (PR 11.13)", async () => {
+    const onRegenerate = vi.fn();
+    const popup = openPopup(ANCHOR, { onRegenerate });
+    popup.showError('Ollama is not running.', 'Start it.', {
+      label: 'Use it',
+      run: () => Promise.reject(new Error('Could not save the setting.')),
+    });
+    const button = shadow().querySelector<HTMLButtonElement>('.error-action')!;
+    button.click();
+    await vi.waitFor(() =>
+      expect(shadow().querySelector('.error-action-status')?.textContent).toBe(
+        'Could not save the setting.',
+      ),
+    );
+    expect(button.disabled).toBe(false);
+    expect(onRegenerate).not.toHaveBeenCalled();
+    expect(popup.state).toBe('failed');
+  });
+
+  it('shows no action button without one', () => {
+    const popup = openPopup(ANCHOR);
+    popup.showError('Ollama is not running.', 'Start it.');
+    expect(shadow().querySelector('.error-action')).toBeNull();
+  });
+
   it('closes with the close button and calls onClose once', () => {
     const onClose = vi.fn();
     const popup = openPopup(ANCHOR, { onClose });

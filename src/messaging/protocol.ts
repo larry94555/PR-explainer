@@ -48,6 +48,9 @@ export interface RequestMap {
   // A 👍 or 👎 on an answer, or `rating: null` to take it back (PR 11.11).
   // Never the code or the answer itself.
   rateAnswer: { payload: RatingUpdate; result: { kept: number } };
+  // Sets Model server to Chrome built-in (PR 11.13): the popup's offer when
+  // Ollama is not running and the built-in model is ready.
+  useBuiltInModel: { payload: undefined; result: { modelServer: string } };
   // Removes every rating (the settings page's Clear ratings button, PR 11.11).
   clearRatings: { payload: undefined; result: { cleared: true } };
 }

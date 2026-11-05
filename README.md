@@ -82,6 +82,8 @@ The extension is not in the Chrome Web Store yet. You build it from source and l
 
 3. Check that it answers: `ollama run qwen2.5-coder:1.5b "Say hello"`.
 
+**No Ollama yet?** Chrome 138 or later has a small built-in model (Gemini Nano) that PR Explainer can use instead: once the extension is loaded, set **Model server** to **Chrome built-in** on its settings page and click **Download** if it is offered. It also runs on this computer, but it is smaller than a coding model, so its answers are simpler, and only computers with enough memory and disk space can download it. When Ollama is not running and the built-in model is ready, a failed click offers to switch to it.
+
 Model size and whether it runs on the GPU make the biggest difference to how fast explanations appear. The settings page has a **Speed test** that times each installed coding model, marks the fastest one under 2 seconds, and suggests a smaller model to pull when none makes it. Reasoning models such as `deepseek-r1` are slower even with thinking off. Pick the fastest model whose answers you still find useful.
 
 ### 2. Build the extension

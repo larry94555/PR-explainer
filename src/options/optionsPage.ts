@@ -31,6 +31,7 @@
 // describeLlmError turns into a message and a fix. Content scripts still never
 // call the LLM.
 
+import { availabilityText, type BuiltInAvailability } from '../llm/chromeAiClient';
 import { describeLlmError, type ErrorContext, type Platform } from '../llm/describeLlmError';
 import { gpuStatus } from '../llm/gpuStatus';
 import { MIN_NUM_CTX } from '../llm/numCtx';
@@ -98,6 +99,18 @@ export interface OptionsPageDeps {
   saveMeasurement(measurement: Measurement): Promise<Measurement[]>;
   /** The time of a measurement, in milliseconds since 1970. Defaults to Date.now. */
   clock?: () => number;
+  /**
+   * Chrome's built-in model (PR 11.13), asked from this page: whether this
+   * computer can use it, and its download, which Chrome starts only right
+   * after a button press. Left out: this Chrome has none.
+   */
+  builtIn?: BuiltInModelPage;
+}
+
+export interface BuiltInModelPage {
+  availability(): Promise<BuiltInAvailability>;
+  /** Downloads the model; `onProgress` gets 0 to 1. */
+  download(onProgress: (loaded: number) => void): Promise<void>;
 }
 
 export const TEST_PROMPT = 'Reply with OK';
@@ -126,6 +139,10 @@ export interface OptionsPage {
   exportRatings(): Promise<void>;
   /** Times the picked model and saves the result (PR 11.7). */
   measure(): Promise<void>;
+  /** Shows whether this computer can use Chrome's built-in model (PR 11.13). */
+  checkBuiltIn(): Promise<void>;
+  /** The built-in model's Download button (PR 11.13). */
+  downloadBuiltIn(): Promise<void>;
 }
 
 function el<T extends HTMLElement>(doc: Document, id: string): T {
@@ -138,6 +155,11 @@ function el<T extends HTMLElement>(doc: Document, id: string): T {
 export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Promise<OptionsPage> {
   const now = deps.now ?? (() => performance.now());
   const form = el<HTMLFormElement>(doc, 'settings-form');
+  const serverSelect = el<HTMLSelectElement>(doc, 'modelServer');
+  const builtInPanel = el(doc, 'builtin-panel');
+  const builtInStatus = el(doc, 'builtin-status');
+  const builtInDownload = el<HTMLButtonElement>(doc, 'builtin-download');
+  const builtInProgress = el<HTMLProgressElement>(doc, 'builtin-progress');
   const urlInput = el<HTMLInputElement>(doc, 'llmUrl');
   const modelSelect = el<HTMLSelectElement>(doc, 'model');
   const chatModelSelect = el<HTMLSelectElement>(doc, 'chatModel');
@@ -184,6 +206,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   // --- Reading and writing the form ---
 
   function fillForm(settings: Settings): void {
+    serverSelect.value = settings.modelServer;
     urlInput.value = settings.llmUrl;
     setModelOptions(null, settings.model);
     setChatModelOptions(null, settings.chatModel);
@@ -215,6 +238,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     const keepAnswers = keepAnswersInput.value.trim();
     const hoverWait = hoverWaitInput.value.trim();
     return {
+      modelServer: serverSelect.value as Settings['modelServer'],
       llmUrl: urlInput.value.trim().replace(/\/+$/, ''),
       model: modelSelect.value,
       chatModel: chatModelSelect.value,
@@ -852,7 +876,63 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     speedRun?.abort();
   }
 
+  // Model server: Chrome built-in (PR 11.13). Each check gets a number so
+  // an older answer cannot overwrite a newer one.
+  let builtInCheck = 0;
+  let downloading = false;
+  function showBuiltIn(state: BuiltInAvailability): void {
+    builtInPanel.dataset.state = state;
+    const download =
+      state === 'downloadable'
+        ? ' Click Download to get it: Chrome downloads it once, a few gigabytes, and keeps it for every site and extension that uses it.'
+        : state === 'downloading'
+          ? ' Click Download to follow its progress.'
+          : '';
+    builtInStatus.replaceChildren(...withCode(doc, availabilityText(state) + download));
+    builtInDownload.hidden = state !== 'downloadable' && state !== 'downloading';
+    builtInDownload.disabled = downloading;
+  }
+  async function checkBuiltIn(): Promise<void> {
+    const thisCheck = ++builtInCheck;
+    builtInPanel.hidden = serverSelect.value !== 'chrome';
+    if (builtInPanel.hidden || downloading) return;
+    builtInStatus.textContent = 'Checking whether this computer can use it…';
+    builtInDownload.hidden = true;
+    const state: BuiltInAvailability = deps.builtIn
+      ? await deps.builtIn.availability().catch(() => 'unavailable' as const)
+      : 'unsupported';
+    if (thisCheck !== builtInCheck) return;
+    showBuiltIn(state);
+  }
+  async function downloadBuiltIn(): Promise<void> {
+    if (!deps.builtIn || downloading) return;
+    downloading = true;
+    builtInDownload.disabled = true;
+    builtInProgress.hidden = false;
+    builtInProgress.value = 0;
+    builtInStatus.textContent = "Downloading Chrome's built-in model… 0%";
+    try {
+      await deps.builtIn.download((loaded) => {
+        builtInProgress.value = loaded;
+        builtInStatus.textContent = `Downloading Chrome's built-in model… ${Math.round(loaded * 100)}%`;
+      });
+      downloading = false;
+      builtInProgress.hidden = true;
+      await checkBuiltIn();
+    } catch (error) {
+      downloading = false;
+      builtInProgress.hidden = true;
+      builtInDownload.disabled = false;
+      builtInStatus.textContent = `Could not download it: ${
+        error instanceof DOMException ? error.message : errorMessage(error)
+      }`;
+    }
+  }
+
   // --- Start up ---
+
+  serverSelect.addEventListener('change', () => void checkBuiltIn());
+  builtInDownload.addEventListener('click', () => void downloadBuiltIn());
 
   temperatureInput.addEventListener('input', () => {
     temperatureValue.textContent = temperatureInput.value;
@@ -888,7 +968,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     saveStatus.textContent = `Could not load saved settings: ${errorMessage(error)}`;
   }
   fillForm(settings);
-  await refreshModels();
+  await Promise.all([refreshModels(), checkBuiltIn()]);
   try {
     measurements = await deps.loadMeasurements();
   } catch {
@@ -909,6 +989,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     clearRatings,
     exportRatings,
     measure,
+    checkBuiltIn,
+    downloadBuiltIn,
   };
 }
 

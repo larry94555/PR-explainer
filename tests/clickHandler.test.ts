@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
+  BUILT_IN_OFFER,
   createClickHandler,
   describeRequestError,
   isInteractive,
@@ -18,6 +19,7 @@ import {
   currentPopup,
   openPopup,
   POPUP_ID,
+  type ErrorAction,
   type Popup,
   type PopupAnchor,
   type TraceDetails,
@@ -64,6 +66,7 @@ function fakePopup(anchor: PopupAnchor, hooks: PopupHooks) {
     traces: TraceDetails[];
     pressStop(): void;
     pressRegenerate(): void;
+    action?: ErrorAction;
   } = {
     anchor,
     hooks,
@@ -93,10 +96,11 @@ function fakePopup(anchor: PopupAnchor, hooks: PopupHooks) {
         `done:${model}:${explanation.what}${cached ? ` (cached ${cached.elapsedMs})` : ''}`,
       );
     },
-    showError: (message, fix) => {
+    showError: (message, fix, action) => {
       if (finished()) return;
       state = 'failed';
-      calls.push(`failed:${message}|${fix}`);
+      calls.push(`failed:${message}|${fix}${action ? `|${action.label}` : ''}`);
+      popup.action = action;
     },
     close: () => {
       if (state === 'closed') return;
@@ -435,6 +439,38 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     await flush();
     expect(env.popups[0]!.calls).toEqual(['failed:Ollama is not running.|Start it.']);
     expect(env.timings).toEqual([{ elapsedMs: 1234, status: 'failed', model: undefined }]);
+  });
+
+  it("offers Chrome's built-in model when the worker says Ollama is down and it is ready (PR 11.13)", async () => {
+    const down = {
+      status: 'failed',
+      message: 'Ollama is not running.',
+      fix: 'Start it.',
+      kind: 'connection',
+    } as const;
+    env = setup(() => Promise.resolve({ ...down, offer: 'chrome-built-in' }));
+    const useBuiltInModel = vi.fn(async () => {});
+    env.deps.useBuiltInModel = useBuiltInModel;
+    click(code('R44'));
+    await flush();
+    expect(env.popups[0]!.calls).toEqual([
+      `failed:Ollama is not running.|Start it.|${BUILT_IN_OFFER}`,
+    ]);
+    await env.popups[0]!.action!.run();
+    expect(useBuiltInModel).toHaveBeenCalledTimes(1);
+
+    // No offer from the worker, or no way to switch: no button.
+    env.cleanup();
+    env = setup(() => Promise.resolve(down));
+    env.deps.useBuiltInModel = useBuiltInModel;
+    click(code('R44'));
+    await flush();
+    expect(env.popups[0]!.action).toBeUndefined();
+    env.cleanup();
+    env = setup(() => Promise.resolve({ ...down, offer: 'chrome-built-in' }));
+    click(code('R44'));
+    await flush();
+    expect(env.popups[0]!.action).toBeUndefined();
   });
 
   it('shows a friendly error when the service worker cannot answer', async () => {

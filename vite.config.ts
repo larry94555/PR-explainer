@@ -71,6 +71,8 @@ export default defineConfig(({ mode }) => ({
         options: resolve(src, 'options.html'),
         // The debug window (PR 9.4).
         debug: resolve(src, 'debug.html'),
+        // Runs Chrome's built-in model for the service worker (PR 11.13).
+        offscreen: resolve(src, 'offscreen.html'),
       },
       output: {
         entryFileNames: '[name].js',

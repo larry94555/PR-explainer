@@ -37,6 +37,9 @@ import type { DebugLogPayload } from './debug/types';
 import type { ExplainJobInfo, ExplainResult } from './explain/explainHandler';
 import type { AnswerKind, RatingUpdate } from './ratings';
 
+/** The button a failed answer shows when Chrome's built-in model can answer instead (PR 11.13). */
+export const BUILT_IN_OFFER = "Use Chrome's built-in model instead";
+
 export interface ClickHandlerDeps {
   /**
    * Sends the formatted context to the service worker, calling `onChunk`
@@ -96,6 +99,11 @@ export interface ClickHandlerDeps {
    * the code or the answer. Leaving it out hides the rating buttons.
    */
   rate?(update: RatingUpdate): void;
+  /**
+   * Sets Model server to Chrome built-in (PR 11.13), for a failed answer that
+   * offers it. Leaving it out hides the offer.
+   */
+  useBuiltInModel?(): Promise<void>;
   /** Called with each context block sent to the model (dev logging). */
   onContext?(context: string): void;
   /**
@@ -444,7 +452,14 @@ export function listenForClicks(handler: ClickHandler, doc: Document = document)
 export function explainLineAt(
   deps: Pick<
     ClickHandlerDeps,
-    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat' | 'rate'
+    | 'explain'
+    | 'openPopup'
+    | 'onContext'
+    | 'onTiming'
+    | 'openChat'
+    | 'addToChat'
+    | 'rate'
+    | 'useBuiltInModel'
   >,
   target: EventTarget | null,
 ): boolean {
@@ -500,7 +515,14 @@ export function requestFromHunk(hunk: DiffHunk): ExplainRequest {
 export function explainCode(
   deps: Pick<
     ClickHandlerDeps,
-    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'addToChat' | 'rate'
+    | 'explain'
+    | 'openPopup'
+    | 'onContext'
+    | 'onTiming'
+    | 'openChat'
+    | 'addToChat'
+    | 'rate'
+    | 'useBuiltInModel'
   >,
   request: ExplainRequest,
   anchor: PopupAnchor,
@@ -525,7 +547,7 @@ export function explainCode(
 export function explainInPopup(
   deps: Pick<
     ClickHandlerDeps,
-    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'rate'
+    'explain' | 'openPopup' | 'onContext' | 'onTiming' | 'openChat' | 'rate' | 'useBuiltInModel'
   >,
   { text, subject, code, facts }: ExplainRequest,
   anchor: PopupAnchor,
@@ -624,7 +646,17 @@ export function explainInPopup(
           explanation = result.explanation;
           rated = ratingOf(result, popup.elapsedMs);
           popup.showExplanation(result.explanation, result.model, result.cached);
-        } else popup.showError(result.message, result.fix);
+        } else {
+          // Ollama is not running and Chrome's built-in model is ready (PR 11.13).
+          const useBuiltIn = deps.useBuiltInModel;
+          popup.showError(
+            result.message,
+            result.fix,
+            result.offer === 'chrome-built-in' && useBuiltIn
+              ? { label: BUILT_IN_OFFER, run: useBuiltIn }
+              : undefined,
+          );
+        }
         requestTrace.finish();
         const tasks = requestTrace.tasks();
         // A failed answer shows its trace too, so a slow failure can be read.

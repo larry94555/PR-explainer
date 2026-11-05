@@ -193,6 +193,11 @@ export type ExplainResult =
       fix: string;
       /** Why the model call failed, when it did (PR 11.6: tells Ollama is down). */
       kind?: LlmErrorKind;
+      /**
+       * Ollama is not running and Chrome's built-in model is ready (PR 11.13):
+       * the popup offers to use it instead. Added by the service worker.
+       */
+      offer?: 'chrome-built-in';
       trace?: WorkerTrace;
     };
 

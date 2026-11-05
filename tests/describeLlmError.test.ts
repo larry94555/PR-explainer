@@ -14,6 +14,17 @@ describe('describeLlmError', () => {
     });
   });
 
+  it("says what to do when Chrome's built-in model cannot answer (PR 11.13)", () => {
+    const unavailable = describeLlmError(err('unavailable', 'It is not downloaded yet.'));
+    expect(unavailable.message).toBe('It is not downloaded yet.');
+    expect(unavailable.fix).toContain('**Download**');
+    expect(unavailable.fix).toContain('**Ollama**');
+    expect(describeLlmError(err('built-in-error', 'It crashed.'))).toEqual({
+      message: "Chrome's built-in model failed: It crashed.",
+      fix: 'Try again, or set **Model server** back to **Ollama** in the settings.',
+    });
+  });
+
   it('leaves the URL out when it is not known', () => {
     expect(describeLlmError(err('connection')).message).toBe('Ollama is not running.');
   });

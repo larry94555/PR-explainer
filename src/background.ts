@@ -29,7 +29,10 @@ import { createPrefetchQueue, explainJob } from './explain/prefetchQueue';
 import { createSavedQueue } from './explain/savedQueue';
 import { SAMPLE_CONTEXT } from './explain/sampleContext';
 import { createModelLookup } from './llm/contextSize';
+import { createBuiltInOffer } from './llm/builtInOffer';
+import { ChromeAiClient, promptApi } from './llm/chromeAiClient';
 import { createLlmClient } from './llm/createClient';
+import { OffscreenAiClient, offscreenDocument } from './llm/offscreenAi';
 import { detectPlatform, llmErrorKind } from './llm/describeLlmError';
 import { createLoadedWindowMemory } from './llm/loadedWindow';
 import {
@@ -52,12 +55,42 @@ import {
   followRequestsAtOnce,
   getSettings,
   saveSettings,
+  serverSettings,
   storageKey,
+  type Settings,
 } from './settings';
 import { openSidePanel, setupChatMenu } from './sidePanelOpener';
 import { setupToolbarToggle } from './toolbarToggle';
 
 console.info('[PR Explainer] service worker started');
+
+// Chrome's built-in model (PR 11.13): here when Chrome gives the worker the
+// Prompt API, otherwise in an offscreen document (src/llm/offscreenAi.ts).
+const ensureOffscreen = offscreenDocument(chrome.offscreen, chrome.runtime);
+const builtInClient = () =>
+  promptApi()
+    ? new ChromeAiClient()
+    : new OffscreenAiClient({
+        ensureDocument: ensureOffscreen,
+        connect: (info) => chrome.runtime.connect(info),
+      });
+/** The client for these settings: Ollama, or the built-in model with Model server on Chrome built-in. */
+const createClient: typeof createLlmClient = (settings, options = {}) =>
+  createLlmClient(settings, { chromeAi: builtInClient, ...options });
+/**
+ * The settings as the worker uses them: with Model server on Chrome
+ * built-in, Model names the built-in model (serverSettings).
+ */
+const workerSettings = async (): Promise<Settings> => serverSettings(await getSettings());
+// A click that failed because Ollama is not running offers the built-in
+// model when it is ready (PR 11.13).
+const withOffer = createBuiltInOffer({
+  modelServer: async () => (await getSettings()).modelServer,
+  availability: () => {
+    const client = builtInClient();
+    return client.availability();
+  },
+});
 
 // With the Debug window setting on, every round trip is kept for the browser
 // session, for the debug window (src/debug/debugLog.ts, PR 9.3).
@@ -115,7 +148,7 @@ void setupExplainMenu({ menus: chrome.contextMenus, tabs: chrome.tabs, after: ch
 
 // The model's context window, and whether it can think (PR 9.5), from one
 // lookup per model (src/llm/contextSize.ts).
-const { contextTokens, thinking } = createModelLookup(createLlmClient);
+const { contextTokens, thinking } = createModelLookup(createClient);
 
 // The window the model was last run with, so a warm click does not ask
 // /api/ps first (PR 9.7). Every request to the model updates it.
@@ -124,8 +157,8 @@ const loadedWindow = createLoadedWindowMemory();
 // Loads the model when a PR's diffs open, before the first click (PR 8.3).
 // It loads it with the window the first click will ask for (PR 8.5).
 const warmup = createWarmup({
-  getSettings,
-  createClient: createLlmClient,
+  getSettings: workerSettings,
+  createClient,
   contextTokens,
   loadedWindow,
   // Read when each request starts, so turning the setting on or off applies to the next one.
@@ -153,8 +186,8 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 const explainDeps: ExplainDeps = {
-  getSettings,
-  createClient: createLlmClient,
+  getSettings: workerSettings,
+  createClient,
   platform: detectPlatform(navigator.userAgent),
   // Finished explanations are kept, so clicking the same line again answers
   // at once, even after Chrome restarts (PR 10.9).
@@ -199,8 +232,11 @@ const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult | HunkRes
   concurrency: () => requestsAtOnce.current(),
   onChange: () => savedQueue.changed(),
   // Every answer and failure says whether Ollama is up (PR 11.6).
+  // A click that failed while Ollama is down may offer the built-in model (PR 11.13).
   run: async (payload, options) =>
-    noteResult(await (payload.hunk ? explainHunk(payload, options) : explain(payload, options))),
+    payload.hunk
+      ? noteResult(await explainHunk(payload, options))
+      : withOffer(noteResult(await explain(payload, options))),
   failed: (result) => result.status === 'failed',
   cached: (result) =>
     result.status === 'hunk'
@@ -251,10 +287,12 @@ async function prTabOpen(): Promise<boolean> {
 // model is warmed up and background work carries on.
 const ollamaStatus = createOllamaStatus({
   storage: chrome.storage.local,
-  model: async () => (await getSettings()).model,
+  model: async () => (await workerSettings()).model,
   prTabOpen,
   check: async () => {
     const settings = await getSettings();
+    // Chrome's built-in model needs no Ollama (PR 11.13): no banner for it.
+    if (settings.modelServer === 'chrome') return { state: 'up' as const };
     try {
       // /api/tags: one request says whether Ollama answers and has the model.
       const models = await createLlmClient(settings).listModels();
@@ -297,8 +335,8 @@ async function noteChatResult<R extends ResultLike>(result: R): Promise<R> {
 // A new URL or model may fix it, or break it: check again, if a PR tab is open.
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'sync') return;
-  if (!Object.hasOwn(changes, storageKey('llmUrl')) && !Object.hasOwn(changes, storageKey('model')))
-    return;
+  const keys = (['llmUrl', 'model', 'modelServer'] as const).map(storageKey);
+  if (!keys.some((key) => Object.hasOwn(changes, key))) return;
   void prTabOpen().then((open) => {
     if (open) void ollamaStatus.check();
   });
@@ -368,6 +406,10 @@ new MessageRouter()
   })
   // A 👍 or 👎 on an answer (PR 11.11), kept in chrome.storage.local.
   .on('rateAnswer', async (payload) => ({ kept: await ratings.rate(payload) }))
+  // The popup's Use Chrome's built-in model instead (PR 11.13).
+  .on('useBuiltInModel', async () => ({
+    modelServer: (await saveSettings({ modelServer: 'chrome' })).modelServer,
+  }))
   // The settings page's Clear ratings button (PR 11.11).
   .on('clearRatings', async () => {
     await ratings.clear();
@@ -420,8 +462,8 @@ listenForWorkerPorts(chrome.runtime, {
 // Chat answers (the chat panel) stream the same way, over their own port.
 // Each answer or failure also says whether Ollama is up (PR 11.6).
 const chat = createChatHandler({
-  getSettings,
-  createClient: createLlmClient,
+  getSettings: workerSettings,
+  createClient,
   platform: detectPlatform(navigator.userAgent),
   contextTokens,
   thinking,
@@ -444,14 +486,14 @@ chrome.runtime.onStartup.addListener(() => {});
 // out. Each debugLlm call reads the settings again, so saving a new URL or
 // model with debugSettings takes effect on the next call.
 if (import.meta.env.MODE === 'development') {
-  const client = async () => createLlmClient(await getSettings());
+  const client = async () => createClient(await workerSettings());
   Object.assign(globalThis, {
     debugSettings: { defaults: DEFAULT_SETTINGS, get: getSettings, save: saveSettings },
     debugLlm: {
       listModels: async () => (await client()).listModels(),
       chat: async (prompt: string) => {
-        const settings = await getSettings();
-        return createLlmClient(settings).chat([{ role: 'user', content: prompt }], {
+        const settings = await workerSettings();
+        return createClient(settings).chat([{ role: 'user', content: prompt }], {
           model: settings.model,
           temperature: settings.temperature,
           maxResponseTokens: settings.maxResponseTokens,
@@ -462,8 +504,8 @@ if (import.meta.env.MODE === 'development') {
       //   for await (const c of debugLlm.streamSample()) console.log(c)
       // Pass an AbortSignal to stop it early.
       streamSample: async function* (signal?: AbortSignal) {
-        const settings = await getSettings();
-        return yield* createLlmClient(settings).chatStream(buildExplainPrompt(SAMPLE_CONTEXT), {
+        const settings = await workerSettings();
+        return yield* createClient(settings).chatStream(buildExplainPrompt(SAMPLE_CONTEXT), {
           model: settings.model,
           temperature: settings.temperature,
           maxResponseTokens: settings.maxResponseTokens,

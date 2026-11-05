@@ -5,7 +5,11 @@ declare const chrome: {
     import('./messaging/protocol').PortRuntime & {
       onStartup: { addListener(listener: () => void): void };
       getURL(path: string): string;
+      // Whether the offscreen document is open (PR 11.13).
+      getContexts: import('./llm/offscreenAi').ContextsRuntime['getContexts'];
     };
+  // Runs Chrome's built-in model for the service worker (PR 11.13).
+  offscreen: import('./llm/offscreenAi').OffscreenLike;
   windows: import('./debug/debugWindowOpener').WindowsLike;
   contextMenus: import('./debug/debugWindowOpener').ContextMenusLike;
   action: import('./toolbarToggle').ActionLike;

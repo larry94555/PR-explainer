@@ -1,7 +1,8 @@
-// What the rest of the extension needs from a local LLM server. Ollama is the
-// only implementation for now (see ollamaClient.ts); keeping callers on this
-// interface means another local server, such as LM Studio, can be added later
-// without changing them.
+// What the rest of the extension needs from a local LLM server. Ollama
+// (ollamaClient.ts) and, from PR 11.13, Chrome's built-in model
+// (chromeAiClient.ts) implement it; keeping callers on this interface means
+// another local server, such as LM Studio, can be added later without
+// changing them.
 
 export type ChatRole = 'system' | 'user' | 'assistant';
 
@@ -202,6 +203,9 @@ export interface LlmClient {
  * - aborted: the caller cancelled the request.
  * - blocked: the request was not sent, because it was not to an LLM on this
  *   computer (src/net/llmFetch.ts, PR 7.4).
+ * - unavailable: Chrome's built-in model (PR 11.13) cannot answer here: this
+ *   Chrome has none, it is not downloaded, or it cannot run on this computer.
+ * - built-in-error: Chrome's built-in model failed for another reason.
  */
 export type LlmErrorKind =
   | 'connection'
@@ -211,7 +215,9 @@ export type LlmErrorKind =
   | 'bad-response'
   | 'http'
   | 'aborted'
-  | 'blocked';
+  | 'blocked'
+  | 'unavailable'
+  | 'built-in-error';
 
 export class LlmError extends Error {
   override name = 'LlmError';
