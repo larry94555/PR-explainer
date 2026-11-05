@@ -1324,6 +1324,36 @@ describe('options page Speed section (PR 8.6)', () => {
       expect(liked()).toEqual([['qwen2.5-coder:7bFastest under 2 s', '–', undefined]]);
     });
 
+    it('does not put cleared ratings back when an older read finishes late (review on #81)', async () => {
+      const { client, now } = timedClient({ 'qwen2.5-coder:7b': 1_000 });
+      const deps = { ...fakeDeps(client), now };
+      const page = await initOptionsPage(document, deps);
+      let finish!: (list: Rating[]) => void;
+      deps.loadRatings.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+      await page.speedTest();
+
+      await page.clearRatings();
+      finish(rate('qwen2.5-coder:7b', 9, 3));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(liked()).toEqual([['qwen2.5-coder:7bFastest under 2 s', '–', undefined]]);
+    });
+
+    it('keeps the newest read when an older one finishes after it', async () => {
+      const { client, now } = timedClient({ 'qwen2.5-coder:7b': 1_000 });
+      const deps = { ...fakeDeps(client), now };
+      const page = await initOptionsPage(document, deps);
+      let finishOld!: (list: Rating[]) => void;
+      deps.loadRatings
+        .mockImplementationOnce(() => new Promise((r) => (finishOld = r)))
+        .mockResolvedValueOnce(rate('qwen2.5-coder:7b', 10, 0));
+      await page.speedTest();
+      await page.speedTest();
+      await vi.waitFor(() => expect(liked()[0]![1]).toBe('100% (10)'));
+      finishOld(rate('qwen2.5-coder:7b', 0, 10));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(liked()[0]![1]).toBe('100% (10)');
+    });
+
     it('keeps the table when the ratings cannot be read', async () => {
       const { client, now } = timedClient({ 'qwen2.5-coder:7b': 1_000 });
       const deps = { ...fakeDeps(client), now };

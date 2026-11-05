@@ -382,7 +382,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     try {
       await deps.clearRatings();
       ratingsStatus.textContent = 'Ratings cleared.';
-      ratings = [];
+      setRatings([]);
       showResults(lastResults);
     } catch (error) {
       ratingsStatus.textContent = `Could not clear ratings: ${errorMessage(error)}`;
@@ -395,8 +395,9 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   async function exportRatings(): Promise<void> {
     exportRatingsButton.disabled = true;
     try {
+      const read = ++ratingsRead;
       const list = await deps.loadRatings();
-      ratings = list;
+      if (read === ratingsRead) setRatings(list);
       showResults(lastResults);
       if (!list.length) {
         ratingsStatus.textContent = 'There are no ratings to export yet.';
@@ -415,9 +416,18 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   // The ratings behind the Liked column (PR 11.12). A failure to read them
   // leaves the column as it was: it is a hint, not part of the test.
   let ratings: Rating[] = [];
+  // Counts reads and changes, so a read that finishes after a newer read, a
+  // Clear ratings or an export cannot put back an older list (review on #81).
+  let ratingsRead = 0;
+  function setRatings(list: Rating[]): void {
+    ratingsRead++;
+    ratings = list;
+  }
   async function loadRatings(): Promise<void> {
+    const read = ++ratingsRead;
     try {
-      ratings = await deps.loadRatings();
+      const list = await deps.loadRatings();
+      if (read === ratingsRead) setRatings(list);
     } catch {
       // Keep what was there.
     }
