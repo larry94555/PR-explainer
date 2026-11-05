@@ -37,7 +37,7 @@
 // (src/theme.ts). Opening it moves keyboard focus into it, so Tab reaches its
 // buttons and screen readers announce it; closing it while focus is inside
 // gives focus back to what had it before, such as the diff line explained
-// with Alt+E (PR 7.3). While the model is working the panel is marked
+// with the Explain shortcut (PR 7.3, 11.9). While the model is working the panel is marked
 // aria-busy.
 //
 // Details also counts the click's round trips to GitHub and Ollama (PR 9.2)

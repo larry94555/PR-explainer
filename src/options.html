@@ -290,6 +290,23 @@
         <p id="test-status" role="status"></p>
       </form>
 
+      <section id="shortcuts" class="shortcuts" aria-labelledby="shortcuts-title">
+        <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+        <dl id="shortcut-list" class="shortcut-list"></dl>
+        <p id="shortcut-note" class="note" role="status" hidden></p>
+        <div class="row">
+          <button id="change-shortcuts" type="button">Change shortcuts</button>
+        </div>
+        <p class="hint">
+          Opens Chrome's shortcuts page, where these keys can be changed. Explain was Alt+E before,
+          and can be set to Alt+E again there; Chrome only refuses to give it Alt+E by itself, since
+          that key opens Chrome's menu on Windows and Linux. Explain works on the line that has
+          keyboard focus or holds the text cursor, or on the selected lines. You can also
+          right-click a line or a selection on a PR and choose
+          <strong>Explain with PR Explainer</strong>.
+        </p>
+      </section>
+
       <section id="speed" class="speed" aria-labelledby="speed-title">
         <h2 id="speed-title">Speed</h2>
         <p id="gpu-status" role="status"></p>

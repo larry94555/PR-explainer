@@ -34,6 +34,17 @@
   "side_panel": {
     "default_path": "sidepanel.html"
   },
+  "commands": {
+    "explain": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E"
+      },
+      "description": "Explain the focused line or the selected lines"
+    },
+    "open-chat": {
+      "description": "Open chat"
+    }
+  },
   "permissions": ["storage", "contextMenus", "sidePanel"],
   "host_permissions": [
     "https://github.com/*",

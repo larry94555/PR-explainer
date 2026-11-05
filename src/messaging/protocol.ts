@@ -154,3 +154,18 @@ export interface PortRuntime {
   onConnect: { addListener(listener: (port: PortLike) => void): void };
   lastError?: { message?: string };
 }
+
+// The service worker tells a PR tab to act on a keyboard shortcut or the
+// right-click menu (PR 11.9, src/commands.ts), with chrome.tabs.sendMessage.
+// The page listens in src/tabCommands.ts. Each side keeps its own copy of the
+// type string; this type makes TypeScript check they match.
+export type TabCommandType = 'pr-explainer:command';
+
+export type TabCommand =
+  // The Explain shortcut: the selected block, or the focused or cursor line.
+  | { type: TabCommandType; command: 'explain' }
+  // Explain with PR Explainer in the right-click menu: what was right-clicked.
+  | { type: TabCommandType; command: 'explain-at-pointer' }
+  // The Open chat shortcut, when the chat opens on the page (Chat opens in
+  // is On the page, or Chrome did not open the side panel: `reason` says why).
+  | { type: TabCommandType; command: 'open-chat'; reason?: string };

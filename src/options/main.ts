@@ -5,6 +5,7 @@ import { detectPlatform } from '../llm/describeLlmError';
 import { loadMeasurements, saveMeasurement } from '../llm/speedTest';
 import { getSettings, saveSettings } from '../settings';
 import { initOptionsPage } from './optionsPage';
+import { initShortcuts } from './shortcuts';
 
 void initOptionsPage(document, {
   getSettings: () => getSettings(),
@@ -24,4 +25,11 @@ void initOptionsPage(document, {
     })) as { ok?: boolean; error?: { message?: string } } | undefined;
     if (!response?.ok) throw new Error(response?.error?.message ?? 'No answer from the extension.');
   },
+});
+
+// Keyboard shortcuts (PR 11.9): the keys Chrome gave the commands, and a
+// button to Chrome's page for changing them.
+initShortcuts(document, {
+  getAll: () => chrome.commands.getAll(),
+  openTab: (url) => chrome.tabs.create({ url }),
 });

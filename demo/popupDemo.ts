@@ -18,7 +18,6 @@ import type { DiffLine } from '../src/diffDom';
 import type { RoundTrip, TraceTask } from '../src/trace/types';
 import { traceLine } from '../src/trace/clickTrace';
 import { buildWaterfall } from '../src/popup/latencyBreakdown';
-import { isExplainShortcut } from '../src/a11y';
 import { resolveTheme, watchTheme } from '../src/theme';
 import { buildFittedExplainPrompt, type PromptReport } from '../src/explain/fitPrompt';
 import { promptBudget } from '../src/llm/contextSize';
@@ -412,10 +411,12 @@ document.addEventListener('click', (event) => {
   const row = (event.target as Element).closest?.('table.diff tr');
   if (row) explainRow(row);
 });
-// Alt+E on a focused line does what a click does (PR 7.3).
+// Alt+E on a focused line does what a click does (PR 7.3). In the extension
+// the key is a Chrome command (PR 11.9); this page has none, so it listens.
 document.addEventListener('keydown', (event) => {
   const row = (event.target as Element).closest?.('table.diff tr');
-  if (!row || !isExplainShortcut(event)) return;
+  const altE = event.code === 'KeyE' && event.altKey && !event.ctrlKey && !event.metaKey;
+  if (!row || !altE) return;
   event.preventDefault();
   explainRow(row);
 });

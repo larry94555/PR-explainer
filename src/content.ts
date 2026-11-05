@@ -24,9 +24,19 @@ import {
   showStatusBanner,
 } from './statusBanner';
 import { chatSessionFor, CurrentChat, startChat } from './chat/chatFlow';
-import { currentChatPanel, openChatPanel, type ChatPanel } from './chat/chatPanel';
-import { ChatSessions } from './chat/chatSession';
-import { createChatOpener, createSidePanelLink, trackChatPlace } from './chat/sidePanelChat';
+import {
+  currentChatPanel,
+  openChatPanel,
+  type ChatPanel,
+  type ChatSubject,
+} from './chat/chatPanel';
+import { ChatSessions, type ChatSession } from './chat/chatSession';
+import {
+  createChatOpener,
+  createSidePanelLink,
+  fallbackNote,
+  trackChatPlace,
+} from './chat/sidePanelChat';
 import { resolveTheme, watchTheme } from './theme';
 import { createClickHandler, listenForClicks, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
@@ -67,7 +77,8 @@ import {
   SKIP_SETTING_KEY,
 } from './skipFiles';
 import { parsePrUrl } from './prUrl';
-import { installSelection } from './selection';
+import { installSelection, type InstalledSelection } from './selection';
+import { listenForTabCommands, trackContextTarget } from './tabCommands';
 import { createGithubFetch, createGithubRoundTrips } from './net/githubFetch';
 import { trackDebugSetting } from './debug/debugSetting';
 import { trackStreamSetting } from './streamSetting';
@@ -684,6 +695,58 @@ const placeChat = createChatOpener({
 // each answer whole once it is ready. Read again for each popup and chat.
 const streamSetting = trackStreamSetting(chrome.storage.sync, chrome.storage.onChanged);
 
+// What each PR's chat was first about, so the Open chat shortcut (PR 11.9)
+// can open it on the page again.
+const chatSubjects = new Map<string, ChatSubject>();
+/** Opens the chat for `session` in `place`, closing any other, with an optional note. */
+function showChat(
+  place: 'sidepanel' | 'page',
+  pr: string | undefined,
+  session: ChatSession,
+  subject: ChatSubject,
+  note?: string,
+): void {
+  if (pr !== undefined) chatSubjects.set(pr, subject);
+  // One chat at a time, wherever it is.
+  openChat()?.close();
+  const chat = startChat(
+    {
+      ask: (messages, onChunk) => openChatStream({ messages }, onChunk),
+      openPanel: (options) => {
+        const withSetting = { ...options, streamAnswers: streamSetting.current() };
+        return place === 'sidepanel' ? sidePanel.open(withSetting) : openChatPanel(withSetting);
+      },
+    },
+    session,
+    subject,
+  );
+  if (note) chat.addNote(note);
+  currentChat.set(chat, pr);
+  chat.focus();
+}
+
+/**
+ * The Open chat shortcut when the chat opens on the page (PR 11.9): the
+ * open chat gets focus, or this PR's conversation opens again. A PR with no
+ * conversation yet has nothing to open; Ask a question in a popup starts one.
+ */
+function openChatOnPage(reason?: string): void {
+  const open = currentChatPanel();
+  if (open) {
+    open.focus();
+    return;
+  }
+  const pr = prName(location.href);
+  const session = pr === undefined ? undefined : chats.get(pr);
+  const subject = pr === undefined ? undefined : chatSubjects.get(pr);
+  if (!session || !subject) {
+    console.info('[PR Explainer] Open chat: no conversation on this PR yet');
+    return;
+  }
+  warmUpChatModel(pr);
+  showChat('page', pr, session, subject, reason ? fallbackNote(reason) : undefined);
+}
+
 const explainDeps: ClickHandlerDeps = {
   isEnabled: () => enabled.current() === true,
   // A press sends nothing while the chat is open: the click goes to the chat (PR 11.1).
@@ -714,23 +777,7 @@ const explainDeps: ClickHandlerDeps = {
     placeChat((place, note) => {
       // The page may have moved on while the side panel opened.
       if (prName(location.href) !== pr) return;
-      const session = chatSessionFor(chats, pr, seed, { regenerated });
-      // One chat at a time, wherever it is.
-      openChat()?.close();
-      const chat = startChat(
-        {
-          ask: (messages, onChunk) => openChatStream({ messages }, onChunk),
-          openPanel: (options) => {
-            const withSetting = { ...options, streamAnswers: streamSetting.current() };
-            return place === 'sidepanel' ? sidePanel.open(withSetting) : openChatPanel(withSetting);
-          },
-        },
-        session,
-        subject,
-      );
-      if (note) chat.addNote(note);
-      currentChat.set(chat, pr);
-      chat.focus();
+      showChat(place, pr, chatSessionFor(chats, pr, seed, { regenerated }), subject, note);
     });
   },
   // While the chat is open, clicked code in its PR joins the conversation (PR 5.4).
@@ -783,6 +830,24 @@ const explainDeps: ClickHandlerDeps = {
 // The request starts when the mouse goes down on a line, and the popup opens
 // on the click (PR 11.1).
 const onClick = createClickHandler(explainDeps);
+// Selected blocks, while a PR's diffs are shown (below).
+let selection: InstalledSelection | null = null;
+// The Explain and Open chat shortcuts, which can be changed on
+// chrome://extensions/shortcuts, and Explain with PR Explainer in the
+// right-click menu (PR 11.9). The service worker sends them to this tab.
+const contextTarget = trackContextTarget(document);
+listenForTabCommands(chrome.runtime, {
+  explain: () => {
+    if (!selection?.explainFocused()) {
+      console.info('[PR Explainer] Explain: no line has focus or the text cursor');
+    }
+  },
+  explainAtPointer: () => {
+    const at = contextTarget.current();
+    selection?.explainAt(at?.target ?? null, at?.point);
+  },
+  openChat: openChatOnPage,
+});
 // Click-to-explain is attached only while a PR's diffs are shown, once
 // however often GitHub re-renders the page, and taken off when the user
 // moves elsewhere (PR 7.1).
@@ -796,6 +861,7 @@ const features = new DiffPageFeatures(() => {
   // Drag across lines, or click one and Shift-click another, to explain the
   // block as a whole (src/selection.ts).
   const removeSelection = installSelection(explainDeps);
+  selection = removeSelection;
   // Is Ollama up? The worker checks unless it knows (PR 11.6).
   void askOllamaStatus();
   return () => {
@@ -807,6 +873,7 @@ const features = new DiffPageFeatures(() => {
     prefetcher.cancel();
     ahead.cancel();
     removeSelection();
+    selection = null;
     // Closing the popup also stops its request.
     currentPopup()?.close();
   };

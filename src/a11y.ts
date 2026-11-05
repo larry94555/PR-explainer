@@ -1,31 +1,17 @@
 // Keyboard and focus helpers (PR 7.3).
 //
-// Alt+E explains code without the mouse: the selected block of lines, or the
-// one line that has keyboard focus or holds the text cursor. GitHub's newer
-// diff view lets you move between lines with the arrow keys (each cell can
-// take focus); in the classic view, select text with the keyboard or turn on
-// caret browsing (F7) and move the cursor to a line. src/selection.ts listens
-// for the key, since it already knows about selected blocks.
+// The Explain shortcut explains code without the mouse: the selected block of
+// lines, or the one line that has keyboard focus or holds the text cursor.
+// GitHub's newer diff view lets you move between lines with the arrow keys
+// (each cell can take focus); in the classic view, select text with the
+// keyboard or turn on caret browsing (F7) and move the cursor to a line.
 //
-// The key is matched by its position (`event.code`), not the character it
-// types, so it works on keyboard layouts where Alt+E types a character (such
-// as macOS, where Option+E starts an accent). AltGr+E (which types € on many
-// European layouts) arrives as Ctrl+Alt+E and is left alone, as is Alt+E
-// while typing in a text box, so typing is never blocked. Chrome lets a page
-// handle Alt+E before using it to open its own menu on Windows, so the
-// listener calls preventDefault when it explains something.
-
-/** True for Alt+E with no other modifier, not a held-down repeat. */
-export function isExplainShortcut(event: KeyboardEvent): boolean {
-  return (
-    event.code === 'KeyE' &&
-    event.altKey &&
-    !event.ctrlKey &&
-    !event.metaKey &&
-    !event.shiftKey &&
-    !event.repeat
-  );
-}
+// Since PR 11.9 the shortcut is a Chrome command (suggested Ctrl+Shift+E, see
+// src/commands.ts), so it can be changed on chrome://extensions/shortcuts and
+// no other extension or page handles it too. The page no longer listens for
+// the key itself: the service worker tells it (src/tabCommands.ts), and
+// src/selection.ts explains, since it already knows about selected blocks.
+// Nothing is explained while typing in a text box.
 
 /** True when `target` is somewhere the user types: a text box or editable text. */
 export function isEditable(target: EventTarget | null): boolean {
