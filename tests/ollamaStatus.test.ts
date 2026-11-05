@@ -105,7 +105,8 @@ describe('the Ollama status (PR 11.6)', () => {
     await wait(0);
     expect(env.status.current()).toEqual({ state: 'model-missing', model: 'qwen' });
     env.status.report('up');
-    expect(env.states()).toEqual(['up', 'down', 'model-missing', 'up']);
+    // Model missing is told at once, then again once its name is read.
+    expect(env.states()).toEqual(['up', 'down', 'model-missing', 'model-missing', 'up']);
     // Kept in chrome.storage.local, which every tab follows.
     expect(env.storage.data[OLLAMA_STATUS_KEY]).toEqual({ state: 'up' });
   });
@@ -153,10 +154,10 @@ describe('the Ollama status (PR 11.6)', () => {
     const env = setup();
     env.status.report('model-missing');
     env.status.report('up');
-    expect(env.onRecover).not.toHaveBeenCalled();
+    expect(env.onRecover).toHaveBeenCalledTimes(1);
     env.status.report('down');
     env.status.report('up');
-    expect(env.onRecover).toHaveBeenCalledTimes(1);
+    expect(env.onRecover).toHaveBeenCalledTimes(2);
   });
 
   it('does not warm up the first time Ollama is found up', async () => {
@@ -247,6 +248,47 @@ describe('the Ollama status (PR 11.6)', () => {
     env.status.report('up');
     await env.status.ready;
     expect(env.status.current()).toEqual({ state: 'up' });
+  });
+
+  it('pauses at once for a missing model, and a late name lookup cannot undo a recovery (review on #75)', async () => {
+    let name!: (model: string) => void;
+    const env = setup({ model: () => new Promise<string>((resolve) => (name = resolve)) });
+    env.status.report('model-missing');
+    expect(env.status.current()).toEqual({ state: 'model-missing' });
+    // Recovered before the name was read.
+    env.status.report('up');
+    name('qwen');
+    await wait(0);
+    expect(env.status.current()).toEqual({ state: 'up' });
+    expect(env.states()).toEqual(['model-missing', 'up']);
+  });
+
+  it("does not let another model's answer clear a missing explanation model (review on #75)", async () => {
+    const env = setup();
+    env.ollama('model-missing');
+    await env.status.ensure();
+    // A chat question or chat warm-up with a Chat model of its own answered.
+    env.status.reportOtherModel('up');
+    await wait(0);
+    expect(env.status.current()).toEqual({ state: 'model-missing', model: 'qwen' });
+    expect(env.check).toHaveBeenCalledTimes(1);
+    // Nor its own missing model, which is not the explanation model.
+    env.status.report('up');
+    env.status.reportOtherModel('model-missing');
+    expect(env.status.current()).toEqual({ state: 'up' });
+  });
+
+  it('checks at once when another model answers while Ollama is down, and takes its down', async () => {
+    const env = setup();
+    env.status.reportOtherModel('down');
+    expect(env.status.current()).toEqual({ state: 'down' });
+    // The check finds the explanation model missing: that is what is shown, not up.
+    env.ollama('model-missing');
+    env.status.reportOtherModel('up');
+    await wait(0);
+    expect(env.check).toHaveBeenCalledTimes(1);
+    expect(env.status.current()).toEqual({ state: 'model-missing', model: 'qwen' });
+    expect(env.onRecover).not.toHaveBeenCalled();
   });
 
   it('uses the same storage key as the banner in the content script', () => {

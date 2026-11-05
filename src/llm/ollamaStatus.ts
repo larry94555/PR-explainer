@@ -63,8 +63,15 @@ export interface OllamaStatusDeps {
 
 export interface OllamaStatusTracker {
   current(): OllamaStatus;
-  /** What a request found: `kind` from its failure, or undefined when it reached the model. */
+  /** What a request for the explanation model found. */
   report(found: FoundState): void;
+  /**
+   * What a request for another model found (the Chat model, when it is not
+   * the explanation model): it can say Ollama is down, or that Ollama
+   * answers, but not whether the explanation model is installed (review on
+   * #75). An answer while down checks at once instead of clearing it.
+   */
+  reportOtherModel(found: FoundState | undefined): void;
   /**
    * Checks at once (the banner's Try again, or a changed URL or model), and
    * starts the schedule again from its first wait if Ollama is still not up.
@@ -123,6 +130,8 @@ export function createOllamaStatus(deps: OllamaStatusDeps): OllamaStatusTracker 
   let checking: Promise<OllamaStatus> | undefined;
   // Something was heard since the worker started, so what was stored is old.
   let heard = false;
+  // Goes up with each change, so a slow model-name lookup cannot undo a later one.
+  let version = 0;
 
   const stopTimer = () => {
     if (timer !== undefined) clearTimeout(timer);
@@ -150,6 +159,7 @@ export function createOllamaStatus(deps: OllamaStatusDeps): OllamaStatusTracker 
 
   const set = (next: OllamaStatus) => {
     heard = true;
+    version += 1;
     const previous = status;
     status = next;
     if (next.state === 'up') {
@@ -200,15 +210,28 @@ export function createOllamaStatus(deps: OllamaStatusDeps): OllamaStatusTracker 
   return {
     current: () => status,
     report(found) {
-      if (found === 'model-missing') {
-        // Named for the banner; the model is read, so set it once known.
-        void deps.model().then(
-          (model) => set({ state: found, ...(model && { model }) }),
-          () => set({ state: found }),
-        );
+      if (found !== 'model-missing') {
+        set({ state: found });
         return;
       }
-      set({ state: found });
+      // Paused at once, keeping the name already known; the model is read
+      // for the banner, and named only if nothing changed meanwhile (review on #75).
+      const known = status.state === 'model-missing' ? status.model : undefined;
+      set({ state: found, ...(known && { model: known }) });
+      const at = version;
+      void deps.model().then(
+        (model) => {
+          if (version === at && model && model !== known) set({ state: found, model });
+        },
+        () => {},
+      );
+    },
+    reportOtherModel(found) {
+      if (found === 'down') set({ state: 'down' });
+      else if (found === 'up' && status.state === 'down') {
+        attempt = 0;
+        void run();
+      }
     },
     check() {
       attempt = 0;

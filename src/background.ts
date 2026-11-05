@@ -45,6 +45,7 @@ import { listenForWorkerPorts } from './messaging/workerPort';
 import type { RoundTripSink } from './net/roundTrips';
 import {
   DEFAULT_SETTINGS,
+  hasOwnChatModel,
   followRequestsAtOnce,
   getSettings,
   saveSettings,
@@ -261,6 +262,15 @@ function noteResult<R extends ResultLike>(result: R): R {
   if (found) ollamaStatus.report(found);
   return result;
 }
+/**
+ * The same for a chat answer. A Chat model of its own says only whether
+ * Ollama answers, not whether the explanation model is installed (review on #75).
+ */
+async function noteChatResult<R extends ResultLike>(result: R): Promise<R> {
+  if (!hasOwnChatModel(await getSettings())) return noteResult(result);
+  ollamaStatus.reportOtherModel(stateOfResult(result));
+  return result;
+}
 // A new URL or model may fix it, or break it: check again, if a PR tab is open.
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'sync') return;
@@ -304,9 +314,12 @@ new MessageRouter()
   })
   .on('warmup', async (payload, sender) => {
     const result = await warmup.warmUp(sender.tab?.id, payload);
-    // A model loaded, or found loaded, means Ollama is up (PR 11.6).
+    // A model loaded, or found loaded, means Ollama is up (PR 11.6). A chat
+    // warm-up loads the Chat model, which says nothing of the explanation
+    // model (a chat warm-up with the same model does nothing: same-model).
     if (result.outcome === 'loaded' || result.outcome === 'already-loaded') {
-      ollamaStatus.report('up');
+      if (payload?.for === 'chat') ollamaStatus.reportOtherModel('up');
+      else ollamaStatus.report('up');
     }
     return result;
   })
@@ -378,7 +391,7 @@ const chat = createChatHandler({
   },
 });
 listenForChatPorts(chrome.runtime, async (payload, options) =>
-  noteResult(await chat(payload, options)),
+  noteChatResult(await chat(payload, options)),
 );
 
 // Chrome clears the icon badge when the browser restarts. Having a startup
