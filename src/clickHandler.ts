@@ -486,7 +486,7 @@ export function requestFromHunk(hunk: DiffHunk): ExplainRequest {
     side === 'removed' ? undefined : { filePath, startLine: lineNumber, endLine: lineNumber, text };
   return {
     text: formatContext(context),
-    subject: { filePath, startLine: lineNumber },
+    subject: { filePath, startLine: lineNumber, code: [{ lineNumber, text }] },
     ...(code && { code }),
     facts: factsFromHunk(hunk),
   };

@@ -431,7 +431,12 @@ describe('the lines on screen, from a saved GitHub diff', () => {
     const [first] = visibleAddedLines(document, () => true);
     expect(first!.key).toBe('docs/roadmap.md:added:44');
     const request = first!.request()!;
-    expect(request.subject).toEqual({ filePath: 'docs/roadmap.md', startLine: 44 });
+    // With the clicked line, for the chat's header (PR 11.13).
+    expect(request.subject).toEqual({
+      filePath: 'docs/roadmap.md',
+      startLine: 44,
+      code: [{ lineNumber: 44, text: expect.stringContaining('Friendly LLM error messages') }],
+    });
     expect(request.code).toMatchObject({ filePath: 'docs/roadmap.md', startLine: 44, endLine: 44 });
     expect(request.text).toContain('Friendly LLM error messages');
   });

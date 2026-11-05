@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { addMeasurement, type Measurement } from '../src/llm/speedTest';
 import { LlmError, type LlmClient, type ModelInfo } from '../src/llm/types';
-import { initOptionsPage, TEST_PROMPT, type OptionsPageDeps } from '../src/options/optionsPage';
+import {
+  initOptionsPage,
+  TEST_PROMPT,
+  UNSAVED_TEXT,
+  type OptionsPageDeps,
+} from '../src/options/optionsPage';
 import type { Rating } from '../src/ratings';
 import {
   EXPLAIN_NOT_SET_NOTE,
@@ -26,7 +31,7 @@ const SAVED: Settings = {
   llmUrl: 'http://localhost:11434',
   model: 'qwen2.5-coder:7b',
   chatModel: '',
-  chatOpensIn: 'sidepanel',
+  chatOpensIn: 'page',
   temperature: 0.4,
   maxResponseTokens: 512,
   contextTokens: 0,
@@ -617,20 +622,73 @@ describe('options page', () => {
     expect($<HTMLSelectElement>('model').value).toBe('gone:1b');
   });
 
-  it('loads and saves Chat opens in, Side panel by default (PR 11.8)', async () => {
+  it('loads and saves Chat opens in, On the page by default (PR 11.8, PR 11.13)', async () => {
     const deps = fakeDeps(fakeClient());
     const page = await initOptionsPage(document, deps);
     const select = $<HTMLSelectElement>('chatOpensIn');
     expect([...select.options].map((o) => [o.value, o.textContent])).toEqual([
-      ['sidepanel', 'Side panel'],
       ['page', 'On the page'],
+      ['sidepanel', 'Side panel'],
     ]);
-    expect(select.value).toBe('sidepanel');
-    select.value = 'page';
+    expect(select.value).toBe('page');
+    select.value = 'sidepanel';
     await page.save();
-    expect(await deps.getSettings()).toMatchObject({ chatOpensIn: 'page' });
+    expect(await deps.getSettings()).toMatchObject({ chatOpensIn: 'sidepanel' });
     await initOptionsPage(document, deps);
-    expect($<HTMLSelectElement>('chatOpensIn').value).toBe('page');
+    expect($<HTMLSelectElement>('chatOpensIn').value).toBe('sidepanel');
+  });
+
+  describe('Save at the top (PR 11.13)', () => {
+    const changeSelect = (id: string, value: string) => {
+      const select = $<HTMLSelectElement>(id);
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    it('is a Save button for the whole form, before the first setting', async () => {
+      await initOptionsPage(document, fakeDeps(fakeClient()));
+      const top = $<HTMLButtonElement>('save-top');
+      expect(top.type).toBe('submit');
+      expect(top.form).toBe($('settings-form'));
+      expect(
+        top.compareDocumentPosition($('llmUrl')) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it('saves every setting in the form, not only the one changed', async () => {
+      const deps = fakeDeps(fakeClient());
+      await initOptionsPage(document, deps);
+      changeSelect('chatOpensIn', 'sidepanel');
+      $<HTMLInputElement>('streamAnswers').checked = true;
+      $<HTMLButtonElement>('save-top').click();
+      await vi.waitFor(() => expect(text('save-top-status')).toBe('Saved.'));
+      expect(deps.saveSettings).toHaveBeenCalledTimes(1);
+      const update = vi.mocked(deps.saveSettings).mock.calls[0]![0];
+      expect(update).toMatchObject({ chatOpensIn: 'sidepanel', streamAnswers: true });
+      expect(Object.keys(update)).toEqual(
+        expect.arrayContaining(['llmUrl', 'model', 'temperature']),
+      );
+      expect(text('save-status')).toBe('Saved.');
+    });
+
+    it('says a change is not saved yet beside both Save buttons, until Save', async () => {
+      const page = await initOptionsPage(document, fakeDeps(fakeClient()));
+      expect(text('save-top-status')).toBe('');
+      changeSelect('chatOpensIn', 'sidepanel');
+      expect(text('save-top-status')).toBe(UNSAVED_TEXT);
+      expect(text('save-status')).toBe(UNSAVED_TEXT);
+      expect($('save-top-status').classList.contains('unsaved')).toBe(true);
+      await page.save();
+      expect(text('save-top-status')).toBe('Saved.');
+      expect($('save-top-status').classList.contains('unsaved')).toBe(false);
+    });
+
+    it('shows a failed save beside the top button too', async () => {
+      const page = await initOptionsPage(document, fakeDeps(fakeClient()));
+      $<HTMLInputElement>('hoverWaitMs').value = '5';
+      await page.save();
+      expect(text('save-top-status')).toBe('Not saved. Fix the problems above.');
+    });
   });
 
   describe('Chat model (PR 9.14)', () => {
@@ -797,7 +855,7 @@ describe('options page', () => {
       llmUrl: 'http://localhost:11434',
       model: 'llama3.2:3b',
       chatModel: '',
-      chatOpensIn: 'sidepanel',
+      chatOpensIn: 'page',
       temperature: 1.5,
       maxResponseTokens: 2048,
       contextTokens: 0,

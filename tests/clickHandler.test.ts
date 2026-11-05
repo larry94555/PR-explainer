@@ -710,7 +710,11 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(openChat).toHaveBeenCalledWith({
       context: env.contexts[1],
       explanation: DONE.explanation,
-      subject: { filePath: 'docs/roadmap.md', startLine: 44 },
+      subject: {
+        filePath: 'docs/roadmap.md',
+        startLine: 44,
+        code: [{ lineNumber: 44, text: expect.stringContaining('Friendly LLM error messages') }],
+      },
       regenerated: false,
     });
 
@@ -751,7 +755,11 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     click(code('R44'));
     expect(addToChat).toHaveBeenCalledWith({
       text: expect.stringContaining('docs/roadmap.md'),
-      subject: { filePath: 'docs/roadmap.md', startLine: 44 },
+      subject: {
+        filePath: 'docs/roadmap.md',
+        startLine: 44,
+        code: [{ lineNumber: 44, text: expect.stringContaining('Friendly LLM error messages') }],
+      },
       code: expect.objectContaining({ startLine: 44, endLine: 44 }),
       facts: expect.objectContaining({ where: 'docs/roadmap.md, line 44' }),
     });

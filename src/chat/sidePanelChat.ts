@@ -1,6 +1,6 @@
 // The chat in Chrome's side panel (PR 11.8), on the GitHub page's side.
 //
-// With Chat opens in set to Side panel (the default), Ask a question asks the
+// With Chat opens in set to Side panel, Ask a question asks the
 // service worker to open the side panel (`openSidePanel`) and the chat is
 // drawn there instead of over the page. Chrome opens a side panel only in
 // answer to something the user did, so the request is sent at once from the
@@ -48,12 +48,12 @@ export const CHAT_PLACE_KEY = 'settings.chatOpensIn';
 /** Where the chat opens, as in src/settings.ts. */
 export type ChatPlace = 'sidepanel' | 'page';
 
-/** The setting as stored: `page`, or `sidepanel` (the default) for anything else. */
+/** The setting as stored: `sidepanel`, or `page` (the default, PR 11.13) for anything else. */
 export function chatPlaceOf(stored: unknown): ChatPlace {
-  return stored === 'page' ? 'page' : 'sidepanel';
+  return stored === 'sidepanel' ? 'sidepanel' : 'page';
 }
 
-/** Follows Chat opens in (src/syncFlag.ts). Side panel until it is read. */
+/** Follows Chat opens in (src/syncFlag.ts). On the page until it is read. */
 export function trackChatPlace(
   storage: SyncStorageLike,
   events: StorageChangedEvent,

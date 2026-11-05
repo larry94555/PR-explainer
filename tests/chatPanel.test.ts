@@ -378,6 +378,72 @@ describe('chat panel', () => {
     expect(shadow().querySelector<HTMLElement>('.subject')!.title).toBe('src/other.ts, line 42');
   });
 
+  describe('the clicked code under the header (PR 11.13)', () => {
+    const codeBox = () => shadow().querySelector<HTMLElement>('.subject-code')!;
+    const rows = () =>
+      [...codeBox().querySelectorAll('.code-line')].map((row) => [
+        row.querySelector('.line-number')!.textContent,
+        row.querySelector('code')!.textContent,
+      ]);
+
+    it('shows the clicked line with its number, as text', () => {
+      open({
+        subject: {
+          filePath: 'src/llm/retry.ts',
+          startLine: 12,
+          code: [{ lineNumber: 12, text: 'if (a < b) <b>retry()</b>;' }],
+        },
+      });
+      expect(codeBox().hidden).toBe(false);
+      expect(rows()).toEqual([['12', 'if (a < b) <b>retry()</b>;']]);
+      expect(codeBox().querySelector('b')).toBeNull();
+    });
+
+    it('numbers each line of a block with its own number', () => {
+      open({
+        subject: {
+          ...SUBJECT,
+          code: [
+            { lineNumber: 12, text: 'old();' },
+            { lineNumber: 12, text: 'next();' },
+            { lineNumber: 13, text: '}' },
+          ],
+        },
+      });
+      expect(rows()).toEqual([
+        ['12', 'old();'],
+        ['12', 'next();'],
+        ['13', '}'],
+      ]);
+    });
+
+    it('is hidden without code, and follows setSubject', () => {
+      const chat = open();
+      expect(codeBox().hidden).toBe(true);
+      chat.setSubject({
+        filePath: 'src/other.ts',
+        startLine: 42,
+        code: [{ lineNumber: 42, text: 'return x;' }],
+      });
+      expect(rows()).toEqual([['42', 'return x;']]);
+      chat.setSubject({ filePath: 'src/other.ts', startLine: 50 });
+      expect(codeBox().hidden).toBe(true);
+      expect(rows()).toEqual([]);
+    });
+
+    it('sits between the header and the messages, in both places', () => {
+      for (const layout of ['docked', 'fill'] as const) {
+        const chat = open({
+          layout,
+          subject: { ...SUBJECT, code: [{ lineNumber: 12, text: 'x' }] },
+        });
+        expect(codeBox().previousElementSibling?.className).toBe('header');
+        expect(codeBox().nextElementSibling?.className).toBe('messages');
+        chat.close();
+      }
+    });
+  });
+
   it('shows New chat only with onNewChat, and clear empties the list', () => {
     open();
     expect(shadow().querySelector('.new-chat')).toBeNull();

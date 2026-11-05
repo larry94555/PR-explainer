@@ -104,6 +104,7 @@ export function selectionSubject(context: SelectionContext): ChatSubject {
     filePath: context.filePath,
     startLine: Math.min(...numbers),
     endLine: Math.max(...numbers),
+    code: context.lines.map(({ lineNumber, text }) => ({ lineNumber, text })),
   };
 }
 

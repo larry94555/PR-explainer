@@ -53,6 +53,32 @@ export const CHAT_PANEL_STYLE = `
   }
   .subject .file { overflow: hidden; text-overflow: ellipsis; }
   .subject .lines { flex: none; }
+  /* The clicked code (PR 11.13): line numbers in a gutter, long lines scroll. */
+  .subject-code {
+    flex: none;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 6px 0 0;
+    /* Six whole lines; a longer block scrolls, with no part line showing. */
+    max-height: calc(6 * 18px + 6px);
+    contain: paint;
+    overflow: auto;
+    background: var(--pe-subtle-bg);
+    border-bottom: 1px solid var(--pe-border);
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  }
+  .subject-code[hidden] { display: none; }
+  .code-line { display: flex; white-space: pre; line-height: 18px; }
+  .code-line:last-child { padding-bottom: 6px; }
+  .line-number {
+    flex: none;
+    min-width: 3ch;
+    padding: 0 8px 0 12px;
+    color: var(--pe-muted);
+    text-align: right;
+    user-select: none;
+  }
+
   .close {
     border: 0;
     background: transparent;
@@ -113,6 +139,7 @@ export const CHAT_PANEL_STYLE = `
   .subject code { background: none; padding: 0; }
   pre { background: var(--pe-bg); border: 1px solid var(--pe-border-muted); padding: 8px; border-radius: 6px; overflow: auto; }
   pre code { background: none; padding: 0; }
+  .subject-code code { background: none; border-radius: 0; padding: 0 12px 0 0; font: inherit; }
   .composer {
     display: grid;
     grid-template-columns: 1fr auto;

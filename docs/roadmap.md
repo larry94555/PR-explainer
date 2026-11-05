@@ -111,6 +111,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 11.11 | Rate an answer | Small | ✅ Done ([#80](https://github.com/larry94555/PR-explainer/pull/80)) |
 | 11.12 | Ratings next to speed in the Speed test and report | Small | ✅ Done ([#81](https://github.com/larry94555/PR-explainer/pull/81)) |
 | 11.13 | Chrome's built-in model as an optional fallback | Medium | Not started |
+| 11.14 | Save at the top of settings, chat on the page by default, and the clicked code in the chat | Small | ✅ Done |
 
 ## Milestone overview
 
@@ -1330,6 +1331,19 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
   2. Run `npm run dev`, reload the extension, open the settings page and set **Model server** to **Chrome built-in**. Confirm it says whether this laptop can use it, and click **Download** if offered.
   3. Once it is available, click a line on a PR and confirm the popup names Chrome's built-in model and shows an answer.
   4. Set **Model server** back to **Ollama**, quit Ollama, click a line, and confirm the error offers the built-in model.
+
+### PR 11.14: Save at the top of settings, chat on the page by default, and the clicked code in the chat (Small) ✅ Done
+- **Status:** Done. Added after trying PR 11.8: a change to **Chat opens in** seemed not to take effect, because the only **Save** button was at the end of a long form, and the side panel named the file and lines but not the code.
+- **Why it's needed:** A setting changed but never saved looks like a bug. The side panel, the default from PR 11.8, moves the chat away from the clicked line, and without the code itself the chat no longer shows what it is about.
+- **Problem it solves:** The settings page gets a second **Save** at the top that stays in view while scrolling. Both buttons submit the whole form, so every setting is saved at once, and both say **Unsaved changes. Click Save to apply them.** after any change until it is saved (or why it was not). **Chat opens in** defaults to **On the page**, listed first; anyone who saved **Side panel** keeps it, and a value that is missing or unknown now means On the page (the content script, the service worker's shortcut and the **Open chat** menu item agree). The chat, in both places, shows the clicked line under its header with its line number in a gutter, or each line of a selected block with its own number (removed and added lines keep theirs); it follows the code when another line is clicked into the chat, and a long block scrolls after six lines. The code travels in `ChatSubject.code`, so the side panel gets it with the rest of the chat.
+- **Unit tests added:** `optionsPage.test.ts` checks the top Save is a submit button for the form before the first setting, saves every field in one call, shows **Unsaved changes** beside both buttons after a change and **Saved.** after, and shows a failed save at the top too; the Chat opens in order and default. `settings.test.ts` checks the new default for a fresh install and for unknown values, in the service worker and the content script. `sidePanel.test.ts` checks the **Open chat** menu item is hidden when the setting cannot be read or is removed, and that the side panel shows the clicked line and its number. `chatPanel.test.ts` checks the code and its numbers (as text, never HTML), a block's own numbers, hidden without code, following setSubject, and its place between the header and the messages in both layouts. `selection.test.ts` and `clickHandler.test.ts` check the line text and numbers are put in the subject.
+- **Screenshots:** the settings page with **Unsaved changes** at the top ([1](screenshots/pr-11.14/1-options-unsaved.png)) and after Save ([2](screenshots/pr-11.14/2-options-saved.png)); the chat on the page about one line ([3](screenshots/pr-11.14/3-chat-on-page-line.png)) and a block ([4](screenshots/pr-11.14/4-chat-on-page-block.png)); the chat at side panel width, [light](screenshots/pr-11.14/5-side-panel-light.png) and [dark](screenshots/pr-11.14/6-side-panel-dark.png).
+- **How to test (Windows 11, Command Prompt):**
+  1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
+  2. Reload the extension at `chrome://extensions`, open its settings, change **Chat opens in**, and confirm **Unsaved changes** shows next to the **Save** at the top. Scroll down and confirm the top **Save** stays in view. Click it and confirm **Saved.**
+  3. Set **Chat opens in** to **On the page** and save. On a PR's Files changed tab, click a line, then **Ask a question**, and confirm the chat floats over the page with the line number and the line's code at the top.
+  4. Select a few lines, explain them, click **Ask a question**, and confirm each line shows with its number.
+  5. Set **Chat opens in** to **Side panel**, save, click a line and **Ask a question** without reloading the PR, and confirm the chat opens in the side panel with the same line and number at the top.
 
 ---
 

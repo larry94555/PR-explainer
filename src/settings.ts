@@ -27,10 +27,10 @@ export interface Settings {
    */
   chatModel: string;
   /**
-   * Chat opens in (PR 11.8): `sidepanel` (the default) shows the chat in
-   * Chrome's side panel, next to the page, where it covers no code and stays
-   * open while GitHub moves between the PR's tabs; `page` is the panel that
-   * floats over the bottom right of the page (PR 5.2). The content script
+   * Chat opens in (PR 11.8): `page` (the default from PR 11.13) is the panel
+   * that floats over the bottom right of the page (PR 5.2); `sidepanel` shows
+   * the chat in Chrome's side panel, next to the page, where it covers no code
+   * and stays open while GitHub moves between the PR's tabs. The content script
    * reads it straight from storage (src/chat/sidePanelChat.ts).
    */
   chatOpensIn: ChatPlace;
@@ -176,7 +176,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   llmUrl: 'http://localhost:11434',
   model: '',
   chatModel: '',
-  chatOpensIn: 'sidepanel',
+  chatOpensIn: 'page',
   temperature: 0.2,
   maxResponseTokens: 120,
   contextTokens: 0,
@@ -518,14 +518,14 @@ export function followRequestsAtOnce(
   return followSetting('requestsAtOnce', storage, onChanged, requestsAtOnceOf);
 }
 
-/** Chat opens in as stored: `page`, or `sidepanel` (the default) for anything else. */
+/** Chat opens in as stored: `sidepanel`, or `page` (the default, PR 11.13) for anything else. */
 export function chatPlaceOf(stored: unknown): ChatPlace {
-  return stored === 'page' ? 'page' : 'sidepanel';
+  return stored === 'sidepanel' ? 'sidepanel' : 'page';
 }
 
 /**
  * Follows Chat opens in in the service worker (PR 11.9), so a shortcut can
- * open the side panel before anything is awaited. Side panel until it is read.
+ * open the side panel before anything is awaited. On the page until it is read.
  */
 export function followChatPlace(
   storage: StorageAreaLike,

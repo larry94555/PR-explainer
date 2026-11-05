@@ -431,16 +431,29 @@ describe('selectionSubject', () => {
   it("uses the new file's lines, or the old file's when only removed lines are selected", () => {
     expect(
       selectionSubject(context([line(9, 'removed'), line(12, 'added'), line(14, 'context')])),
-    ).toEqual({
+    ).toMatchObject({
       filePath: 'src/a.ts',
       startLine: 12,
       endLine: 14,
     });
-    expect(selectionSubject(context([line(30, 'removed'), line(31, 'removed')]))).toEqual({
+    expect(selectionSubject(context([line(30, 'removed'), line(31, 'removed')]))).toMatchObject({
       filePath: 'src/a.ts',
       startLine: 30,
       endLine: 31,
     });
+  });
+
+  it('keeps every selected line with its own number, for the chat (PR 11.13)', () => {
+    const lines = [
+      { ...line(9, 'removed'), text: 'old();' },
+      { ...line(12, 'added'), text: 'next();' },
+      { ...line(14, 'context'), text: '}' },
+    ];
+    expect(selectionSubject(context(lines)).code).toEqual([
+      { lineNumber: 9, text: 'old();' },
+      { lineNumber: 12, text: 'next();' },
+      { lineNumber: 14, text: '}' },
+    ]);
   });
 });
 
