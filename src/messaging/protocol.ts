@@ -9,6 +9,7 @@ import type { ChatPayload, ChatResult } from '../chat/chatHandler';
 import type { DebugLogPayload } from '../debug/types';
 import type { ExplainPayload, ExplainResult } from '../explain/explainHandler';
 import type { AheadProgress } from '../explainAhead';
+import type { OllamaStatus } from '../llm/ollamaStatus';
 import type { WarmupPayload, WarmupResult } from '../llm/warmup';
 
 // Each request type maps to the payload it takes and the result it returns.
@@ -35,6 +36,10 @@ export interface RequestMap {
   // The PR the sending tab shows now ("owner/repo#17"), or null off a PR,
   // so the background queue lets go of work it holds for another one (PR 11.5).
   tabPr: { payload: { pr: string | null }; result: { released: number } };
+  // The Ollama status (PR 11.6), for the banner. A page whose diffs open
+  // asks without `retry` (the worker checks unless Ollama is known to be
+  // up); the banner's Try again sends `retry: true`, which checks at once.
+  ollamaStatus: { payload: { retry?: boolean } | undefined; result: OllamaStatus };
 }
 
 export type RequestType = keyof RequestMap;

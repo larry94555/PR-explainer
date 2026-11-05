@@ -29,8 +29,15 @@ import { createSavedQueue } from './explain/savedQueue';
 import { SAMPLE_CONTEXT } from './explain/sampleContext';
 import { createModelLookup } from './llm/contextSize';
 import { createLlmClient } from './llm/createClient';
-import { detectPlatform } from './llm/describeLlmError';
+import { detectPlatform, llmErrorKind } from './llm/describeLlmError';
 import { createLoadedWindowMemory } from './llm/loadedWindow';
+import {
+  createOllamaStatus,
+  stateOfErrorKind,
+  stateOfResult,
+  type ResultLike,
+} from './llm/ollamaStatus';
+import { isSameModel } from './llm/types';
 import { createWarmup } from './llm/warmup';
 import { MessageRouter } from './messaging/router';
 import { listenForChatPorts, listenForExplainPorts } from './messaging/streamPort';
@@ -38,6 +45,7 @@ import { listenForWorkerPorts } from './messaging/workerPort';
 import type { RoundTripSink } from './net/roundTrips';
 import {
   DEFAULT_SETTINGS,
+  hasOwnChatModel,
   followRequestsAtOnce,
   getSettings,
   saveSettings,
@@ -167,8 +175,9 @@ const savedQueue = createSavedQueue<ExplainPayload>({
 const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult | HunkResult>({
   concurrency: () => requestsAtOnce.current(),
   onChange: () => savedQueue.changed(),
-  run: (payload, options) =>
-    payload.hunk ? explainHunk(payload, options) : explain(payload, options),
+  // Every answer and failure says whether Ollama is up (PR 11.6).
+  run: async (payload, options) =>
+    noteResult(await (payload.hunk ? explainHunk(payload, options) : explain(payload, options))),
   failed: (result) => result.status === 'failed',
   cached: (result) =>
     result.status === 'hunk'
@@ -207,6 +216,71 @@ const backgroundPause = createBackgroundPause({
     void toolbar.showPaused(paused);
   },
 });
+/** Whether any tab shows a GitHub PR (a tab's URL is read for GitHub only). */
+async function prTabOpen(): Promise<boolean> {
+  return (await chrome.tabs.query({ url: 'https://github.com/*/*/pull/*' })).length > 0;
+}
+// The Ollama status (PR 11.6, src/llm/ollamaStatus.ts): up, down or model
+// missing, from every request's result and a cheap check. While it is not
+// up, background work is paused and each PR tab shows one banner with the
+// fix (src/statusBanner.ts); the worker checks again after 2, 4 and 8
+// seconds, then every 30, while a PR tab is open. When Ollama is back, the
+// model is warmed up and background work carries on.
+const ollamaStatus = createOllamaStatus({
+  storage: chrome.storage.local,
+  model: async () => (await getSettings()).model,
+  prTabOpen,
+  check: async () => {
+    const settings = await getSettings();
+    try {
+      // /api/tags: one request says whether Ollama answers and has the model.
+      const models = await createLlmClient(settings).listModels();
+      const { model } = settings;
+      return !model || models.some((listed) => isSameModel(listed.name, model))
+        ? { state: 'up' as const }
+        : { state: 'model-missing' as const, model };
+    } catch (error) {
+      const found = stateOfErrorKind(llmErrorKind(error));
+      // Ollama answered, with another problem a click explains (such as a
+      // blocked origin): the banner is not for that.
+      if (!found && llmErrorKind(error) !== undefined) return { state: 'up' as const };
+      if (!found) throw error;
+      return { state: found };
+    }
+  },
+  onChange: (status) => {
+    explainQueue.setPaused(status.state === 'down' || status.state === 'model-missing', 'ollama');
+  },
+  onRecover: () => {
+    console.info('[PR Explainer] Ollama is back: warming up the model');
+    void warmup.warmUp(undefined, { pr: '' });
+  },
+});
+/** Tells the Ollama status what a request found, and hands its result on. */
+function noteResult<R extends ResultLike>(result: R): R {
+  const found = stateOfResult(result);
+  if (found) ollamaStatus.report(found);
+  return result;
+}
+/**
+ * The same for a chat answer. A Chat model of its own says only whether
+ * Ollama answers, not whether the explanation model is installed (review on #75).
+ */
+async function noteChatResult<R extends ResultLike>(result: R): Promise<R> {
+  if (!hasOwnChatModel(await getSettings())) return noteResult(result);
+  ollamaStatus.reportOtherModel(stateOfResult(result));
+  return result;
+}
+// A new URL or model may fix it, or break it: check again, if a PR tab is open.
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'sync') return;
+  if (!Object.hasOwn(changes, storageKey('llmUrl')) && !Object.hasOwn(changes, storageKey('model')))
+    return;
+  void prTabOpen().then((open) => {
+    if (open) void ollamaStatus.check();
+  });
+});
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   warmup.forgetTab(tabId);
   toolbar.forgetTab(tabId);
@@ -238,7 +312,21 @@ new MessageRouter()
     console.info('[PR Explainer] ping received');
     return { receivedAt: Date.now() };
   })
-  .on('warmup', (payload, sender) => warmup.warmUp(sender.tab?.id, payload))
+  .on('warmup', async (payload, sender) => {
+    const result = await warmup.warmUp(sender.tab?.id, payload);
+    // A model loaded, or found loaded, means Ollama is up (PR 11.6). A chat
+    // warm-up loads the Chat model, which says nothing of the explanation
+    // model (a chat warm-up with the same model does nothing: same-model).
+    if (result.outcome === 'loaded' || result.outcome === 'already-loaded') {
+      if (payload?.for === 'chat') ollamaStatus.reportOtherModel('up');
+      else ollamaStatus.report('up');
+    }
+    return result;
+  })
+  // The banner's status, checked unless known to be up; Try again checks at once (PR 11.6).
+  .on('ollamaStatus', (payload) =>
+    payload?.retry === true ? ollamaStatus.check() : ollamaStatus.ensure(),
+  )
   // A click's GitHub round trips and trace join the debug log (PR 9.3).
   .on('debugLogAdd', async (payload) => ({
     added: (await debugLog.add(pageEntries(payload))).length,
@@ -289,20 +377,21 @@ listenForWorkerPorts(chrome.runtime, {
   restored: async () => (await restart).restored,
 });
 // Chat answers (the chat panel) stream the same way, over their own port.
-listenForChatPorts(
-  chrome.runtime,
-  createChatHandler({
-    getSettings,
-    createClient: createLlmClient,
-    platform: detectPlatform(navigator.userAgent),
-    contextTokens,
-    thinking,
-    loadedWindow,
-    // Read when each request starts, so turning the setting on or off applies to the next one.
-    get onRoundTrip() {
-      return roundTripSink();
-    },
-  }),
+// Each answer or failure also says whether Ollama is up (PR 11.6).
+const chat = createChatHandler({
+  getSettings,
+  createClient: createLlmClient,
+  platform: detectPlatform(navigator.userAgent),
+  contextTokens,
+  thinking,
+  loadedWindow,
+  // Read when each request starts, so turning the setting on or off applies to the next one.
+  get onRoundTrip() {
+    return roundTripSink();
+  },
+});
+listenForChatPorts(chrome.runtime, async (payload, options) =>
+  noteChatResult(await chat(payload, options)),
 );
 
 // Chrome clears the icon badge when the browser restarts. Having a startup

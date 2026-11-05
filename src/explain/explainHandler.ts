@@ -63,11 +63,11 @@ import {
   type ContextSizer,
   type ThinkingCheck,
 } from '../llm/contextSize';
-import { describeLlmError, type Platform } from '../llm/describeLlmError';
+import { describeLlmError, llmErrorKind, type Platform } from '../llm/describeLlmError';
 import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
 import type { LoadedWindowMemory } from '../llm/loadedWindow';
 import { chooseNumCtx } from '../llm/numCtx';
-import type { ChatMessage, LlmClient, LlmTimings } from '../llm/types';
+import type { ChatMessage, LlmClient, LlmErrorKind, LlmTimings } from '../llm/types';
 import type { Settings } from '../settings';
 import { explainCacheKey, type ExplainCache } from './explainCache';
 import type { FileContext, PrInfo } from './explainPrompt';
@@ -180,7 +180,14 @@ export type ExplainResult =
       /** The service worker's tasks (PR 9.1). */
       trace?: WorkerTrace;
     }
-  | { status: 'failed'; message: string; fix: string; trace?: WorkerTrace };
+  | {
+      status: 'failed';
+      message: string;
+      fix: string;
+      /** Why the model call failed, when it did (PR 11.6: tells Ollama is down). */
+      kind?: LlmErrorKind;
+      trace?: WorkerTrace;
+    };
 
 /** The message and fix for code too long for the model's context window. */
 export function tooLargeError(
@@ -540,7 +547,8 @@ export function createExplainHandler(deps: ExplainDeps) {
         model: settings.model,
         platform: deps.platform,
       });
-      return { status: 'failed', message, fix, trace: trace() };
+      const kind = llmErrorKind(error);
+      return { status: 'failed', message, fix, ...(kind && { kind }), trace: trace() };
     }
   };
 }

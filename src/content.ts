@@ -16,6 +16,13 @@ import {
 } from './batteryState';
 import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
 import { createWorkerPort } from './workerPort';
+import {
+  bannerPlatform,
+  findStatusBanner,
+  followOllamaStatus,
+  removeStatusBanner,
+  showStatusBanner,
+} from './statusBanner';
 import { chatSessionFor, CurrentChat, startChat } from './chat/chatFlow';
 import { currentChatPanel, openChatPanel } from './chat/chatPanel';
 import { ChatSessions } from './chat/chatSession';
@@ -212,6 +219,8 @@ const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (va
   update();
   // A tab turned off lets go of the pause; turned on, it may hold it again.
   reportPause();
+  // Turned off, the Ollama banner goes too (PR 11.6).
+  showBanner();
 });
 
 let pinged = false;
@@ -581,12 +590,49 @@ function reportPr(): void {
 
 const workerPort = createWorkerPort({
   runtime: chrome.runtime,
-  hasWork: () => ahead.runningAll().length > 0 || ahead.queued().length > 0,
+  // The Ollama banner (PR 11.6) also keeps the worker running, so its
+  // checks go on until Ollama is back.
+  hasWork: () =>
+    ahead.runningAll().length > 0 ||
+    ahead.queued().length > 0 ||
+    findStatusBanner(document) !== null,
   onRestart: (restored) => {
     console.info(`[PR Explainer] worker restarted, ${restored} jobs restored`);
     if (features.attached) ahead.restart();
   },
 });
+
+// The Ollama status banner (PR 11.6, src/statusBanner.ts). The service
+// worker keeps one status for every tab in chrome.storage.local; while
+// Ollama is not running or lacks the model, a PR's diffs show one banner
+// with the fix and Try again, and it goes when the worker finds Ollama back.
+const ollamaStatus = followOllamaStatus(chrome.storage.onChanged, () => showBanner());
+// Checking takes one request to Ollama, which may not answer quickly.
+const OLLAMA_STATUS_TIMEOUT_MS = 30_000;
+function askOllamaStatus(retry = false): Promise<void> {
+  return sendRequest('ollamaStatus', retry ? { retry: true } : undefined, {
+    timeoutMs: OLLAMA_STATUS_TIMEOUT_MS,
+  }).then(
+    (status) => {
+      ollamaStatus.set(status);
+      // Shown even when the status is the same, for diffs that just opened.
+      showBanner();
+    },
+    () => {},
+  );
+}
+/** Shows, updates or removes the banner: only on a PR's diffs with click-to-explain on. */
+function showBanner(): void {
+  if (!features.attached || enabled.current() !== true) {
+    removeStatusBanner(document);
+    return;
+  }
+  showStatusBanner(document, ollamaStatus.current(), {
+    platform: bannerPlatform(navigator.userAgent),
+    onRetry: () => askOllamaStatus(true),
+  });
+  workerPort.update();
+}
 
 const prefetcher = createPrefetcher({
   // The service worker's queue puts a hover ahead of the line explained ahead.
@@ -718,7 +764,10 @@ const features = new DiffPageFeatures(() => {
   // Drag across lines, or click one and Shift-click another, to explain the
   // block as a whole (src/selection.ts).
   const removeSelection = installSelection(explainDeps);
+  // Is Ollama up? The worker checks unless it knows (PR 11.6).
+  void askOllamaStatus();
   return () => {
+    removeStatusBanner(document);
     removeClicks();
     document.removeEventListener('mouseover', prefetcher.onMouseOver);
     document.removeEventListener('mousedown', prefetcher.onMouseDown);

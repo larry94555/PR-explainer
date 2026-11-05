@@ -23,9 +23,9 @@
 // loaded without asking /api/ps.
 
 import { thinkOption, type ContextSizer, type ThinkingCheck } from '../llm/contextSize';
-import { describeLlmError, type Platform } from '../llm/describeLlmError';
+import { describeLlmError, llmErrorKind, type Platform } from '../llm/describeLlmError';
 import type { LoadedWindowMemory } from '../llm/loadedWindow';
-import type { ChatMessage, LlmClient } from '../llm/types';
+import type { ChatMessage, LlmClient, LlmErrorKind } from '../llm/types';
 import { createRoundTripLog, type RoundTripLog, type RoundTripSink } from '../net/roundTrips';
 import { chatResponseTokens, chatSettings, type Settings } from '../settings';
 
@@ -36,7 +36,13 @@ export interface ChatPayload {
 
 export type ChatResult =
   | { status: 'done'; answer: string; model: string }
-  | { status: 'failed'; message: string; fix: string };
+  | {
+      status: 'failed';
+      message: string;
+      fix: string;
+      /** Why the model call failed (PR 11.6: tells Ollama is down). */
+      kind?: LlmErrorKind;
+    };
 
 export interface ChatStreamOptions {
   /** Called with each piece of the answer as the model writes it. */
@@ -125,7 +131,8 @@ export function createChatHandler(deps: ChatDeps) {
         model: settings.model,
         platform: deps.platform,
       });
-      return { status: 'failed', message, fix };
+      const kind = llmErrorKind(error);
+      return { status: 'failed', message, fix, ...(kind && { kind }) };
     }
   };
 }

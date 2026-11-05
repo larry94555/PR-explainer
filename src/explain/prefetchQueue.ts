@@ -33,7 +33,9 @@
 //   priority, then given up on. A click is never tried again by itself.
 // - While paused (PR 11.3: on battery, src/backgroundPause.ts), no
 //   background job starts; those running finish, and the rest wait until it
-//   is resumed. Clicks still run at once.
+//   is resumed. Clicks still run at once. Ollama being down (PR 11.6,
+//   src/llm/ollamaStatus.ts) pauses it the same way, for its own reason, so
+//   plugging in does not resume work while Ollama is still down.
 // - A job whose callers have all gone (the popup closed, the tab moved on) is
 //   dropped, and stopped if it is running. Jobs can also be re-prioritised
 //   and dropped by PR. Closing a tab lets go of only that tab's callers, so a
@@ -164,10 +166,11 @@ export interface PrefetchQueue<P, R> {
    */
   releaseTab(tab: number, keepPr?: string | null): number;
   /**
-   * Pauses or resumes background jobs (PR 11.3). While paused, only clicks
-   * start; running background jobs are let finish.
+   * Pauses or resumes background jobs for `reason` (PR 11.3: the battery,
+   * the default; PR 11.6: Ollama is down). While any reason holds, only
+   * clicks start; running background jobs are let finish.
    */
-  setPaused(paused: boolean): void;
+  setPaused(paused: boolean, reason?: PauseReason): void;
   /** The labels of the running and waiting jobs, in the order they would run. */
   state(): { running: string[]; waiting: string[] };
   /**
@@ -184,6 +187,9 @@ export interface PrefetchQueue<P, R> {
    */
   restore(saved: readonly SavedJob<P>[]): number;
 }
+
+/** Why background work is paused: on battery (PR 11.3) or Ollama down (PR 11.6). */
+export type PauseReason = 'battery' | 'ollama';
 
 /** A background job as it is saved across a worker restart (PR 11.5). */
 export interface SavedJob<P> {
@@ -237,7 +243,7 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
   const jobs = new Map<string, Job<P, R>>();
   let seq = 0;
   let front = 0;
-  let paused = false;
+  const pausedFor = new Set<PauseReason>();
 
   const running = () => [...jobs.values()].filter((job) => job.run);
   const waiting = () =>
@@ -402,8 +408,8 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       }
       // While a click runs, the background waits, so the click has Ollama to itself.
       else if (clickActive()) continue;
-      // On battery (PR 11.3): nothing new starts until it is resumed.
-      else if (paused) continue;
+      // On battery (PR 11.3) or Ollama down (PR 11.6): nothing new starts until it is resumed.
+      else if (pausedFor.size > 0) continue;
       // A line being answered as part of a hunk waits for it.
       else if (cover) continue;
       else if (running().length < concurrency()) start(job);
@@ -579,10 +585,11 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       if (dropped) pump();
       return dropped;
     },
-    setPaused(value) {
-      if (value === paused) return;
-      paused = value;
-      if (!paused) pump();
+    setPaused(value, reason = 'battery') {
+      if (value === pausedFor.has(reason)) return;
+      if (value) pausedFor.add(reason);
+      else pausedFor.delete(reason);
+      if (pausedFor.size === 0) pump();
     },
     state: () => ({
       running: running().map((job) => job.spec.label),

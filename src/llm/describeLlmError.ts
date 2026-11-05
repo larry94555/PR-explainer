@@ -4,7 +4,7 @@
 //
 // Commands in a fix are wrapped in backticks so a page can show them as code.
 
-import { LlmError } from './types';
+import { LlmError, type LlmErrorKind } from './types';
 
 export type Platform = 'windows' | 'mac' | 'other';
 
@@ -109,4 +109,13 @@ export function describeLlmError(error: unknown, context: ErrorContext = {}): Er
         fix: 'Set the URL to a local address, such as `http://localhost:11434`.',
       };
   }
+}
+
+/**
+ * The kind of a failed LLM call, or undefined for any other error. Failed
+ * results carry it so the service worker can tell Ollama is down or the
+ * model is missing (PR 11.6, src/llm/ollamaStatus.ts).
+ */
+export function llmErrorKind(error: unknown): LlmErrorKind | undefined {
+  return error instanceof LlmError ? error.kind : undefined;
 }
