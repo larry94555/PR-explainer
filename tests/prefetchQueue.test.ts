@@ -188,6 +188,55 @@ describe('the background queue', () => {
   });
 });
 
+describe('paused while Ollama is down (PR 11.6)', () => {
+  it('stops starting background work while down, and resumes once Ollama is back', async () => {
+    const env = setup();
+    const a = env.queue.add(env.job('a'));
+    void env.queue.add(env.job('b'));
+    void env.queue.add(env.job('c', 'rest'));
+    // The first job fails because Ollama went away; the worker pauses.
+    env.queue.setPaused(true, 'ollama');
+    env.live()[0]!.finish({ status: 'failed' });
+    await settle();
+    // Nothing else starts, so nothing else fails line by line.
+    expect(env.live()).toEqual([]);
+    expect(env.queue.state()).toEqual({ running: [], waiting: ['b', 'a', 'c'] });
+    expect(env.types()).not.toContain('failed a');
+
+    env.queue.setPaused(false, 'ollama');
+    expect(env.live().map((r) => r.payload)).toEqual(['b']);
+    env.live()[0]!.finish();
+    await settle();
+    // The failed one is tried again, and now answered.
+    env.live()[0]!.finish();
+    await expect(a).resolves.toMatchObject({ text: 'answer to a' });
+  });
+
+  it('still runs a click while down, so its popup shows the full error', async () => {
+    const env = setup();
+    env.queue.setPaused(true, 'ollama');
+    void env.queue.add(env.job('a'));
+    const click = env.queue.add(env.job('x', 'click'));
+    expect(env.live().map((r) => r.payload)).toEqual(['x']);
+    env.live()[0]!.finish({ status: 'failed' });
+    await expect(click).resolves.toMatchObject({ status: 'failed' });
+    await settle();
+    expect(env.live()).toEqual([]);
+  });
+
+  it('keeps the battery and Ollama pauses apart: both must end before work resumes', () => {
+    const env = setup();
+    env.queue.setPaused(true, 'ollama');
+    env.queue.setPaused(true);
+    void env.queue.add(env.job('a'));
+    // Plugging in does not resume work while Ollama is still down.
+    env.queue.setPaused(false);
+    expect(env.live()).toEqual([]);
+    env.queue.setPaused(false, 'ollama');
+    expect(env.live().map((r) => r.payload)).toEqual(['a']);
+  });
+});
+
 describe('paused on battery (PR 11.3)', () => {
   it('starts no background job while paused, and starts them once resumed', async () => {
     const env = setup();

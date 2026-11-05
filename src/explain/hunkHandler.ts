@@ -13,9 +13,9 @@
 // and every line is missing, so each is asked on its own.
 
 import { promptBudget, thinkOption } from '../llm/contextSize';
-import { describeLlmError } from '../llm/describeLlmError';
+import { describeLlmError, llmErrorKind } from '../llm/describeLlmError';
 import { chooseNumCtx } from '../llm/numCtx';
-import type { LlmTimings } from '../llm/types';
+import type { LlmErrorKind, LlmTimings } from '../llm/types';
 import { createRoundTripLog } from '../net/roundTrips';
 import type { WorkerTrace } from '../trace/types';
 import { explainCacheKey } from './explainCache';
@@ -66,7 +66,14 @@ export type HunkResult =
       timings?: LlmTimings;
       trace?: WorkerTrace;
     }
-  | { status: 'failed'; message: string; fix: string; trace?: WorkerTrace };
+  | {
+      status: 'failed';
+      message: string;
+      fix: string;
+      /** Why the model call failed, when it did (PR 11.6). */
+      kind?: LlmErrorKind;
+      trace?: WorkerTrace;
+    };
 
 /** `value` as a HunkPayload, or undefined when it is not one (it is never trusted). */
 export function toHunkPayload(value: unknown): HunkPayload | undefined {
@@ -126,10 +133,11 @@ export function createHunkExplainHandler(deps: ExplainDeps) {
       ...tasks.trace(),
       roundTrips: roundTrips.list(tasks.origin),
     });
-    const failed = (message: string, fix: string): HunkResult => ({
+    const failed = (message: string, fix: string, kind?: LlmErrorKind): HunkResult => ({
       status: 'failed',
       message,
       fix,
+      ...(kind && { kind }),
       trace: trace(),
     });
     const settings = await tasks.time('settings', 'Read settings', () => deps.getSettings());
@@ -273,7 +281,7 @@ export function createHunkExplainHandler(deps: ExplainDeps) {
         model: settings.model,
         platform: deps.platform,
       });
-      return failed(message, fix);
+      return failed(message, fix, llmErrorKind(error));
     }
   };
 }
