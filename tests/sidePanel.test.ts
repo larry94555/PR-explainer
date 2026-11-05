@@ -4,7 +4,8 @@
 // the active tab's PR.
 import { CurrentChat, startChat } from '../src/chat/chatFlow';
 import type { ChatResult } from '../src/chat/chatHandler';
-import { CHAT_PANEL_ID } from '../src/chat/chatPanel';
+import { CHAT_PANEL_ID, type ChatPanel } from '../src/chat/chatPanel';
+import { openChatFromShortcut, type ChatShortcutDeps } from '../src/chat/chatShortcut';
 import { ChatSessions, type ChatSeed } from '../src/chat/chatSession';
 import {
   createChatOpener,
@@ -567,6 +568,92 @@ describe('side panel chat', () => {
     );
     // The PR keeps its conversation for the next chat.
     expect(sessions.get('owner/repo#1')).toBe(session);
+  });
+
+  // The Open chat shortcut (PR 11.9): the service worker opens the side
+  // panel, then the page draws the PR's kept conversation in it (review on #78).
+  describe('the Open chat shortcut', () => {
+    const PR = 'owner/repo#1';
+    /** What content.ts passes: the page's sessions and the chat open in each place. */
+    function shortcutDeps(page: FakePage, sessions: ChatSessions, onPage: ChatPanel | null = null) {
+      const shown: { place: string; note?: string }[] = [];
+      const deps: ChatShortcutDeps = {
+        pr: () => PR,
+        sessions,
+        subjects: new Map([[PR, SUBJECT]]),
+        openChat: (place) => (place === 'sidepanel' ? page.link.current() : onPage),
+        show: (place, pr, session, subject, note) => {
+          expect([pr, subject, session]).toEqual([PR, SUBJECT, sessions.get(PR)]);
+          shown.push({ place, ...(note !== undefined && { note }) });
+          if (place === 'sidepanel') chatIn(page, sessions, pr);
+        },
+      };
+      return { deps, shown };
+    }
+
+    /** A PR whose side panel chat had a question answered, then was closed. */
+    async function closedConversation() {
+      const browser = fakeBrowser();
+      const page = browser.addPage(1, 'https://github.com/owner/repo/pull/1/files');
+      browser.setActive(1);
+      const first = sidePanelDocument();
+      await opened(createSidePanelPage(first, browser.sideTabs));
+      const { asked, sessions } = chatIn(page);
+      inSidePanel(first).ask('Why a Set?');
+      asked[0]!.resolve({ status: 'done', answer: 'Lookups are fast.', model: 'm' });
+      await flush();
+      page.port!.other!.disconnect();
+      expect(page.link.current()).toBeNull();
+      return { browser, page, sessions };
+    }
+
+    it('reopens a closed PR conversation in the side panel Chrome just opened', async () => {
+      const { browser, page, sessions } = await closedConversation();
+      // Chrome opens a new side panel, which first shows the empty text...
+      const doc = sidePanelDocument();
+      await opened(createSidePanelPage(doc, browser.sideTabs));
+      expect(inSidePanel(doc).empty()).toBe(NO_CHAT_YET);
+      // ...then the page hears the command and draws the conversation there.
+      const { deps, shown } = shortcutDeps(page, sessions);
+      expect(openChatFromShortcut(deps, { sidePanel: true })).toBe('reopened');
+      await flush();
+      expect(shown).toEqual([{ place: 'sidepanel' }]);
+      expect(inSidePanel(doc).empty()).toBeNull();
+      expect(inSidePanel(doc).shown().slice(1)).toEqual([
+        ['user', 'Why a Set?'],
+        ['assistant', 'Lookups are fast.'],
+      ]);
+      expect(page.link.current()).not.toBeNull();
+    });
+
+    it('focuses the side panel chat that is already open instead', async () => {
+      const browser = fakeBrowser();
+      const page = browser.addPage(1, 'https://github.com/owner/repo/pull/1/files');
+      browser.setActive(1);
+      await opened(createSidePanelPage(sidePanelDocument(), browser.sideTabs));
+      const { sessions } = chatIn(page);
+      const focus = vi.spyOn(page.link.current()!, 'focus');
+      const { deps, shown } = shortcutDeps(page, sessions);
+      expect(openChatFromShortcut(deps, { sidePanel: true })).toBe('focused');
+      expect(focus).toHaveBeenCalled();
+      expect(shown).toEqual([]);
+    });
+
+    it('reopens it on the page, with why, when Chrome refused the side panel', async () => {
+      const { page, sessions } = await closedConversation();
+      const { deps, shown } = shortcutDeps(page, sessions);
+      expect(openChatFromShortcut(deps, { reason: 'No user gesture' })).toBe('reopened');
+      expect(shown).toEqual([{ place: 'page', note: fallbackNote('No user gesture') }]);
+    });
+
+    it('has nothing to open on a PR with no conversation yet', () => {
+      const browser = fakeBrowser();
+      const page = browser.addPage(1, 'https://github.com/owner/repo/pull/1/files');
+      const { deps, shown } = shortcutDeps(page, new ChatSessions());
+      expect(openChatFromShortcut(deps, { sidePanel: true })).toBe('nothing');
+      expect(openChatFromShortcut(deps, {})).toBe('nothing');
+      expect(shown).toEqual([]);
+    });
   });
 
   it('says what to do on a tab that is not a GitHub PR', async () => {

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { isEditable, isExplainShortcut, restoreFocus, shortcutTarget } from '../src/a11y';
+import * as a11y from '../src/a11y';
+import { isEditable, restoreFocus, shortcutTarget } from '../src/a11y';
 import { openChatPanel } from '../src/chat/chatPanel';
 import type { ClickHandlerDeps } from '../src/clickHandler';
 import { locateRow } from '../src/diffDom';
@@ -31,22 +32,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('isExplainShortcut', () => {
-  it('matches Alt+E by key position, whatever character it types', () => {
-    expect(isExplainShortcut(key(ALT_E))).toBe(true);
-    // macOS: Option+E types a dead accent key.
-    expect(isExplainShortcut(key({ ...ALT_E, key: 'Dead' }))).toBe(true);
-  });
-
-  it.each([
-    ['E alone', { code: 'KeyE', key: 'e' }],
-    ['Alt+R', { code: 'KeyR', key: 'r', altKey: true }],
-    ['AltGr+E (Ctrl+Alt, types €)', { ...ALT_E, ctrlKey: true, key: '€' }],
-    ['Alt+Shift+E', { ...ALT_E, shiftKey: true }],
-    ['Cmd+Alt+E', { ...ALT_E, metaKey: true }],
-    ['a held-down repeat', { ...ALT_E, repeat: true }],
-  ])('ignores %s', (_, init) => {
-    expect(isExplainShortcut(key(init))).toBe(false);
+describe('the page no longer handles Alt+E itself (PR 11.9)', () => {
+  it('has no key matcher left', () => {
+    expect(a11y).not.toHaveProperty('isExplainShortcut');
   });
 });
 
@@ -283,7 +271,7 @@ function setup(isEnabled?: () => boolean) {
   return { deps, contexts, anchors, uninstall };
 }
 
-describe.each(layouts)('Alt+E on the $name layout', ({ file, code }) => {
+describe.each(layouts)('the Explain command on the $name layout', ({ file, code }) => {
   let env: ReturnType<typeof setup>;
   const row = (id: string) => code(id).closest('tr')!;
   /** The line's code cell, focusable like the cells of GitHub's newer view. */
@@ -293,6 +281,8 @@ describe.each(layouts)('Alt+E on the $name layout', ({ file, code }) => {
     cell.focus();
     return cell;
   };
+  /** Alt+E as Chrome delivers it: a command, sent to the page by the service worker. */
+  const command = () => env.uninstall.explainFocused();
   const press = (target: EventTarget, init: KeyboardEventInit = ALT_E) => {
     const event = key(init);
     target.dispatchEvent(event);
@@ -308,20 +298,26 @@ describe.each(layouts)('Alt+E on the $name layout', ({ file, code }) => {
   });
   afterEach(() => env?.uninstall());
 
-  it('explains the focused line in a popup next to it, and stops the key', () => {
+  it('explains the focused line in a popup next to it', () => {
     env = setup();
-    const cell = focusLine('R45');
-    const event = press(cell);
+    focusLine('R45');
+    expect(command()).toBe(true);
     expect(env.contexts).toHaveLength(1);
     expect(env.contexts[0]).toContain('Clicked line: context, line 45 of the new file');
     expect(env.anchors[0]).toBe(row('R45'));
-    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('leaves an Alt+E key press alone, so it is not explained twice', () => {
+    env = setup();
+    const event = press(focusLine('R45'));
+    expect(env.contexts).toHaveLength(0);
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it('explains the line holding the text cursor', () => {
     env = setup();
     document.getSelection()!.collapse(code('L44').firstChild, 1);
-    press(document.body);
+    command();
     expect(env.contexts[0]).toContain('Clicked line: removed, line 44 of the old file');
   });
 
@@ -331,7 +327,7 @@ describe.each(layouts)('Alt+E on the $name layout', ({ file, code }) => {
     range.setStart(code('R43').firstChild!, 0);
     range.setEnd(code('R45').firstChild!, 1);
     document.getSelection()!.addRange(range);
-    press(document.body);
+    command();
     expect(env.contexts).toHaveLength(1);
     expect(env.contexts[0]).toContain('Selection: 4 lines');
     expect(document.querySelectorAll(`tr[${SELECTED_ATTR}]`)).toHaveLength(4);
@@ -348,17 +344,16 @@ describe.each(layouts)('Alt+E on the $name layout', ({ file, code }) => {
     down(code('R43'));
     down(code('R45'), true);
     expect(document.getElementById(SELECTION_UI_ID)).not.toBeNull();
-    press(document.body);
+    command();
     expect(env.contexts).toHaveLength(1);
     expect(env.contexts[0]).toContain('Selection: 4 lines');
     expect(document.getElementById(SELECTION_UI_ID)).toBeNull();
   });
 
-  it('does nothing, and lets the key through, off a line', () => {
+  it('does nothing off a line', () => {
     env = setup();
-    const event = press(document.body);
+    expect(command()).toBe(false);
     expect(env.contexts).toHaveLength(0);
-    expect(event.defaultPrevented).toBe(false);
   });
 
   it('does nothing while typing in a text box', () => {
@@ -367,25 +362,22 @@ describe.each(layouts)('Alt+E on the $name layout', ({ file, code }) => {
     const box = document.createElement('textarea');
     document.body.append(box);
     box.focus();
-    const event = press(box);
+    expect(command()).toBe(false);
     expect(env.contexts).toHaveLength(0);
-    expect(event.defaultPrevented).toBe(false);
   });
 
-  it('does nothing for AltGr+E, or while click-to-explain is off', () => {
+  it('does nothing while click-to-explain is off', () => {
     env = setup(() => false);
-    const cell = focusLine('R45');
-    press(cell);
-    env.uninstall();
-    env = setup();
-    press(cell, { ...ALT_E, ctrlKey: true });
+    focusLine('R45');
+    expect(command()).toBe(false);
     expect(env.contexts).toHaveLength(0);
   });
 
   it('stops listening once removed', () => {
     env = setup();
     env.uninstall();
-    press(focusLine('R45'));
+    focusLine('R45');
+    expect(command()).toBe(false);
     expect(env.contexts).toHaveLength(0);
   });
 });

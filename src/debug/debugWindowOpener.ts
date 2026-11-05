@@ -83,13 +83,18 @@ export interface ContextMenusLike {
   create(properties: {
     id: string;
     title: string;
-    contexts: ['action'];
+    // The toolbar button's menu, or (PR 11.9) a right-click on the page.
+    contexts: ('action' | 'page' | 'selection')[];
+    documentUrlPatterns?: string[];
     visible: boolean;
   }): unknown;
   update(id: string, properties: { visible: boolean }): Promise<void>;
   onClicked: {
     addListener(
-      listener: (info: { menuItemId: string | number }, tab?: { windowId?: number }) => void,
+      listener: (
+        info: { menuItemId: string | number; pageUrl?: string },
+        tab?: { id?: number; url?: string; windowId?: number },
+      ) => void,
     ): void;
   };
 }

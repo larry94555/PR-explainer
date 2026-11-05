@@ -15,12 +15,14 @@
 // else; while the block's popup is open the highlight stays, and it is
 // cleared when that popup closes.
 //
-// Alt+E (PR 7.3, see src/a11y.ts) does the same from the keyboard: it
-// explains the block when one is selected (pressing Explain selection for
-// it), and otherwise the line that has keyboard focus or holds the text
-// cursor (explainLineAt in src/clickHandler.ts).
+// The Explain shortcut (PR 7.3, a command you can change since PR 11.9; see
+// src/tabCommands.ts) does the same from the keyboard: it explains the block
+// when one is selected (pressing Explain selection for it), and otherwise the
+// line that has keyboard focus or holds the text cursor (explainLineAt in
+// src/clickHandler.ts). Explain with PR Explainer in the right-click menu
+// (PR 11.9) explains the selected block it was opened on, or else the line.
 
-import { isEditable, isExplainShortcut, shortcutTarget } from './a11y';
+import { isEditable, shortcutTarget } from './a11y';
 import { selectionFacts } from './codeFacts';
 import { explainCode, explainLineAt, isInteractive, type ClickHandlerDeps } from './clickHandler';
 import type { CodeSpan } from './fileContext';
@@ -42,6 +44,8 @@ const STYLE_ID = 'pr-explainer-selection-style';
 
 export const OTHER_FILE_NOTE = 'Select lines in one file at a time.';
 export const TOO_MANY_NOTE = `Select ${MAX_SELECTED_LINES} lines or fewer.`;
+/** Shown when Explain with PR Explainer was picked off the diff (PR 11.9). */
+export const NOT_A_LINE_NOTE = 'Right-click a line of the diff, or select lines first.';
 /** How long a note stays up, unless the user clicks first. */
 export const NOTE_MS = 4000;
 
@@ -181,10 +185,34 @@ function selectionEnds(doc: Document): [Node, Node] | null {
 }
 
 /**
+ * What installSelection returns: call it to remove the listeners and
+ * anything shown. Its methods explain from a shortcut or the menu (PR 11.9).
+ */
+export interface InstalledSelection {
+  (): void;
+  /**
+   * The Explain shortcut: the selected block, or the focused or cursor line.
+   * Does nothing while typing in a text box or with click-to-explain off.
+   * Returns whether something was explained.
+   */
+  explainFocused(): boolean;
+  /**
+   * Explain with PR Explainer, right-clicked on `target` at window position
+   * `point`: the selected block it is in, a text selection across lines, or
+   * the line. Off the diff it shows a short note at `point` instead. Returns
+   * whether something was explained.
+   */
+  explainAt(target: EventTarget | null, point?: { x: number; y: number }): boolean;
+}
+
+/**
  * Listens for drags and Shift-clicks across diff lines on `doc`. Returns a
  * function that removes the listeners and anything shown.
  */
-export function installSelection(deps: SelectionDeps, doc: Document = document): () => void {
+export function installSelection(
+  deps: SelectionDeps,
+  doc: Document = document,
+): InstalledSelection {
   const win = doc.defaultView!;
   // Where the last plain click on a line landed (its cell, so split view
   // knows which side), for a later Shift-click.
@@ -312,12 +340,8 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
     return true;
   };
 
-  /** Alt+E: the selected block, or else the focused or cursor line. */
-  const explainFromKeyboard = (): boolean => {
-    if (explainSelected) {
-      explainSelected();
-      return true;
-    }
+  /** A text selection across lines: explained at once, or its note shown. */
+  const explainTextSelection = (): boolean | null => {
     const ends = selectionEnds(doc);
     if (
       ends &&
@@ -332,10 +356,39 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
       (explainSelected as (() => void) | null)?.();
       return true;
     }
-    return explainLineAt(
-      deps,
-      shortcutTarget(doc, (node) => locateRow(node) !== null),
+    return null;
+  };
+
+  /** The Explain shortcut: the selected block, or else the focused or cursor line. */
+  const explainFromKeyboard = (): boolean => {
+    if (explainSelected) {
+      explainSelected();
+      return true;
+    }
+    return (
+      explainTextSelection() ??
+      explainLineAt(
+        deps,
+        shortcutTarget(doc, (node) => locateRow(node) !== null),
+      )
     );
+  };
+
+  /** Explain with PR Explainer on `target`: its selected block, a selection, or its line. */
+  const explainFromMenu = (target: EventTarget | null): boolean => {
+    const row = locateRow(target);
+    if (explainSelected && row && rows.includes(row)) {
+      explainSelected();
+      return true;
+    }
+    const selected = selectionEnds(doc);
+    const inSelection =
+      selected && target instanceof Node && doc.getSelection()?.containsNode(target, true);
+    if (inSelection || !row) {
+      const done = explainTextSelection();
+      if (done !== null) return done;
+    }
+    return explainLineAt(deps, target);
   };
 
   const onMouseUp = (event: MouseEvent) => {
@@ -368,29 +421,38 @@ export function installSelection(deps: SelectionDeps, doc: Document = document):
   const onMouseDown = (event: MouseEvent) => {
     selectionAtDown = selectionKey(doc);
     if (ui && event.composedPath().includes(ui)) return;
+    // A right-click on the selected block keeps it, for the right-click
+    // menu's Explain with PR Explainer (PR 11.9).
+    if (event.button === 2 && rows.some((row) => row.contains(event.target as Node))) return;
     clear();
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') clear();
-    else if (
-      isExplainShortcut(event) &&
-      deps.isEnabled?.() !== false &&
-      !isEditable(event.target) &&
-      explainFromKeyboard()
-    ) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
   };
 
   doc.addEventListener('mouseup', onMouseUp);
   doc.addEventListener('mousedown', onMouseDown, true);
   doc.addEventListener('keydown', onKeyDown, true);
-  return () => {
+  let removed = false;
+  const remove = () => {
+    removed = true;
     doc.removeEventListener('mouseup', onMouseUp);
     doc.removeEventListener('mousedown', onMouseDown, true);
     doc.removeEventListener('keydown', onKeyDown, true);
     explaining = false;
     clear();
   };
+  return Object.assign(remove, {
+    explainFocused: () =>
+      !removed &&
+      deps.isEnabled?.() !== false &&
+      !isEditable(doc.activeElement) &&
+      explainFromKeyboard(),
+    explainAt: (target: EventTarget | null, point?: { x: number; y: number }) => {
+      if (removed || deps.isEnabled?.() === false) return false;
+      if (explainFromMenu(target)) return true;
+      if (point) showNote(point.x + win.scrollX, point.y + win.scrollY + 4, NOT_A_LINE_NOTE);
+      return false;
+    },
+  });
 }

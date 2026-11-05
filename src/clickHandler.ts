@@ -432,7 +432,7 @@ export function listenForClicks(handler: ClickHandler, doc: Document = document)
 
 /**
  * Explains the diff line `target` is on (a click's target, or the focused
- * line for Alt+E, PR 7.3): in the open chat if there is one, otherwise in a
+ * line for the Explain shortcut, PR 7.3): in the open chat if there is one, otherwise in a
  * popup next to the line. Returns false when `target` is not on a code line.
  */
 export function explainLineAt(

@@ -118,6 +118,7 @@ label.check {
   padding: 0 0.25rem;
 }
 
+.shortcuts,
 .speed,
 .privacy {
   margin-top: 2rem;
@@ -125,6 +126,7 @@ label.check {
   border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent);
 }
 
+.shortcuts h2,
 .speed h2,
 .privacy h2 {
   font-size: 1.05rem;
@@ -133,6 +135,37 @@ label.check {
 
 .privacy p {
   margin: 0.5rem 0 0;
+}
+
+/* Keyboard shortcuts (PR 11.9): each command and its key. */
+.shortcut-list {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem 1rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.shortcut-list dt,
+.shortcut-list dd {
+  margin: 0;
+}
+
+.shortcut-list dd {
+  text-align: right;
+}
+
+.shortcut-list dd.unset {
+  opacity: 0.75;
+  font-style: italic;
+}
+
+kbd {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+  padding: 0.1em 0.4em;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-bottom-width: 2px;
+  border-radius: 4px;
 }
 
 /* Make Ollama faster (PR 11.7): each setting, what it does, and its command. */

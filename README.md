@@ -40,7 +40,7 @@ Everything runs on your machine. The extension talks to [Ollama](https://ollama.
 4. **The popup shows three sections:** *What it does*, *Why it's needed*, and *Concerns*. Answers are cached, so clicking the same line again is instant, and **Regenerate** asks for a fresh one.
 5. **Ask a question** opens a chat that already knows the code and the explanation. While the chat is open, clicking other lines adds them to the same conversation.
 
-The popup, the chat and the selection button follow GitHub's light or dark theme, work from the keyboard (**Alt+E** explains the focused line), and are labelled for screen readers. A toolbar button turns click-to-explain off when you just want to review normally.
+The popup, the chat and the selection button follow GitHub's light or dark theme, work from the keyboard (**Ctrl+Shift+E**, which you can change, explains the focused line), and are labelled for screen readers. A toolbar button turns click-to-explain off when you just want to review normally.
 
 For the full picture, see [Design and data flow](docs/design-and-data-flow.md).
 
@@ -111,7 +111,7 @@ If the settings page says Ollama refused the request, follow the fix it shows (i
 2. Go to the **Files changed** tab and **click a line of code**. The popup opens next to it, and the explanation appears once the model has written it.
 3. To explain several lines at once, **drag across them** (or click one line and Shift-click another), then press **Explain selection**.
 4. Click **Ask a question** to open the chat and ask anything about the code, such as "Is this thread safe?" or "How would you test this?".
-5. Press **Alt+E** to explain the line that has keyboard focus, and **Esc** to close the popup or chat.
+5. Press **Ctrl+Shift+E** to explain the line that has keyboard focus (change the key under **Keyboard shortcuts** on the settings page, for example to **Alt+E**), or right-click a line and choose **Explain with PR Explainer**. **Esc** closes the popup or chat.
 6. Click the toolbar icon to turn click-to-explain **off** (and back on) whenever you want GitHub's normal click behaviour.
 
 Optional settings worth knowing: **Explain on hover** (on by default) starts the answer when your pointer rests on a line for the **Hover wait** (300 ms by default), so it is often ready by the time you click, **Show prompt** shows exactly what was sent to the model, and **Let the model think** (off by default) lets a reasoning model such as `deepseek-r1` think before it answers, which is slower. **Skip in background** lists the files Explain ahead leaves alone (lockfiles, minified bundles, snapshots, `dist/`, `vendor/` and the like), one pattern per line as in `.gitignore`; files the repository's `.gitattributes` marks `linguist-generated` or `linguist-vendored` are skipped too, and a click on one of their lines is still answered.

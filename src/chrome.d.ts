@@ -11,6 +11,10 @@ declare const chrome: {
   action: import('./toolbarToggle').ActionLike;
   // Chrome 116 and later (PR 11.8); missing on older versions.
   sidePanel: import('./sidePanelOpener').SidePanelLike | undefined;
+  // Keyboard shortcuts (PR 11.9). getAll is read by the settings page.
+  commands: import('./commands').CommandsLike & {
+    getAll(): Promise<import('./options/shortcuts').CommandInfo[]>;
+  };
   tabs: {
     // Every tab, or (PR 11.6) those whose URL matches a pattern of the extension's sites.
     query(info: {
@@ -18,6 +22,10 @@ declare const chrome: {
       active?: boolean;
       currentWindow?: boolean;
     }): Promise<{ id?: number; url?: string; windowId?: number }[]>;
+    // A shortcut or the right-click menu tells the page what to do (PR 11.9).
+    sendMessage(tabId: number, message: unknown, options?: { frameId?: number }): Promise<unknown>;
+    // The settings page opens chrome://extensions/shortcuts (PR 11.9).
+    create(properties: { url: string }): Promise<unknown>;
     // The side panel talks to the active tab's page (PR 11.8).
     connect(tabId: number, info: { name: string }): import('./messaging/protocol').PortLike;
     onActivated: {

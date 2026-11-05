@@ -4,6 +4,14 @@ import { addMeasurement, type Measurement } from '../src/llm/speedTest';
 import { LlmError, type LlmClient, type ModelInfo } from '../src/llm/types';
 import { initOptionsPage, TEST_PROMPT, type OptionsPageDeps } from '../src/options/optionsPage';
 import {
+  EXPLAIN_NOT_SET_NOTE,
+  initShortcuts,
+  NOT_SET,
+  SHORTCUT_ROWS,
+  SHORTCUTS_URL,
+  type CommandInfo,
+} from '../src/options/shortcuts';
+import {
   DEFAULT_SETTINGS,
   DEFAULT_SKIP_PATTERNS,
   SettingsValidationError,
@@ -1369,5 +1377,76 @@ describe('options page Make Ollama faster (PR 11.7)', () => {
     finish();
     await running;
     expect($<HTMLButtonElement>('measure').disabled).toBe(false);
+  });
+});
+
+describe('Keyboard shortcuts (PR 11.9)', () => {
+  const flush = () => new Promise((done) => setTimeout(done, 0));
+  beforeEach(() => {
+    document.documentElement.innerHTML = html;
+  });
+
+  function setup(commands: CommandInfo[] | (() => Promise<CommandInfo[]>)) {
+    const deps = {
+      getAll: vi.fn(typeof commands === 'function' ? commands : async () => commands),
+      openTab: vi.fn(async () => {}),
+    };
+    const shortcuts = initShortcuts(document, deps);
+    const keyOf = (name: string) =>
+      document.querySelector<HTMLElement>(`#shortcut-list dd[data-command="${name}"]`)!;
+    return { deps, shortcuts, keyOf };
+  }
+
+  it('shows the key of each command, and Not set for one with none', async () => {
+    const { keyOf } = setup([
+      { name: 'explain', description: 'Explain', shortcut: 'Alt+E' },
+      { name: 'open-chat', description: 'Open chat', shortcut: '' },
+    ]);
+    await flush();
+    const terms = [...document.querySelectorAll('#shortcut-list dt')].map((dt) => dt.textContent);
+    expect(terms).toEqual(SHORTCUT_ROWS.map((row) => row.label));
+    expect(keyOf('explain').querySelector('kbd')!.textContent).toBe('Alt+E');
+    expect(keyOf('open-chat').textContent).toBe(NOT_SET);
+    expect(document.getElementById('shortcut-note')!.hidden).toBe(true);
+  });
+
+  it('says how to set Explain when Chrome could not give it Ctrl+Shift+E', async () => {
+    setup([{ name: 'explain', shortcut: '' }, { name: 'open-chat' }]);
+    await flush();
+    const note = document.getElementById('shortcut-note')!;
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toBe(EXPLAIN_NOT_SET_NOTE);
+    expect(note.textContent).toContain('Alt+E');
+  });
+
+  it('opens Chrome’s shortcuts page from Change shortcuts', () => {
+    const { deps } = setup([]);
+    document.getElementById('change-shortcuts')!.click();
+    expect(deps.openTab).toHaveBeenCalledWith(SHORTCUTS_URL);
+    expect(SHORTCUTS_URL).toBe('chrome://extensions/shortcuts');
+  });
+
+  it('reads the keys again when the page comes back into view', async () => {
+    let key = 'Alt+E';
+    const { keyOf, deps } = setup(async () => [{ name: 'explain', shortcut: key }]);
+    await flush();
+    key = 'Ctrl+Shift+Y';
+    window.dispatchEvent(new Event('focus'));
+    await flush();
+    expect(deps.getAll).toHaveBeenCalledTimes(2);
+    expect(keyOf('explain').textContent).toBe('Ctrl+Shift+Y');
+  });
+
+  it('shows Unknown, and no note, when Chrome does not answer', async () => {
+    const { keyOf } = setup(async () => Promise.reject(new Error('no commands')));
+    await flush();
+    expect(keyOf('explain').textContent).toBe('Unknown');
+    expect(document.getElementById('shortcut-note')!.hidden).toBe(true);
+  });
+
+  it('mentions the right-click menu item', () => {
+    expect(document.getElementById('shortcuts')!.textContent).toContain(
+      'Explain with PR Explainer',
+    );
   });
 });

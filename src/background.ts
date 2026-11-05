@@ -2,6 +2,7 @@
 // src/messaging/). All calls to the local LLM run here (see src/llm/).
 import { createBackgroundPause, forgetTabOnLoad } from './backgroundPause';
 import { createChatHandler } from './chat/chatHandler';
+import { setupCommands, setupExplainMenu } from './commands';
 import {
   clearWhenTurnedOff,
   createDebugLog,
@@ -45,6 +46,7 @@ import { listenForWorkerPorts } from './messaging/workerPort';
 import type { RoundTripSink } from './net/roundTrips';
 import {
   DEFAULT_SETTINGS,
+  followChatPlace,
   hasOwnChatModel,
   followRequestsAtOnce,
   getSettings,
@@ -92,13 +94,23 @@ const debugMenu = setupDebugMenu({
 });
 // The chat in Chrome's side panel (PR 11.8): the toolbar button's menu gets
 // Open chat while Chat opens in is Side panel, made after the debug item.
-void setupChatMenu({
+const chatMenu = setupChatMenu({
   menus: chrome.contextMenus,
   sidePanel: chrome.sidePanel,
   onChanged: chrome.storage.onChanged,
   isOn: async () => (await getSettings()).chatOpensIn === 'sidepanel',
   after: debugMenu,
 });
+// Keyboard shortcuts you can change on chrome://extensions/shortcuts, and
+// Explain with PR Explainer in a PR page's right-click menu (PR 11.9,
+// src/commands.ts). Both go to the PR tab, which knows what to explain.
+setupCommands({
+  commands: chrome.commands,
+  tabs: chrome.tabs,
+  sidePanel: chrome.sidePanel,
+  chatPlace: followChatPlace(chrome.storage.sync, chrome.storage.onChanged).current,
+});
+void setupExplainMenu({ menus: chrome.contextMenus, tabs: chrome.tabs, after: chatMenu });
 
 // The model's context window, and whether it can think (PR 9.5), from one
 // lookup per model (src/llm/contextSize.ts).
