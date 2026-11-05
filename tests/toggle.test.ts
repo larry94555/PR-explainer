@@ -284,6 +284,14 @@ describe('Whole PR progress on the toolbar icon (PR 10.7)', () => {
       'Explained all 40 changed lines\nSkipped 1 generated or vendored file\n' +
         'PR Explainer is on. Click to turn it off.',
     );
+    // Every file skipped: a tick that says why, not 0 of 0 (review on #73).
+    expect(progressBadge({ done: 0, total: 0, skipped: 2 }, true)).toEqual({
+      text: '✓',
+      color: DONE_COLOR,
+      title:
+        'Nothing to explain: skipped 2 generated or vendored files\n' +
+        'PR Explainer is on. Click to turn it off.',
+    });
     // None skipped says nothing about it.
     expect(progressBadge({ done: 1, total: 2, skipped: 0 }, true).title).not.toMatch(/Skipped/);
   });

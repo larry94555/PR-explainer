@@ -123,8 +123,24 @@ export function matchesPattern(path: string, pattern: string, filesOnly = false)
   if (glob === '') return false;
   const start = anchored ? '^' : '(?:^|/)';
   const end = folder ? '/' : filesOnly ? '$' : '(?:/|$)';
-  return new RegExp(`${start}${globSource(glob)}${end}`).test(path);
+  const source = `${start}${globSource(glob)}${end}`;
+  let regex = compiled.get(source);
+  if (regex === undefined) {
+    // A pattern the setting or a .gitattributes got wrong, such as the
+    // backwards range in `[z-a].js`, matches nothing rather than stopping
+    // Explain ahead (review on #73).
+    try {
+      regex = new RegExp(source);
+    } catch {
+      regex = null;
+    }
+    compiled.set(source, regex);
+  }
+  return regex?.test(path) ?? false;
 }
+
+/** Each pattern's regular expression, or null when it is not a valid one. */
+const compiled = new Map<string, RegExp | null>();
 
 /** One line of a `.gitattributes`: its pattern and the linguist attributes it sets. */
 export interface AttributeRule {

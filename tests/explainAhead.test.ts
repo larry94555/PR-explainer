@@ -1225,6 +1225,38 @@ describe('Whole PR (PR 10.6)', () => {
       expect(progress.at(-1)).toEqual({ done: 6, total: 6, skipped: 2 });
     });
 
+    it('says so when every file is skipped, and sends nothing (review on #73)', async () => {
+      const progress: (AheadProgress | null)[] = [];
+      const env = prSetup({
+        skipFile: async () => () => true,
+        onProgress: (p) => progress.push(p),
+        doneShownMs: 5_000,
+      });
+      env.ahead.restart();
+      await env.idle();
+      expect(env.explain).not.toHaveBeenCalled();
+      expect(env.ahead.queued()).toEqual([]);
+      expect(progress.at(-1)).toEqual({ done: 0, total: 0, skipped: 5 });
+      vi.advanceTimersByTime(5_000);
+      expect(progress.at(-1)).toBeNull();
+    });
+
+    it('queues the rest when the check throws for a file (review on #73)', async () => {
+      const env = prSetup({
+        skipFile: async () => (file: string) => {
+          if (file === 'b.ts') throw new SyntaxError('Invalid regular expression');
+          return file === 'd.ts';
+        },
+      });
+      env.setScreen([]);
+      env.ahead.restart();
+      await env.idle();
+      const all = [env.ahead.running(), ...env.ahead.queued()];
+      expect(all).toHaveLength(8);
+      expect(all.some((key) => key?.startsWith('d.ts'))).toBe(false);
+      expect(all.filter((key) => key?.startsWith('b.ts'))).toHaveLength(2);
+    });
+
     it('skips nothing when the files to skip cannot be worked out', async () => {
       const env = prSetup({ skipFile: async () => Promise.reject(new Error('offline')) });
       env.setScreen([]);

@@ -492,7 +492,8 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
   /** Tells onProgress how far Whole PR has got, or clears it. */
   const report = () => {
     if (!deps.onProgress) return;
-    if (!prKeys || prKeys.size === 0 || !active() || !wholePr()) {
+    // Every line skipped still says so (review on #73), as a finished PR.
+    if (!prKeys || (prKeys.size === 0 && skippedFiles === 0) || !active() || !wholePr()) {
       tell(null);
       return;
     }
@@ -711,8 +712,15 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
   };
 
   /** Whether `line`'s file is one `skip` leaves alone. */
-  const skips = (skip: ((filePath: string) => boolean) | null, line: AheadLine) =>
-    skip !== null && line.filePath !== undefined && skip(line.filePath);
+  const skips = (skip: ((filePath: string) => boolean) | null, line: AheadLine) => {
+    if (skip === null || line.filePath === undefined) return false;
+    // A check that throws skips nothing rather than stopping the pass (review on #73).
+    try {
+      return skip(line.filePath);
+    } catch {
+      return false;
+    }
+  };
 
   /**
    * Runs `then` with the files to skip: at once when there is no skipFile,

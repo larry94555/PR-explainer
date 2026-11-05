@@ -100,6 +100,17 @@ describe('patterns', () => {
     expect(skipped('package-lock.json', [])).toBe(false);
   });
 
+  it('ignores a pattern that is not valid, and keeps the others (review on #73)', () => {
+    expect(() => matchesPattern('a.js', '[z-a].js')).not.toThrow();
+    expect(matchesPattern('a.js', '[z-a].js')).toBe(false);
+    expect(skipReason('app.min.js', ['[z-a].js', '*.min.js'])).toBe('pattern');
+    expect(skipReason('src/app.ts', ['[z-a].js', '*.min.js'])).toBeNull();
+    // The same from a .gitattributes.
+    const rules = parseGitattributes('[z-a].ts linguist-generated\n*.gen.ts linguist-generated');
+    expect(skipReason('a.ts', [], rules)).toBeNull();
+    expect(skipReason('a.gen.ts', [], rules)).toBe('generated');
+  });
+
   it('reads the setting one pattern per line, without blanks and comments', () => {
     expect(skipPatternsOf('*.min.js\r\n\n  dist/  \n# a note\n!keep.js')).toEqual([
       '*.min.js',
