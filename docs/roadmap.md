@@ -99,7 +99,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 10.9 | Keep answers after the browser closes | Medium | ✅ Done ([#68](https://github.com/larry94555/PR-explainer/pull/68)) |
 | 11.0 | Plan Milestone 11 | Small | ✅ Done ([#53](https://github.com/larry94555/PR-explainer/pull/53)) |
 | 11.1 | Start the request when the mouse goes down | Small | ✅ Done ([#69](https://github.com/larry94555/PR-explainer/pull/69)) |
-| 11.2 | Explain on hover, on by default and quicker | Small | Not started |
+| 11.2 | Explain on hover, on by default and quicker | Small | ✅ Done ([#72](https://github.com/larry94555/PR-explainer/pull/72)) |
 | 11.3 | Pause background work on battery | Small | ✅ Done ([#71](https://github.com/larry94555/PR-explainer/pull/71)) |
 | 11.4 | Skip generated and vendored files when explaining ahead | Small | Not started |
 | 11.5 | Keep the background queue when Chrome stops the service worker | Medium | Not started |
@@ -1179,16 +1179,17 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
   4. Press on a line and drag across several lines. Confirm the request is cancelled and the **Explain selection** button appears as before.
   5. Open **Details** in a popup and confirm the **Pressed** mark comes before **Clicked**.
 
-### PR 11.2: Explain on hover, on by default and quicker (Small)
+### PR 11.2: Explain on hover, on by default and quicker (Small) ✅ Done
+- **Status:** Done ([#72](https://github.com/larry94555/PR-explainer/pull/72)). As planned, with three details. A saved off is kept, and so is any value saved with the settings page's **Save** before this PR, since the page saves every field and an earlier save cannot be told apart from turning it off: tick **Explain on hover** once to try it. The content script counts the warm-ups it sent that have not answered (`src/content.ts`), and hover sends nothing while any is pending. The debug window's summary line reads, for example, "Explain on hover: 12 sent, 9 cancelled before finishing", counted from the background queue's events: a hover is sent when the queue starts it, not when it is queued, and one dropped while still waiting is counted apart as dropped before starting (review on #72); a hovered line a click joined is the click's, so it is not counted, and the debug demo (`npm run demo:debug`) has a Queue group showing it.
 - **Why it's needed:** Hover prefetch (PR 8.7) is the cheapest way to hide the model's time, but it is off by default and waits 800 ms, so most people never benefit from it, and those who do often click before it starts. Most people rest on a line for less than a second before clicking it.
 - **Problem it solves:** **Explain on hover** becomes on by default, and a new **Hover wait** setting (300 ms by default, from 150 to 2000) replaces the fixed 800 ms. A user who already turned the setting off keeps it off. Hover still sends one request at a time and cancels it when the pointer moves to another line. It sends nothing while background work is paused for the battery (PR 11.3), while the model is not loaded yet (the warm-up from PR 8.3 is still running), or while the tab is hidden. Because a shorter wait means more cancelled requests, the debug window counts hover requests that were cancelled before they finished, so the default can be checked against real use.
-- **Unit tests added:** `prefetch.test.ts` (fake timers) checks the new default and that a saved wait is used, that a saved "off" is kept, nothing during the warm-up, on battery or in a hidden tab, and the cancelled count. `settings.test.ts` checks the default and the range. `optionsPage.test.ts` checks the new field loads and saves.
-- **Screenshots:** the **Explain on hover** and **Hover wait** settings, light and dark.
+- **Unit tests added:** `prefetch.test.ts` (fake timers) checks the new default and that a saved wait is used, that a saved "off" is kept, nothing during the warm-up, on battery or in a hidden tab, and the cancelled count. `settings.test.ts` checks the default and the range, and that the content script's keys, default and range match. `optionsPage.test.ts` checks the new field loads and saves. `debugWindow.test.ts` checks the hover count and the summary line.
+- **Screenshots:** the **Explain on hover** and **Hover wait** settings, [light](screenshots/pr-11.2/1-hover-settings-light.png) and [dark](screenshots/pr-11.2/1-hover-settings-dark.png) (the built settings page), and the debug window's hover count, [light](screenshots/pr-11.2/2-hover-count-light.png) and [dark](screenshots/pr-11.2/2-hover-count-dark.png) (from `npm run demo:debug`).
 - **How to test (Windows 11, Command Prompt):**
   1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
-  2. Run `npm run dev`, reload the extension, and open the settings page. Confirm **Explain on hover** is ticked (if you never unticked it) and **Hover wait** is 300.
+  2. Run `npm run dev`, reload the extension, and open the settings page. Confirm **Hover wait** is 300 and **Explain on hover** is ticked (if you have saved this page before, it shows what you saved: tick it and click **Save**).
   3. On a PR, rest the pointer on a line for about half a second and then click it. Confirm the debug window shows one request, started before the click.
-  4. Move the pointer quickly down 20 lines. Confirm at most one request runs at a time and the cancelled count goes up.
+  4. Move the pointer slowly down 20 lines, resting a moment on each. Confirm at most one request runs at a time and the debug window's summary line ("Explain on hover: … sent, … cancelled before finishing") goes up.
   5. Set **Hover wait** to 1000, save, and confirm a half-second rest no longer starts a request.
 
 ### PR 11.3: Pause background work on battery (Small) ✅ Done

@@ -1,5 +1,5 @@
 // Explain on hover (PR 8.7): starts explaining a diff line once the pointer
-// has rested on it for PREFETCH_DELAY_MS, so the answer is ready, or partly
+// has rested on it for the Hover wait (PR 11.2, 300 ms by default), so the answer is ready, or partly
 // written, by the time the user clicks.
 //
 // The prefetch goes through the same `explain` as a click, with the same
@@ -18,16 +18,20 @@
 //   src/selection.ts).
 // - Nothing starts while background work is paused on battery (`isPaused`,
 //   PR 11.3, src/batteryState.ts). A prefetch already running is let finish.
+// - Nothing starts while the model is still being loaded by the page's
+//   warm-up (`isWarmingUp`, PR 8.3), since a hover would only queue behind
+//   the load, or while the tab is hidden (`isHidden`).
 // - A click on other code cancels the prefetch, so the click's request is the
 //   only one.
 // - Moving off the code (the gutter, a header, the popup) ends the wait.
 // - Moving to another page, or GitHub redrawing this one, cancels it all.
 // A line whose prefetch finished is not asked for again on this page.
 //
-// The setting is off by default. It is saved with the other settings in
-// chrome.storage.sync, which the content script reads directly because it
-// cannot import src/settings.ts (see src/content.ts). prefetch.test.ts checks
-// that the key matches.
+// The setting is on by default since PR 11.2 (a saved off is kept). It and
+// the Hover wait are saved with the other settings in chrome.storage.sync,
+// which the content script reads directly because it cannot import
+// src/settings.ts (see src/content.ts). prefetch.test.ts checks that the keys,
+// the default and the range match.
 
 import { lineRequest, type ClickHandlerDeps, type ExplainRequest } from './clickHandler';
 import { locateLine } from './diffDom';
@@ -37,12 +41,28 @@ import type { ExplainStream } from './messaging/client';
 /** The chrome.storage.sync key of the Explain on hover setting (storageKey('explainOnHover')). */
 export const HOVER_SETTING_KEY = 'settings.explainOnHover';
 
-/** How long the pointer rests on a line before its explanation starts. */
-export const PREFETCH_DELAY_MS = 800;
+/** The chrome.storage.sync key of the Hover wait setting (storageKey('hoverWaitMs')). */
+export const HOVER_WAIT_KEY = 'settings.hoverWaitMs';
 
-/** Turns a stored value into on/off. Anything but a boolean means off (the default). */
+/** Hover wait's limits and default, in milliseconds, as in src/settings.ts. */
+export const HOVER_WAIT_MS = { min: 150, max: 2000, default: 300 } as const;
+
+/** How long the pointer rests on a line before its explanation starts, unless Hover wait says otherwise. */
+export const PREFETCH_DELAY_MS = HOVER_WAIT_MS.default;
+
+/** Turns a stored value into on/off. Anything but a boolean means on (the default). */
 export function toHoverEnabled(value: unknown): boolean {
-  return typeof value === 'boolean' ? value : false;
+  return typeof value === 'boolean' ? value : true;
+}
+
+/** Hover wait as stored: a whole number of milliseconds from 150 to 2000, or 300. */
+export function hoverWaitOf(stored: unknown): number {
+  return typeof stored === 'number' &&
+    Number.isInteger(stored) &&
+    stored >= HOVER_WAIT_MS.min &&
+    stored <= HOVER_WAIT_MS.max
+    ? stored
+    : HOVER_WAIT_MS.default;
 }
 
 /** The part of chrome.storage.sync this code reads. */
@@ -114,9 +134,14 @@ export interface PrefetchDeps {
   isBusy?(): boolean;
   /** True while background work is paused on battery (PR 11.3). Left out means never. */
   isPaused?(): boolean;
+  /** True while the page's warm-up is still loading the model (PR 8.3). Left out means never. */
+  isWarmingUp?(): boolean;
+  /** True while the tab is hidden. Left out means never. */
+  isHidden?(): boolean;
   /** The line under the pointer. Defaults to hoveredLine; tests pass a fake. */
   locate?(target: EventTarget | null): HoveredLine | null;
-  delayMs?: number;
+  /** The Hover wait, read at each wait so a save takes effect at once. */
+  delayMs?: number | (() => number);
   /** Clock in milliseconds, for the events. Defaults to performance.now. */
   now?(): number;
   /** Called as prefetches start, end or are cancelled (logging). */
@@ -154,7 +179,10 @@ interface Running {
 }
 
 export function createPrefetcher(deps: PrefetchDeps): Prefetcher {
-  const delayMs = deps.delayMs ?? PREFETCH_DELAY_MS;
+  const delayMs = () => {
+    const value = deps.delayMs ?? PREFETCH_DELAY_MS;
+    return typeof value === 'function' ? value() : value;
+  };
   const locate = deps.locate ?? hoveredLine;
   const now = deps.now ?? (() => performance.now());
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -167,7 +195,9 @@ export function createPrefetcher(deps: PrefetchDeps): Prefetcher {
     deps.isOn() &&
     deps.isEnabled?.() !== false &&
     deps.isBusy?.() !== true &&
-    deps.isPaused?.() !== true;
+    deps.isPaused?.() !== true &&
+    deps.isWarmingUp?.() !== true &&
+    deps.isHidden?.() !== true;
 
   const clearTimer = () => {
     clearTimeout(timer);
@@ -237,7 +267,7 @@ export function createPrefetcher(deps: PrefetchDeps): Prefetcher {
     timer = setTimeout(() => {
       timer = undefined;
       start(line);
-    }, delayMs);
+    }, delayMs());
   };
 
   const explain: ClickHandlerDeps['explain'] = (context, onChunk, options) => {

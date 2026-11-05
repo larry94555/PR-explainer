@@ -20,6 +20,7 @@ const SAVED: Settings = {
   contextTokens: 0,
   keepAliveMinutes: 30,
   explainOnHover: false,
+  hoverWaitMs: 300,
   explainAhead: 'off',
   requestsAtOnce: 1,
   backgroundOnBattery: 'pause',
@@ -106,6 +107,37 @@ describe('options page', () => {
     $<HTMLInputElement>('explainOnHover').checked = true;
     await page.save();
     expect(await deps.getSettings()).toMatchObject({ explainOnHover: true });
+  });
+
+  it('shows Explain on hover ticked and a 300 ms Hover wait for someone who never saved them (PR 11.2)', async () => {
+    await initOptionsPage(document, fakeDeps(fakeClient(), { ...DEFAULT_SETTINGS }));
+    expect($<HTMLInputElement>('explainOnHover').checked).toBe(true);
+    expect($<HTMLInputElement>('hoverWaitMs').value).toBe('300');
+    expect(document.querySelector('label[for="hoverWaitMs"]')!.textContent!.trim()).toBe(
+      'Hover wait (ms)',
+    );
+    const input = $<HTMLInputElement>('hoverWaitMs');
+    expect([input.min, input.max]).toEqual(['150', '2000']);
+  });
+
+  it('loads and saves Hover wait, and rejects values out of range (PR 11.2)', async () => {
+    const deps = fakeDeps(fakeClient());
+    await deps.saveSettings({ hoverWaitMs: 600 });
+    const page = await initOptionsPage(document, deps);
+    const input = $<HTMLInputElement>('hoverWaitMs');
+    expect(input.value).toBe('600');
+
+    input.value = '1000';
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({ hoverWaitMs: 1000 });
+
+    for (const bad of ['100', '2500', '', '300.5']) {
+      input.value = bad;
+      await page.save();
+      expect(errorFor('hoverWaitMs')).toBe('Hover wait must be a whole number from 150 to 2000.');
+      expect(text('save-status')).toBe('Not saved. Fix the problems above.');
+    }
+    expect(await deps.getSettings()).toMatchObject({ hoverWaitMs: 1000 });
   });
 
   it('loads and saves Background work on battery: Pause by default, or Keep going (PR 11.3)', async () => {
@@ -618,6 +650,7 @@ describe('options page', () => {
       contextTokens: 0,
       keepAliveMinutes: 30,
       explainOnHover: false,
+      hoverWaitMs: 300,
       explainAhead: 'off',
       requestsAtOnce: 1,
       backgroundOnBattery: 'pause',

@@ -1,6 +1,7 @@
 // The settings page: the Ollama URL, a model dropdown filled from the server,
 // temperature, max response length, context size, how long to keep the model
-// loaded (PR 8.3), Explain on hover (PR 8.7), Explain ahead (PR 9.10; Off,
+// loaded (PR 8.3), Explain on hover (PR 8.7, on by default from PR 11.2) and
+// its Hover wait (PR 11.2), Explain ahead (PR 9.10; Off,
 // Lines on screen or Whole PR from PR 10.6), Requests at once, Background
 // work on battery (PR 11.3; Pause or Keep going), Let the
 // model think (PR 9.5), the Debug section (Show prompt, PR 6.2, and Debug
@@ -109,6 +110,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const contextInput = el<HTMLInputElement>(doc, 'contextTokens');
   const keepAliveInput = el<HTMLInputElement>(doc, 'keepAliveMinutes');
   const hoverInput = el<HTMLInputElement>(doc, 'explainOnHover');
+  const hoverWaitInput = el<HTMLInputElement>(doc, 'hoverWaitMs');
   const aheadSelect = el<HTMLSelectElement>(doc, 'explainAhead');
   const requestsInput = el<HTMLInputElement>(doc, 'requestsAtOnce');
   const batterySelect = el<HTMLSelectElement>(doc, 'backgroundOnBattery');
@@ -145,6 +147,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     contextInput.value = settings.contextTokens > 0 ? String(settings.contextTokens) : '';
     keepAliveInput.value = String(settings.keepAliveMinutes);
     hoverInput.checked = settings.explainOnHover;
+    hoverWaitInput.value = String(settings.hoverWaitMs);
     aheadSelect.value = settings.explainAhead;
     requestsInput.value = String(settings.requestsAtOnce);
     batterySelect.value = settings.backgroundOnBattery;
@@ -161,6 +164,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     const keepAlive = keepAliveInput.value.trim();
     const requests = requestsInput.value.trim();
     const keepAnswers = keepAnswersInput.value.trim();
+    const hoverWait = hoverWaitInput.value.trim();
     return {
       llmUrl: urlInput.value.trim().replace(/\/+$/, ''),
       model: modelSelect.value,
@@ -172,6 +176,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       contextTokens: contextTokens === '' ? 0 : Number(contextTokens),
       keepAliveMinutes: keepAlive === '' ? NaN : Number(keepAlive),
       explainOnHover: hoverInput.checked,
+      hoverWaitMs: hoverWait === '' ? NaN : Number(hoverWait),
       explainAhead: aheadSelect.value as Settings['explainAhead'],
       requestsAtOnce: requests === '' ? NaN : Number(requests),
       backgroundOnBattery: batterySelect.value as Settings['backgroundOnBattery'],

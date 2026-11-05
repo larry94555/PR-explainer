@@ -10,6 +10,8 @@ import {
   createPrefetcher,
   hoveredLine,
   HOVER_SETTING_KEY,
+  HOVER_WAIT_KEY,
+  hoverWaitOf,
   PREFETCH_DELAY_MS,
   toHoverEnabled,
   trackHoverSetting,
@@ -17,7 +19,7 @@ import {
   type PrefetchDeps,
   type PrefetchEvent,
 } from '../src/prefetch';
-import { storageKey } from '../src/settings';
+import { DEFAULT_SETTINGS, storageKey } from '../src/settings';
 
 const DONE: ExplainResult = {
   status: 'done',
@@ -118,7 +120,7 @@ afterEach(() => {
 });
 
 describe('explain on hover', () => {
-  it('starts once the pointer has rested on a line for 800 ms', () => {
+  it('starts once the pointer has rested on a line for the Hover wait (300 ms by default)', () => {
     const env = setup();
     env.hover('a');
     vi.advanceTimersByTime(PREFETCH_DELAY_MS - 1);
@@ -139,24 +141,87 @@ describe('explain on hover', () => {
     expect(env.events).toEqual([{ type: 'started', key: 'a' }]);
   });
 
-  it('does not restart the wait while the pointer moves within the same line', () => {
-    const env = setup();
+  it('waits 300 ms by default, the settings default (PR 11.2)', () => {
+    expect(PREFETCH_DELAY_MS).toBe(300);
+    expect(PREFETCH_DELAY_MS).toBe(DEFAULT_SETTINGS.hoverWaitMs);
+  });
+
+  it('uses a saved Hover wait, read at each wait so a save takes effect at once (PR 11.2)', () => {
+    let wait = 1000;
+    const env = setup({ delayMs: () => wait });
     env.hover('a');
     vi.advanceTimersByTime(500);
+    expect(env.explain).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(500);
+    expect(env.explain).toHaveBeenCalledTimes(1);
+
+    wait = 150;
+    env.hover('b');
+    vi.advanceTimersByTime(149);
+    expect(env.explain).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(env.streams.map((s) => s.text)).toEqual(['context of a', 'context of b']);
+  });
+
+  it('sends nothing while the warm-up is still loading the model, and starts once it is loaded (PR 11.2)', () => {
+    let warming = true;
+    const env = setup({ isWarmingUp: () => warming });
     env.hover('a');
-    vi.advanceTimersByTime(300);
+    vi.advanceTimersByTime(5000);
+    expect(env.explain).not.toHaveBeenCalled();
+
+    warming = false;
+    env.hover('b');
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+    expect(env.streams.map((s) => s.text)).toEqual(['context of b']);
+  });
+
+  it('sends nothing in a hidden tab (PR 11.2)', () => {
+    let hidden = false;
+    const env = setup({ isHidden: () => hidden });
+    env.hover('a');
+    // The tab is switched away during the wait.
+    hidden = true;
+    vi.advanceTimersByTime(5000);
+    expect(env.explain).not.toHaveBeenCalled();
+
+    hidden = false;
+    env.hover('b');
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS);
     expect(env.explain).toHaveBeenCalledTimes(1);
   });
 
-  it('ends the wait when the pointer leaves the code before 800 ms (the gutter, the popup)', () => {
+  it('reports each prefetch cancelled before it finished, for the debug window count (PR 11.2)', () => {
+    const env = setup();
+    for (const line of ['a', 'b', 'c']) {
+      env.hover(line);
+      vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+    }
+    env.streams[2]!.finish();
+    expect(env.events.filter((e) => e.type === 'started')).toHaveLength(3);
+    expect(env.events.filter((e) => e.type === 'cancelled').map((e) => e.key)).toEqual(['a', 'b']);
+    // One at a time: only the last one was still running.
+    expect(env.streams.map((s) => s.stopped)).toEqual([true, true, false]);
+  });
+
+  it('does not restart the wait while the pointer moves within the same line', () => {
     const env = setup();
     env.hover('a');
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS - 100);
+    env.hover('a');
+    vi.advanceTimersByTime(100);
+    expect(env.explain).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends the wait when the pointer leaves the code before the Hover wait (the gutter, the popup)', () => {
+    const env = setup();
+    env.hover('a');
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS - 100);
     env.hover('gutter');
     vi.advanceTimersByTime(5000);
     expect(env.explain).not.toHaveBeenCalled();
 
-    // Coming back starts a new 800 ms wait.
+    // Coming back starts a new wait.
     env.hover('a');
     vi.advanceTimersByTime(PREFETCH_DELAY_MS - 1);
     expect(env.explain).not.toHaveBeenCalled();
@@ -180,7 +245,7 @@ describe('explain on hover', () => {
   it('restarts the wait on another line, so passing over a line asks nothing', () => {
     const env = setup();
     env.hover('a');
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS - 100);
     env.hover('b');
     vi.advanceTimersByTime(PREFETCH_DELAY_MS - 1);
     expect(env.explain).not.toHaveBeenCalled();
@@ -259,10 +324,10 @@ describe('explain on hover', () => {
     expect(env.streams[1]!.options).toEqual({ fresh: true });
   });
 
-  it('ends the wait when the user clicks before 800 ms', () => {
+  it('ends the wait when the user clicks before the Hover wait', () => {
     const env = setup();
     env.hover('a');
-    vi.advanceTimersByTime(300);
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS - 100);
     env.prefetcher.explain('context of a', () => {}, { fresh: false });
     vi.advanceTimersByTime(PREFETCH_DELAY_MS);
     expect(env.explain).toHaveBeenCalledTimes(1);
@@ -402,7 +467,7 @@ describe('explain on hover', () => {
   it('does nothing while a mouse button is held (dragging to select lines)', () => {
     const env = setup();
     env.hover('a');
-    vi.advanceTimersByTime(300);
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS - 100);
     env.hover('b', 1);
     vi.advanceTimersByTime(5000);
     expect(env.explain).not.toHaveBeenCalled();
@@ -411,7 +476,7 @@ describe('explain on hover', () => {
   it('ends the wait on a mouse press', () => {
     const env = setup();
     env.hover('a');
-    vi.advanceTimersByTime(300);
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS - 100);
     env.prefetcher.onMouseDown();
     vi.advanceTimersByTime(5000);
     expect(env.explain).not.toHaveBeenCalled();
@@ -422,7 +487,7 @@ describe('explain on hover', () => {
     env.hover('a');
     vi.advanceTimersByTime(PREFETCH_DELAY_MS);
     env.hover('b');
-    vi.advanceTimersByTime(300);
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS - 100);
     env.prefetcher.cancel();
     vi.advanceTimersByTime(5000);
     expect(env.streams.map((s) => s.stopped)).toEqual([true]);
@@ -468,7 +533,7 @@ describe('explain on hover across page changes', () => {
     const win = fakeWindow(FILES);
     const stop = watch(env.prefetcher, win);
     env.hover('a');
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(PREFETCH_DELAY_MS - 100);
     win.document.dispatchEvent(new Event('turbo:render'));
     vi.advanceTimersByTime(5000);
     expect(env.explain).not.toHaveBeenCalled();
@@ -516,10 +581,36 @@ describe('the Explain on hover setting in the content script', () => {
     expect(HOVER_SETTING_KEY).toBe(storageKey('explainOnHover'));
   });
 
-  it('is off unless a boolean true is stored', () => {
-    expect(toHoverEnabled(undefined)).toBe(false);
-    expect(toHoverEnabled('yes')).toBe(false);
+  it('is on unless a boolean false is stored (on by default from PR 11.2)', () => {
+    expect(toHoverEnabled(undefined)).toBe(true);
+    expect(toHoverEnabled('yes')).toBe(true);
     expect(toHoverEnabled(true)).toBe(true);
+    // Someone who turned it off keeps it off.
+    expect(toHoverEnabled(false)).toBe(false);
+  });
+
+  it('is on once read when nothing is saved (PR 11.2)', async () => {
+    const sync = fakeSync();
+    const setting = trackHoverSetting(sync.storage, sync.events);
+    // Nothing is sent before the setting is known.
+    expect(setting.current()).toBe(false);
+    await settle();
+    expect(setting.current()).toBe(true);
+  });
+
+  it('keeps a saved off (PR 11.2)', async () => {
+    const sync = fakeSync({ [HOVER_SETTING_KEY]: false });
+    const setting = trackHoverSetting(sync.storage, sync.events);
+    await settle();
+    expect(setting.current()).toBe(false);
+  });
+
+  it('reads Hover wait as a whole number from 150 to 2000, or 300 (PR 11.2)', () => {
+    expect(HOVER_WAIT_KEY).toBe(storageKey('hoverWaitMs'));
+    expect(hoverWaitOf(undefined)).toBe(300);
+    expect(hoverWaitOf(150)).toBe(150);
+    expect(hoverWaitOf(2000)).toBe(2000);
+    expect([149, 2001, 300.5, '500', null].map(hoverWaitOf)).toEqual([300, 300, 300, 300, 300]);
   });
 
   it('is off until read, then follows what is saved', async () => {

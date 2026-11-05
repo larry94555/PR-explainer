@@ -108,12 +108,23 @@
             Explain on hover
           </label>
           <p class="hint">
-            Starts explaining a line when the pointer rests on it for a moment, so a click often
-            shows the answer at once. Only one line is explained ahead at a time, and moving to
-            another line stops it. Off by default because it uses the model for lines you may not
-            click.
+            Starts explaining a line when the pointer rests on it for the Hover wait, so a click
+            often shows the answer at once. Only one line is explained at a time, and moving to
+            another line stops it. Nothing is sent while the model is still loading, while the tab
+            is hidden, or on battery when background work is paused.
           </p>
           <p class="error" data-error-for="explainOnHover" role="alert"></p>
+        </div>
+
+        <div class="field">
+          <label for="hoverWaitMs">Hover wait (ms)</label>
+          <input id="hoverWaitMs" name="hoverWaitMs" type="number" min="150" max="2000" step="1" />
+          <p class="hint">
+            How long the pointer rests on a line before Explain on hover starts, from 150 to 2000
+            milliseconds. Shorter starts sooner but sends more requests that are stopped when you
+            move on; the debug window counts those.
+          </p>
+          <p class="error" data-error-for="hoverWaitMs" role="alert"></p>
         </div>
 
         <div class="field">

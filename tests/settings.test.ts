@@ -6,6 +6,7 @@ import {
   hasOwnChatModel,
   DEFAULT_SETTINGS,
   followRequestsAtOnce,
+  HOVER_WAIT_MS_RANGE,
   REQUESTS_AT_ONCE_RANGE,
   requestsAtOnceOf,
   getSettings,
@@ -24,6 +25,13 @@ import {
   requestsAtOnceOf as contentRequestsAtOnceOf,
 } from '../src/explainAhead';
 import type { StorageChangedEvent } from '../src/enabledState';
+import {
+  HOVER_SETTING_KEY,
+  HOVER_WAIT_KEY,
+  HOVER_WAIT_MS,
+  hoverWaitOf,
+  toHoverEnabled,
+} from '../src/prefetch';
 
 // An in-memory stand-in for chrome.storage.sync. Like Chrome, it copies values
 // in and out (structured clone), so tests can't share objects with it.
@@ -129,8 +137,10 @@ describe('settings', () => {
         maxResponseTokens: 120,
         contextTokens: 0,
         keepAliveMinutes: 30,
-        // Explain on hover uses the model for lines never clicked (PR 8.7).
-        explainOnHover: false,
+        // Explain on hover hides the model's time on most clicks (PR 11.2).
+        explainOnHover: true,
+        // Most people rest on a line for less than a second (PR 11.2).
+        hoverWaitMs: 300,
         // Explain ahead keeps the model busy and uses battery (PR 9.10, PR 10.6).
         explainAhead: 'off',
         // On a CPU, requests at once share the same cores (PR 10.6).
@@ -183,7 +193,8 @@ describe('settings', () => {
         maxResponseTokens: 2048,
         contextTokens: 8192,
         keepAliveMinutes: 90,
-        explainOnHover: true,
+        explainOnHover: false,
+        hoverWaitMs: 1000,
         explainAhead: 'pr' as const,
         requestsAtOnce: 2,
         backgroundOnBattery: 'keep' as const,
@@ -455,6 +466,41 @@ describe('settings', () => {
       expect([0, 1, 4, 5, 2.5].map(contentRequestsAtOnceOf)).toEqual(
         [0, 1, 4, 5, 2.5].map(requestsAtOnceOf),
       );
+    });
+
+    it('keeps a saved Explain on hover off, now that it is on by default (PR 11.2)', async () => {
+      const storage = fakeStorage({ [storageKey('explainOnHover')]: false });
+      expect((await getSettings(storage)).explainOnHover).toBe(false);
+      expect((await getSettings(fakeStorage())).explainOnHover).toBe(true);
+    });
+
+    it('accepts a Hover wait from 150 to 2000 ms, whole numbers only (PR 11.2)', async () => {
+      for (const ok of [150, 300, 2000]) {
+        await expect(saveSettings({ hoverWaitMs: ok }, fakeStorage())).resolves.toMatchObject({
+          hoverWaitMs: ok,
+        });
+      }
+      for (const bad of [149, 2001, 300.5, NaN, '300' as unknown as number]) {
+        const promise = saveSettings({ hoverWaitMs: bad }, fakeStorage());
+        await expectRejectedFields(promise, ['hoverWaitMs']);
+        await expect(promise).rejects.toThrow(
+          'Hover wait must be a whole number from 150 to 2000.',
+        );
+      }
+      // A bad stored value falls back to the default.
+      const storage = fakeStorage({ [storageKey('hoverWaitMs')]: 50 });
+      expect((await getSettings(storage)).hoverWaitMs).toBe(300);
+    });
+
+    it('the content script reads Explain on hover and Hover wait under their keys, with the same default and limits (PR 11.2)', () => {
+      expect(HOVER_SETTING_KEY).toBe(storageKey('explainOnHover'));
+      expect(HOVER_WAIT_KEY).toBe(storageKey('hoverWaitMs'));
+      expect(toHoverEnabled(undefined)).toBe(DEFAULT_SETTINGS.explainOnHover);
+      expect(HOVER_WAIT_MS).toEqual({
+        ...HOVER_WAIT_MS_RANGE,
+        default: DEFAULT_SETTINGS.hoverWaitMs,
+      });
+      expect(hoverWaitOf(undefined)).toBe(DEFAULT_SETTINGS.hoverWaitMs);
     });
 
     it('the content script reads Explain ahead under its key (PR 9.10)', () => {
