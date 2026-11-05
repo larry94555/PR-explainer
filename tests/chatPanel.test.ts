@@ -378,7 +378,7 @@ describe('chat panel', () => {
     expect(shadow().querySelector<HTMLElement>('.subject')!.title).toBe('src/other.ts, line 42');
   });
 
-  describe('the clicked code under the header (PR 11.13)', () => {
+  describe('the clicked code under the header (PR 11.14)', () => {
     const codeBox = () => shadow().querySelector<HTMLElement>('.subject-code')!;
     const rows = () =>
       [...codeBox().querySelectorAll('.code-line')].map((row) => [

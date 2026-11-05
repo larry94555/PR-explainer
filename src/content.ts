@@ -712,7 +712,15 @@ function showChat(
     {
       ask: (messages, onChunk) => openChatStream({ messages }, onChunk),
       openPanel: (options) => {
-        const withSetting = { ...options, streamAnswers: streamSetting.current() };
+        const withSetting = {
+          ...options,
+          streamAnswers: streamSetting.current(),
+          // The pointer to the chat's code goes with the chat (PR 11.14).
+          onClose: () => {
+            codePointer.hide();
+            options.onClose?.();
+          },
+        };
         return place === 'sidepanel' ? sidePanel.open(withSetting) : openChatPanel(withSetting);
       },
     },

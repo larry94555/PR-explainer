@@ -27,7 +27,7 @@ export interface Settings {
    */
   chatModel: string;
   /**
-   * Chat opens in (PR 11.8): `page` (the default from PR 11.13) is the panel
+   * Chat opens in (PR 11.8): `page` (the default from PR 11.14) is the panel
    * that floats over the bottom right of the page (PR 5.2); `sidepanel` shows
    * the chat in Chrome's side panel, next to the page, where it covers no code
    * and stays open while GitHub moves between the PR's tabs. The content script
@@ -518,7 +518,7 @@ export function followRequestsAtOnce(
   return followSetting('requestsAtOnce', storage, onChanged, requestsAtOnceOf);
 }
 
-/** Chat opens in as stored: `sidepanel`, or `page` (the default, PR 11.13) for anything else. */
+/** Chat opens in as stored: `sidepanel`, or `page` (the default, PR 11.14) for anything else. */
 export function chatPlaceOf(stored: unknown): ChatPlace {
   return stored === 'sidepanel' ? 'sidepanel' : 'page';
 }

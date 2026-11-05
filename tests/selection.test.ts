@@ -447,7 +447,7 @@ describe('selectionSubject', () => {
     });
   });
 
-  it('keeps every selected line with its own number, for the chat (PR 11.13)', () => {
+  it('keeps every selected line with its own number, for the chat (PR 11.14)', () => {
     const lines = [
       { ...line(9, 'removed'), text: 'old();' },
       { ...line(12, 'added'), text: 'next();' },

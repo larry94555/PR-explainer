@@ -622,7 +622,7 @@ describe('options page', () => {
     expect($<HTMLSelectElement>('model').value).toBe('gone:1b');
   });
 
-  it('loads and saves Chat opens in, On the page by default (PR 11.8, PR 11.13)', async () => {
+  it('loads and saves Chat opens in, On the page by default (PR 11.8, PR 11.14)', async () => {
     const deps = fakeDeps(fakeClient());
     const page = await initOptionsPage(document, deps);
     const select = $<HTMLSelectElement>('chatOpensIn');
@@ -638,7 +638,7 @@ describe('options page', () => {
     expect($<HTMLSelectElement>('chatOpensIn').value).toBe('sidepanel');
   });
 
-  describe('Save at the top (PR 11.13)', () => {
+  describe('Save at the top (PR 11.14)', () => {
     const changeSelect = (id: string, value: string) => {
       const select = $<HTMLSelectElement>(id);
       select.value = value;
@@ -681,6 +681,36 @@ describe('options page', () => {
       await page.save();
       expect(text('save-top-status')).toBe('Saved.');
       expect($('save-top-status').classList.contains('unsaved')).toBe(false);
+    });
+
+    it('keeps saying Unsaved changes when the form changed while saving (review on #83)', async () => {
+      const deps = fakeDeps(fakeClient());
+      const page = await initOptionsPage(document, deps);
+      const real = deps.saveSettings;
+      let finish!: () => void;
+      const gate = new Promise<void>((resolve) => (finish = resolve));
+      vi.mocked(deps.saveSettings).mockImplementationOnce(async (update) => {
+        await gate;
+        return real(update);
+      });
+      changeSelect('chatOpensIn', 'sidepanel');
+      const saving = page.save();
+      // Another change before the save finishes, with a value of its own.
+      const url = $<HTMLInputElement>('llmUrl');
+      url.value = 'http://127.0.0.1:11434';
+      url.dispatchEvent(new Event('input', { bubbles: true }));
+      finish();
+      await saving;
+      expect(text('save-top-status')).toBe(UNSAVED_TEXT);
+      expect(text('save-status')).toBe(UNSAVED_TEXT);
+      // The newer value is still in the form, and Save then keeps it.
+      expect(url.value).toBe('http://127.0.0.1:11434');
+      await page.save();
+      expect(text('save-top-status')).toBe('Saved.');
+      expect(await deps.getSettings()).toMatchObject({
+        chatOpensIn: 'sidepanel',
+        llmUrl: 'http://127.0.0.1:11434',
+      });
     });
 
     it('shows a failed save beside the top button too', async () => {

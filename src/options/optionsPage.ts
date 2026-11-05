@@ -6,7 +6,7 @@
 // work on battery (PR 11.3; Pause or Keep going), Let the
 // model think (PR 9.5), the Debug section (Show prompt, PR 6.2, and Debug
 // window, PR 9.3), Save (at the top too, with an Unsaved changes note, PR
-// 11.13), and Test connection. Under the model, a line says
+// 11.14), and Test connection. Under the model, a line says
 // whether it is a reasoning model and whether its thinking is on (PR 9.5). The
 // Speed section (PR 8.6) says whether the picked model runs on the GPU, and its
 // Speed test times each coding model and lets the user pick the fastest
@@ -102,7 +102,7 @@ export interface OptionsPageDeps {
 }
 
 export const TEST_PROMPT = 'Reply with OK';
-/** Beside both Save buttons once a setting is changed and not yet saved (PR 11.13). */
+/** Beside both Save buttons once a setting is changed and not yet saved (PR 11.14). */
 export const UNSAVED_TEXT = 'Unsaved changes. Click Save to apply them.';
 /** Beside both Save buttons after a save. */
 export const SAVED_TEXT = 'Saved.';
@@ -175,7 +175,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const saveButton = el<HTMLButtonElement>(doc, 'save');
   const modelsStatus = el(doc, 'models-status');
   const saveStatus = el(doc, 'save-status');
-  // Save at the top of the page too (PR 11.13), with its own status line.
+  // Save at the top of the page too (PR 11.14), with its own status line.
   const saveTopButton = el<HTMLButtonElement>(doc, 'save-top');
   const saveTopStatus = el(doc, 'save-top-status');
   const testStatus = el(doc, 'test-status');
@@ -360,17 +360,27 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     saveTopButton.disabled = saving;
   }
 
-  // Any change in the form is only kept once Save is clicked (PR 11.13).
+  // Any change in the form is only kept once Save is clicked (PR 11.14).
+  // Counted, so a save can tell whether the form changed while it ran.
+  let edits = 0;
   function markUnsaved(): void {
+    edits++;
     showSaveStatus(UNSAVED_TEXT, true);
   }
 
   async function save(): Promise<void> {
     showSaveStatus('');
     setSaving(true);
+    const editsBefore = edits;
     try {
       const saved = await deps.saveSettings(readForm());
       showIssues([]);
+      // A change made while saving was not saved (review on #83): keep it in
+      // the form, and keep saying so.
+      if (edits !== editsBefore) {
+        showSaveStatus(UNSAVED_TEXT, true);
+        return;
+      }
       urlInput.value = saved.llmUrl;
       contextInput.value = saved.contextTokens > 0 ? String(saved.contextTokens) : '';
       showSaveStatus(SAVED_TEXT);

@@ -471,7 +471,7 @@ describe('settings', () => {
       expect(followed.current()).toBe(1);
     });
 
-    it('follows Chat opens in in the service worker: On the page until read, then each save (PR 11.9, PR 11.13)', async () => {
+    it('follows Chat opens in in the service worker: On the page until read, then each save (PR 11.9, PR 11.14)', async () => {
       const key = storageKey('chatOpensIn');
       let listener: (
         changes: Record<string, { newValue?: unknown }>,
@@ -598,7 +598,7 @@ describe('settings', () => {
       await expect(promise).rejects.toThrow('Show answers as they are written must be on or off.');
     });
 
-    it('opens the chat on the page by default, and takes Side panel (PR 11.8, PR 11.13)', async () => {
+    it('opens the chat on the page by default, and takes Side panel (PR 11.8, PR 11.14)', async () => {
       expect(DEFAULT_SETTINGS.chatOpensIn).toBe('page');
       await expect(getSettings(fakeStorage())).resolves.toMatchObject({ chatOpensIn: 'page' });
       await expect(
@@ -609,7 +609,7 @@ describe('settings', () => {
       await expect(promise).rejects.toThrow('Chat opens in must be Side panel or On the page.');
     });
 
-    it('the content script reads Chat opens in under its key, on the page unless side panel (PR 11.8, PR 11.13)', () => {
+    it('the content script reads Chat opens in under its key, on the page unless side panel (PR 11.8, PR 11.14)', () => {
       expect(CHAT_PLACE_KEY).toBe(storageKey('chatOpensIn'));
       expect(chatPlaceOf('sidepanel')).toBe('sidepanel');
       for (const stored of ['page', undefined, 'other', 1]) {

@@ -59,7 +59,7 @@ export interface ChatSubject {
   endLine?: number;
   /**
    * The code that was clicked or selected, line by line exactly as on the
-   * page, with each line's number (PR 11.13). Shown under the header so the
+   * page, with each line's number (PR 11.14). Shown under the header so the
    * chat says what it is about without looking back at the PR.
    */
   code?: SubjectLine[];
@@ -209,7 +209,7 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   const lines = doc.createElement('span');
   lines.className = 'lines';
   subject.append(file, lines);
-  // The clicked code with its line numbers (PR 11.13), between the header and
+  // The clicked code with its line numbers (PR 11.14), between the header and
   // the messages. Hidden when the subject has no code.
   const codeBox = doc.createElement('div');
   codeBox.className = 'subject-code';

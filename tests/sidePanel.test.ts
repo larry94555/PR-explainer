@@ -206,7 +206,7 @@ describe('setupChatMenu', () => {
     expect(menus.update).toHaveBeenLastCalledWith(CHAT_MENU_ID, { visible: true });
   });
 
-  it('hides Open chat when the setting cannot be read, or is removed, as On the page is the default (PR 11.13)', async () => {
+  it('hides Open chat when the setting cannot be read, or is removed, as On the page is the default (PR 11.14)', async () => {
     const { menus } = fakeMenus();
     const { onChanged, fire } = fakeChanged();
     await setupChatMenu({
@@ -470,7 +470,7 @@ describe('side panel chat', () => {
     expect(page.link.shown).toBe(true);
   });
 
-  it('shows the clicked line and its number at the top of the side panel (PR 11.13)', async () => {
+  it('shows the clicked line and its number at the top of the side panel (PR 11.14)', async () => {
     const browser = fakeBrowser();
     const page = browser.addPage(1, 'https://github.com/owner/repo/pull/1/files');
     browser.setActive(1);

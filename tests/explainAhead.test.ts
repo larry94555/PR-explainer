@@ -431,7 +431,7 @@ describe('the lines on screen, from a saved GitHub diff', () => {
     const [first] = visibleAddedLines(document, () => true);
     expect(first!.key).toBe('docs/roadmap.md:added:44');
     const request = first!.request()!;
-    // With the clicked line, for the chat's header (PR 11.13).
+    // With the clicked line, for the chat's header (PR 11.14).
     expect(request.subject).toEqual({
       filePath: 'docs/roadmap.md',
       startLine: 44,

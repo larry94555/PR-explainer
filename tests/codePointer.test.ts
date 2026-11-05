@@ -4,6 +4,7 @@ import {
   EDGE,
   pointerGeometry,
   SIDE_PANEL_TAB_TEXT,
+  type CodePointer,
   type PointerAnchor,
   type Rect,
 } from '../src/chat/codePointer';
@@ -79,8 +80,9 @@ describe('createCodePointer', () => {
   let open: boolean;
   let chat: Rect | null;
   const anchorAt = (rect: Rect): PointerAnchor => ({ getBoundingClientRect: () => rect });
-  const make = () =>
-    createCodePointer({
+  let made: CodePointer[] = [];
+  const make = () => {
+    const pointer = createCodePointer({
       chatRect: () => chat,
       isOpen: () => open,
       frame: (cb) => frames.push(cb),
@@ -88,6 +90,9 @@ describe('createCodePointer', () => {
         frames[handle - 1] = () => {};
       },
     });
+    made.push(pointer);
+    return pointer;
+  };
   const nextFrame = () => frames.at(-1)!();
   const root = () => document.getElementById(CODE_POINTER_ID)?.shadowRoot ?? null;
   const part = (selector: string) => root()!.querySelector<HTMLElement>(selector)!;
@@ -99,7 +104,10 @@ describe('createCodePointer', () => {
     window.innerWidth = VIEW.width;
     window.innerHeight = VIEW.height;
   });
-  afterEach(() => document.getElementById(CODE_POINTER_ID)?.remove());
+  afterEach(() => {
+    for (const pointer of made) pointer.hide();
+    made = [];
+  });
 
   it('outlines the code and draws the arrow on the page, taking no clicks', () => {
     const pointer = make();
@@ -123,17 +131,56 @@ describe('createCodePointer', () => {
     expect(part('.tab').textContent).toBe(SIDE_PANEL_TAB_TEXT);
   });
 
-  it('follows the code as the page scrolls, one frame at a time', () => {
+  it('follows the code when the page scrolls, once per frame', () => {
     let rect = ROW;
     make().show({ getBoundingClientRect: () => rect });
     rect = { ...ROW, top: 100, bottom: 120 };
+    window.dispatchEvent(new Event('scroll'));
+    // A scroll inside the diff (not the window) counts too, in the same frame.
+    document.body.dispatchEvent(new Event('scroll'));
+    expect(frames).toHaveLength(1);
     nextFrame();
     expect(part('.outline').style.top).toBe('98px');
     // Out of view: no outline, but the arrow still points the way.
     rect = { ...ROW, top: -300, bottom: -280 };
+    window.dispatchEvent(new Event('resize'));
     nextFrame();
     expect(part('.outline').hidden).toBe(true);
     expect(part('svg').hasAttribute('hidden')).toBe(false);
+  });
+
+  it('does nothing while the chat sits idle, and writes nothing when nothing moved (review on #83)', () => {
+    const read = vi.fn(() => ROW);
+    make().show({ getBoundingClientRect: read });
+    expect(read).toHaveBeenCalledTimes(1);
+    // No frames are asked for without a scroll or resize.
+    expect(frames).toHaveLength(0);
+    const outline = part('.outline');
+    const written = vi.spyOn(outline.style, 'setProperty');
+    const top = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, 'top');
+    let topWrites = 0;
+    Object.defineProperty(outline.style, 'top', {
+      configurable: true,
+      get: () => top?.get?.call(outline.style),
+      set: (value: string) => {
+        topWrites++;
+        top?.set?.call(outline.style, value);
+      },
+    });
+    window.dispatchEvent(new Event('scroll'));
+    nextFrame();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(topWrites).toBe(0);
+    expect(written).not.toHaveBeenCalled();
+    expect(frames).toHaveLength(1);
+  });
+
+  it('stops listening once hidden', () => {
+    const pointer = make();
+    pointer.show(anchorAt(ROW));
+    pointer.hide();
+    window.dispatchEvent(new Event('scroll'));
+    expect(frames).toHaveLength(0);
   });
 
   it('moves to other code when shown again, with one drawing', () => {
@@ -144,16 +191,14 @@ describe('createCodePointer', () => {
     expect(part('.outline').style.top).toBe('498px');
   });
 
-  it('goes away when the chat closes', () => {
+  it('goes away at the next redraw if the chat closed without hide', () => {
     const pointer = make();
     pointer.show(anchorAt(ROW));
     open = false;
+    window.dispatchEvent(new Event('scroll'));
     nextFrame();
     expect(pointer.shown).toBe(false);
     expect(document.getElementById(CODE_POINTER_ID)).toBeNull();
-    const count = frames.length;
-    // No more frames are asked for once it is gone.
-    expect(frames).toHaveLength(count);
   });
 
   it('hides everything for a row GitHub removed, and hide removes it', () => {

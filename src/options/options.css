@@ -291,7 +291,7 @@ kbd {
   white-space: nowrap;
 }
 
-/* Save at the top (PR 11.13): stays in view while scrolling, so a change can
+/* Save at the top (PR 11.14): stays in view while scrolling, so a change can
    be saved without looking for the Save button at the end of the form. */
 .save-bar {
   position: sticky;

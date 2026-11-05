@@ -11,6 +11,9 @@
 // or bottom edge of the window, pointing the way to it. Everything is removed
 // when the chat closes, and moves when another line is clicked into the chat.
 //
+// It redraws only when the page scrolls, the window or page changes size, or
+// it is pointed at other code, so an idle chat costs nothing (review on #83).
+//
 // The drawing lives in its own Shadow DOM root, takes no clicks, and sits
 // just under the chat panel. `pointerGeometry` does the maths, so it can be
 // tested without a browser's layout.
@@ -91,9 +94,12 @@ export interface CodePointerDeps {
   doc?: Document;
   /** The on-page chat's box, or null when the chat is in the side panel. */
   chatRect(): Rect | null;
-  /** Whether the chat is still open; the pointer goes once it is not. */
+  /**
+   * Whether the chat is still open; checked at each redraw, as a backstop to
+   * the caller calling hide when the chat closes.
+   */
   isOpen(): boolean;
-  /** Next frame (window.requestAnimationFrame); tests pass their own. */
+  /** Next frame (window.requestAnimationFrame), for redraws; tests pass their own. */
   frame?: (callback: () => void) => number;
   cancelFrame?: (handle: number) => void;
 }
@@ -151,7 +157,31 @@ export function createCodePointer(deps: CodePointerDeps): CodePointer {
     tab: HTMLElement;
   } | null = null;
   let stopTheme = () => {};
+  let stopWatching = () => {};
   let pending: number | undefined;
+  // What was last drawn, so a redraw that changes nothing writes nothing.
+  let drawn = '';
+
+  // Redraws only when something may have moved (review on #83): a scroll
+  // anywhere on the page, a resize of the window, or a change in the page's
+  // or the chat's size (GitHub loading more of the diff, the chat growing).
+  // Several in one frame make one redraw; an idle chat costs nothing.
+  const schedule = () => {
+    if (pending === undefined && parts) pending = frame(draw);
+  };
+  const watch = () => {
+    const options = { capture: true, passive: true } as const;
+    win.addEventListener('scroll', schedule, options);
+    win.addEventListener('resize', schedule, options);
+    const Observer = (win as Window & typeof globalThis).ResizeObserver;
+    const observer = typeof Observer === 'function' ? new Observer(schedule) : null;
+    observer?.observe(doc.body);
+    return () => {
+      win.removeEventListener('scroll', schedule, options);
+      win.removeEventListener('resize', schedule, options);
+      observer?.disconnect();
+    };
+  };
 
   const build = () => {
     host = doc.createElement('div');
@@ -173,6 +203,7 @@ export function createCodePointer(deps: CodePointerDeps): CodePointer {
     shadow.append(style, outline, svg, tab);
     doc.body.append(host);
     stopTheme = followTheme(host, doc);
+    stopWatching = watch();
     parts = { outline, svg, line, head, tab };
   };
 
@@ -187,6 +218,9 @@ export function createCodePointer(deps: CodePointerDeps): CodePointer {
       width: win.innerWidth,
       height: win.innerHeight,
     });
+    const key = JSON.stringify(geometry);
+    if (key === drawn) return;
+    drawn = key;
     const { outline, svg, line, head, tab } = parts;
     outline.hidden = !geometry || geometry.offscreen !== null;
     svg.toggleAttribute('hidden', !geometry?.arrow);
@@ -217,7 +251,6 @@ export function createCodePointer(deps: CodePointerDeps): CodePointer {
         tab.style.right = `${geometry.tab.right}px`;
       }
     }
-    pending = frame(draw);
   };
 
   function hide(): void {
@@ -226,6 +259,9 @@ export function createCodePointer(deps: CodePointerDeps): CodePointer {
     pending = undefined;
     stopTheme();
     stopTheme = () => {};
+    stopWatching();
+    stopWatching = () => {};
+    drawn = '';
     host?.remove();
     host = null;
     parts = null;
@@ -236,6 +272,7 @@ export function createCodePointer(deps: CodePointerDeps): CodePointer {
       anchor = next;
       if (!parts) build();
       if (pending !== undefined) cancelFrame(pending);
+      drawn = '';
       draw();
     },
     hide,

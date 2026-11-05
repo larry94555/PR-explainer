@@ -48,7 +48,7 @@ export const CHAT_PLACE_KEY = 'settings.chatOpensIn';
 /** Where the chat opens, as in src/settings.ts. */
 export type ChatPlace = 'sidepanel' | 'page';
 
-/** The setting as stored: `sidepanel`, or `page` (the default, PR 11.13) for anything else. */
+/** The setting as stored: `sidepanel`, or `page` (the default, PR 11.14) for anything else. */
 export function chatPlaceOf(stored: unknown): ChatPlace {
   return stored === 'sidepanel' ? 'sidepanel' : 'page';
 }

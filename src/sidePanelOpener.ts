@@ -86,7 +86,7 @@ export function setupChatMenu(deps: {
       try {
         visible = await deps.isOn();
       } catch {
-        // Hidden, as for the default (On the page, PR 11.13).
+        // Hidden, as for the default (On the page, PR 11.14).
       }
       menus.create({ id: CHAT_MENU_ID, title: CHAT_MENU_TITLE, contexts: ['action'], visible });
     })

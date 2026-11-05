@@ -53,7 +53,7 @@ export const CHAT_PANEL_STYLE = `
   }
   .subject .file { overflow: hidden; text-overflow: ellipsis; }
   .subject .lines { flex: none; }
-  /* The clicked code (PR 11.13): line numbers in a gutter, long lines scroll. */
+  /* The clicked code (PR 11.14): line numbers in a gutter, long lines scroll. */
   .subject-code {
     flex: none;
     box-sizing: border-box;
