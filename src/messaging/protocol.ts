@@ -32,6 +32,9 @@ export interface RequestMap {
   // Empties the session cache and the answers saved on disk (the settings
   // page's Clear saved answers button, PR 10.9).
   clearSavedAnswers: { payload: undefined; result: { cleared: true } };
+  // The PR the sending tab shows now ("owner/repo#17"), or null off a PR,
+  // so the background queue lets go of work it holds for another one (PR 11.5).
+  tabPr: { payload: { pr: string | null }; result: { released: number } };
 }
 
 export type RequestType = keyof RequestMap;
@@ -105,6 +108,24 @@ export type ChatPortName = 'pr-explainer:chat';
 export type ChatPortRequest = { type: 'start' } & ChatPayload;
 
 export type ChatPortMessage = StreamPortMessage<ChatResult>;
+
+// The worker port (PR 11.5): a content script with background work keeps
+// one open, so Chrome keeps the service worker running while there is work,
+// and sends `beat` now and then (a message on a port is what keeps it
+// running). The worker answers each new port with `hello`, naming this run of
+// the worker, so the page can tell when Chrome stopped it and started it
+// again, and how many of the queue's jobs it put back.
+export type WorkerPortName = 'pr-explainer:worker';
+
+export type WorkerPortRequest = { type: 'beat' };
+
+export type WorkerPortMessage = {
+  type: 'hello';
+  /** Different each time the worker starts. */
+  worker: string;
+  /** The jobs this run of the worker put back from before it was stopped. */
+  restored: number;
+};
 
 // The parts of a chrome.runtime.Port this layer uses.
 export interface PortLike {

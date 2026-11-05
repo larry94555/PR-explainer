@@ -25,6 +25,7 @@ import {
 import { createHunkExplainHandler, linePayload, type HunkResult } from './explain/hunkHandler';
 import { buildExplainPrompt } from './explain/explainPrompt';
 import { createPrefetchQueue, explainJob } from './explain/prefetchQueue';
+import { createSavedQueue } from './explain/savedQueue';
 import { SAMPLE_CONTEXT } from './explain/sampleContext';
 import { createModelLookup } from './llm/contextSize';
 import { createLlmClient } from './llm/createClient';
@@ -33,6 +34,7 @@ import { createLoadedWindowMemory } from './llm/loadedWindow';
 import { createWarmup } from './llm/warmup';
 import { MessageRouter } from './messaging/router';
 import { listenForChatPorts, listenForExplainPorts } from './messaging/streamPort';
+import { listenForWorkerPorts } from './messaging/workerPort';
 import type { RoundTripSink } from './net/roundTrips';
 import {
   DEFAULT_SETTINGS,
@@ -152,8 +154,19 @@ let queueIdleSince: number | undefined;
 // Requests at once (PR 10.6): how many jobs run together, read as each job
 // could start, so a save applies at once.
 const requestsAtOnce = followRequestsAtOnce(chrome.storage.sync, chrome.storage.onChanged);
+// The queue's background jobs are saved to chrome.storage.session on each
+// change, and put back when Chrome stops this worker and starts it again
+// (PR 11.5, src/explain/savedQueue.ts).
+const savedQueue = createSavedQueue<ExplainPayload>({
+  storage: chrome.storage.session,
+  openTabs: async () =>
+    (await chrome.tabs.query({})).flatMap((tab) =>
+      tab.id === undefined ? [] : [{ id: tab.id, ...(tab.url !== undefined && { url: tab.url }) }],
+    ),
+});
 const explainQueue = createPrefetchQueue<ExplainPayload, ExplainResult | HunkResult>({
   concurrency: () => requestsAtOnce.current(),
+  onChange: () => savedQueue.changed(),
   run: (payload, options) =>
     payload.hunk ? explainHunk(payload, options) : explain(payload, options),
   failed: (result) => result.status === 'failed',
@@ -204,6 +217,19 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // A tab that loads a new page (a reload, or leaving GitHub) lets go of the
 // pause; its new page says again if it holds it (review on #71).
 forgetTabOnLoad(chrome.tabs.onUpdated, backgroundPause);
+// A tab that loads a new page lets go of the jobs the queue holds for it
+// with no page port (restored ones, PR 11.5, and hunk follow-ups); its new
+// page asks again for what it wants (review on #74).
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') explainQueue.releaseTab(tabId);
+});
+// Put back the jobs from before a restart (PR 11.5), once the battery pause
+// kept from before is read, so they do not start while it holds. The debug
+// window shows "worker restarted, N jobs restored".
+const restart = backgroundPause.ready.then(() => savedQueue.start(explainQueue));
+void restart.then(({ restarted, restored }) => {
+  if (restarted) console.info(`[PR Explainer] worker restarted, ${restored} jobs restored`);
+});
 
 // Listeners must be added on the first run of the worker, before it goes idle,
 // so Chrome can wake it for later messages.
@@ -232,6 +258,14 @@ new MessageRouter()
     if (tabId !== undefined) backgroundPause.report(tabId, payload.paused);
     return { paused: backgroundPause.paused() };
   })
+  // GitHub's own page changes load no page: the tab says which PR it shows
+  // now, and work held for another one goes (review on #74).
+  .on('tabPr', (payload, sender) => {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) return { released: 0 };
+    const pr = typeof payload?.pr === 'string' ? payload.pr : null;
+    return { released: explainQueue.releaseTab(tabId, pr) };
+  })
   .on('aheadProgress', async (payload, sender) => {
     const tabId = sender.tab?.id;
     if (tabId === undefined) return { shown: false };
@@ -248,6 +282,12 @@ listenForDebugLogPorts(chrome.runtime, debugLog);
 listenForExplainPorts(chrome.runtime, (payload, { tab, ...options }) =>
   explainQueue.add(explainJob(payload, tab), options),
 );
+// Pages with background work keep a port open, which keeps this worker
+// running, and hear from it when it has restarted (PR 11.5).
+listenForWorkerPorts(chrome.runtime, {
+  worker: crypto.randomUUID(),
+  restored: async () => (await restart).restored,
+});
 // Chat answers (the chat panel) stream the same way, over their own port.
 listenForChatPorts(
   chrome.runtime,

@@ -15,6 +15,9 @@
 // line its answer left out comes back on its own.
 // From PR 11.2 a third Queue group shows Explain on hover passing over two
 // lines, each cancelled as the pointer moved on, and the summary counts them.
+// From PR 11.5 a fourth Queue group shows Chrome stopping the service worker
+// during Whole PR: the new worker says "worker restarted, 12 jobs restored"
+// and carries on with the line that was running.
 // No extension APIs and no LLM. Add ?live=0 to the address to skip the live click.
 
 import '../src/debug/debugWindow.css';
@@ -358,6 +361,40 @@ const HOVER_QUEUE_ENTRIES: DebugEntry[] = HOVER_QUEUE_EVENTS.map(([ms, event]) =
   event,
 }));
 
+// Chrome stopped the worker during Whole PR (PR 11.5): the new one put back
+// its 12 jobs, the line that was running first, and carried on.
+const rest = (
+  type: QueueEvent['type'],
+  n: number,
+  running: number,
+  waiting: number,
+  extra: Partial<QueueEvent> = {},
+) => q(type, line(n), running, waiting, { priority: 'near-screen', ...extra });
+const RESTART_QUEUE_EVENTS: [number, QueueEvent][] = [
+  [
+    0,
+    {
+      type: 'restored',
+      label: '12 jobs restored',
+      priority: 'near-screen',
+      running: 0,
+      waiting: 12,
+    },
+  ],
+  [1, rest('started', 41, 1, 11)],
+  [2_050, q('joined', line(41), 1, 11, { priority: 'near-screen' })],
+  [3_400, rest('finished', 41, 0, 11, { elapsedMs: 3_399 })],
+  [3_401, rest('started', 44, 1, 10)],
+];
+const RESTART_QUEUE_ENTRIES: DebugEntry[] = RESTART_QUEUE_EVENTS.map(([ms, event]) => ({
+  id: nextId++,
+  kind: 'queue',
+  group: 'queue-4',
+  cause: 'queue',
+  at: aheadAt + 24_000 + ms,
+  event,
+}));
+
 const ENTRIES: DebugEntry[] = [
   // The page reads the PR description as it opens (PR 9.7).
   rt(
@@ -511,6 +548,7 @@ const ENTRIES: DebugEntry[] = [
   ...QUEUE_ENTRIES,
   ...HUNK_QUEUE_ENTRIES,
   ...HOVER_QUEUE_ENTRIES,
+  ...RESTART_QUEUE_ENTRIES,
   rt(
     'chat-1',
     'chat',
