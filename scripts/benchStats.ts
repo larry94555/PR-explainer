@@ -3,6 +3,7 @@
 // writing, so everything here can be unit tested without a model.
 
 import { LATENCY_GOAL_MS } from '../src/llm/latencyGoal.ts';
+import { formatLiked, KIND_GROUPS, likedShare, type Rating } from '../src/ratings.ts';
 
 /** Ollama's timings for one reply, in milliseconds (the shape of LlmTimings). */
 export interface RunTimings {
@@ -190,6 +191,39 @@ export interface BenchReport {
   temperature: number;
   maxResponseTokens: number;
   models: ModelResult[];
+  /** Ratings from an Export ratings file (`--ratings`, PR 11.12), for the Liked column. */
+  ratings?: { file: string; list: Rating[] };
+}
+
+export const LIKED_TABLE_HEADER = [
+  'Model',
+  'Median',
+  'Liked',
+  ...KIND_GROUPS.map((k) => k.label),
+] as const;
+
+/**
+ * Each model's median time next to how often its answers were liked (PR
+ * 11.12): the share of 👍 with the number of ratings, "–" under 10, overall
+ * and for each kind of answer.
+ */
+export function formatLikedTable(
+  models: readonly Pick<ModelResult, 'model' | 'rows'>[],
+  ratings: readonly Rating[],
+): string {
+  const line = (cells: readonly string[]) => `| ${cells.map(cell).join(' | ')} |`;
+  return [
+    line(LIKED_TABLE_HEADER),
+    line(LIKED_TABLE_HEADER.map((_, i) => (i === 0 ? '---' : '---:'))),
+    ...models.map(({ model, rows }) =>
+      line([
+        model,
+        formatMs(summarize(rows.flatMap((r) => r.runs)).medianMs),
+        formatLiked(likedShare(ratings, model)),
+        ...KIND_GROUPS.map((k) => formatLiked(likedShare(ratings, model, k.kinds))),
+      ]),
+    ),
+  ].join('\n');
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -253,6 +287,15 @@ export function formatReport(report: BenchReport): string {
       `tokens, ${report.runsPerSample} ${report.runsPerSample === 1 ? 'run' : 'runs'} per sample`,
   ];
   out.push(`- **Against the ${LATENCY_GOAL_MS / 1000} s goal:** ${goalVerdicts(report.models)}`);
+  if (report.ratings) {
+    const { file, list } = report.ratings;
+    out.push(
+      `- **Ratings:** ${list.length} from ${file}; Liked is the share given 👍, ` +
+        'with the number of ratings, and – under 10',
+      '',
+      formatLikedTable(report.models, list),
+    );
+  }
   for (const model of report.models) {
     const notes = [
       // The window is sized to each prompt within this (PR 8.5).
@@ -1149,6 +1192,8 @@ export interface BenchArgs {
   byHunk: boolean;
   /** Prefetch a whole saved PR through the queue (PR 10.8). */
   wholePr: boolean;
+  /** An Export ratings file, for the Liked column (PR 11.12). Left out when not asked for. */
+  ratings?: string;
 }
 
 /** The most requests `--parallel` sends at once. */
@@ -1168,7 +1213,7 @@ export function parseLevels(text: string): number[] {
 }
 
 /**
- * Reads `[model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4 | --by-hunk | --whole-pr]`.
+ * Reads `[model ...] [--runs N] [--url URL] [--no-save] [--ratings FILE] [--ahead | --parallel 1,2,4 | --by-hunk | --whole-pr]`.
  * Throws on anything else.
  */
 export function parseBenchArgs(argv: readonly string[]): BenchArgs {
@@ -1206,6 +1251,8 @@ export function parseBenchArgs(argv: readonly string[]): BenchArgs {
       args.byHunk = true;
     } else if (flag === '--whole-pr') {
       args.wholePr = true;
+    } else if (flag === '--ratings') {
+      args.ratings = value();
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown option ${arg}`);
     } else {
@@ -1215,6 +1262,11 @@ export function parseBenchArgs(argv: readonly string[]): BenchArgs {
   const modes = [args.ahead, args.parallel !== undefined, args.byHunk, args.wholePr];
   if (modes.filter(Boolean).length > 1) {
     throw new Error('Use only one of --ahead, --parallel, --by-hunk and --whole-pr');
+  }
+  if (args.ratings !== undefined && modes.some(Boolean)) {
+    throw new Error(
+      '--ratings goes with the plain timing run, not --ahead, --parallel, --by-hunk or --whole-pr',
+    );
   }
   return args;
 }

@@ -262,8 +262,14 @@
           </p>
           <div class="row">
             <button id="clear-ratings" type="button">Clear ratings</button>
+            <button id="export-ratings" type="button">Export ratings</button>
           </div>
-          <p id="clear-ratings-status" role="status"></p>
+          <p class="hint">
+            The Speed test shows how often each model's answers were liked. Export ratings saves
+            them as a file that <code>npm run bench -- --ratings &lt;file&gt;</code> adds to its
+            report.
+          </p>
+          <p id="ratings-status" role="status"></p>
         </div>
 
         <fieldset id="debug" class="debug">
@@ -330,7 +336,9 @@
           Times one short explanation on each installed coding model, with the settings above
           (including Context size, which changes how much fits on the GPU), and marks the fastest
           one that answers in under 2 seconds. The size of the model and whether it runs on the GPU
-          make the biggest difference.
+          make the biggest difference. Liked is the share of the model's rated answers you gave 👍,
+          with the number of ratings in brackets (a dash under 10), and below it the same for one
+          line (click, hover or Explain ahead), a whole hunk and the chat.
         </p>
         <p id="speed-status" role="status"></p>
         <table id="speed-results" hidden>
@@ -340,6 +348,9 @@
               <th scope="col">Time</th>
               <th scope="col">Tokens/s</th>
               <th scope="col">Runs on</th>
+              <th scope="col" title="The share of rated answers given 👍, with how many were rated">
+                Liked
+              </th>
               <th scope="col"><span class="visually-hidden">Action</span></th>
             </tr>
           </thead>
@@ -373,6 +384,9 @@
               <th scope="col">Time</th>
               <th scope="col">Tokens/s</th>
               <th scope="col">Runs on</th>
+              <th scope="col" title="The share of rated answers given 👍, with how many were rated">
+                Liked
+              </th>
             </tr>
           </thead>
           <tbody></tbody>

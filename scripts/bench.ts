@@ -1,7 +1,7 @@
 // `npm run bench` (PR 8.2): times explanations on the local Ollama, so each
 // latency change in Milestone 8 has a repeatable before and after.
 //
-//   npm run bench -- [model ...] [--runs N] [--url URL] [--no-save] [--ahead | --parallel 1,2,4 | --by-hunk | --whole-pr]
+//   npm run bench -- [model ...] [--runs N] [--url URL] [--no-save] [--ratings FILE] [--ahead | --parallel 1,2,4 | --by-hunk | --whole-pr]
 //
 // Sends the real explain prompt for each sample in bench/ to each model named
 // (or the first installed model when none is), N times each (3 by default),
@@ -9,6 +9,10 @@
 // details, to the end of docs/latency.md. Node cannot read the extension's
 // settings, so the model comes from the command line and every other setting
 // is the extension's default.
+//
+// With --ratings FILE (PR 11.12) it reads a file saved with Export ratings on
+// the settings page and adds a table of each model's median time next to how
+// often its answers were liked.
 //
 // With --ahead (PR 9.11) it runs the ahead mode instead: each added line of a
 // saved GitHub diff page is explained ahead, as Explain ahead does, and then a
@@ -31,11 +35,12 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { runnerImport } from 'vite';
 import type * as BenchExplain from './benchExplain.ts';
 import { wholePrConclusion } from './latencyReport.ts';
+import { parseRatingsExport, type Rating } from '../src/ratings.ts';
 import {
   appendReport,
   formatAheadReport,
@@ -137,6 +142,24 @@ async function gpuShare(llmUrl: string, model: string): Promise<number | undefin
 
 async function main(): Promise<number> {
   const args = parseBenchArgs(process.argv.slice(2));
+  // Read first, so a wrong path stops the run before any model is timed.
+  let ratings: { file: string; list: Rating[] } | undefined;
+  if (args.ratings !== undefined) {
+    const file = resolve(args.ratings);
+    let list: Rating[];
+    try {
+      list = parseRatingsExport(JSON.parse(readFileSync(file, 'utf8')));
+    } catch (error) {
+      throw new Error(
+        `Could not read ${args.ratings}: ${error instanceof Error ? error.message : error}`,
+        { cause: error },
+      );
+    }
+    ratings = { file: basename(file), list };
+    console.log(
+      `Read ${list.length} ${list.length === 1 ? 'rating' : 'ratings'} from ${args.ratings}`,
+    );
+  }
   const { module: bench } = await runnerImport<typeof BenchExplain>(
     join(root, 'scripts', 'benchExplain.ts'),
     { configFile: false, root, logLevel: 'error' },
@@ -308,6 +331,7 @@ async function main(): Promise<number> {
     temperature: settings.temperature,
     maxResponseTokens: settings.maxResponseTokens,
     models: results,
+    ...(ratings && { ratings }),
   };
   const section = formatReport(report);
   console.log(`\n${section}`);
