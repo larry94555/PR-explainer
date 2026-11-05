@@ -81,3 +81,21 @@ export function createBackgroundPause(deps: {
     ready,
   };
 }
+
+/** The part of chrome.tabs.onUpdated forgetTabOnLoad uses. */
+export interface TabUpdatedLike {
+  addListener(listener: (tabId: number, changeInfo: { status?: string }) => void): void;
+}
+
+/**
+ * Lets go of a tab's pause when it loads a new page: a reload, or moving to
+ * a site without the content script. Its old content script is gone and
+ * cannot say it no longer holds the pause; the new page says again if it
+ * does (review on #71). GitHub's own page changes load no page, and the
+ * content script reports those itself.
+ */
+export function forgetTabOnLoad(onUpdated: TabUpdatedLike, pause: BackgroundPause): void {
+  onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.status === 'loading') pause.forgetTab(tabId);
+  });
+}

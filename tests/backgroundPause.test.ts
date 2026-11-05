@@ -1,4 +1,9 @@
-import { createBackgroundPause, PAUSED_TABS_KEY } from '../src/backgroundPause';
+import {
+  createBackgroundPause,
+  forgetTabOnLoad,
+  PAUSED_TABS_KEY,
+  type TabUpdatedLike,
+} from '../src/backgroundPause';
 import { createPauseReporter, holdsPause, type PauseInputs } from '../src/batteryState';
 import { createPrefetchQueue } from '../src/explain/prefetchQueue';
 
@@ -130,6 +135,32 @@ describe('tabs letting go of the pause (review on #71)', () => {
     expect(env.runs).toEqual(['a']);
     tab.state.enabled = true;
     tab.update();
+    expect(env.pause.paused()).toBe(true);
+  });
+
+  it('resumes the queue when a paused tab reloads or leaves GitHub without saying so', () => {
+    const env = twoTabs();
+    let onUpdated: ((tabId: number, changeInfo: { status?: string }) => void) | undefined;
+    const tabs: TabUpdatedLike = { addListener: (listener) => void (onUpdated = listener) };
+    forgetTabOnLoad(tabs, env.pause);
+    env.tab(1);
+    void env.queue
+      .add({ id: 'a', label: 'a', priority: 'on-screen', payload: 'a' })
+      .catch(() => {});
+    expect(env.runs).toEqual([]);
+
+    // Another tab finishing its load changes nothing; only a page load in tab 1 counts.
+    onUpdated!(2, { status: 'loading' });
+    onUpdated!(1, { status: 'complete' });
+    expect(env.pause.paused()).toBe(true);
+
+    // Tab 1 goes to another site: its content script is gone and sends nothing.
+    onUpdated!(1, { status: 'loading' });
+    expect(env.pause.paused()).toBe(false);
+    expect(env.runs).toEqual(['a']);
+
+    // A reload back onto a PR's diffs, still on battery: the new page holds it again.
+    env.tab(1);
     expect(env.pause.paused()).toBe(true);
   });
 

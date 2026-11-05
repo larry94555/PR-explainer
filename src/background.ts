@@ -1,6 +1,6 @@
 // Service worker. Answers requests from the content script (see
 // src/messaging/). All calls to the local LLM run here (see src/llm/).
-import { createBackgroundPause } from './backgroundPause';
+import { createBackgroundPause, forgetTabOnLoad } from './backgroundPause';
 import { createChatHandler } from './chat/chatHandler';
 import {
   clearWhenTurnedOff,
@@ -201,6 +201,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   // Only that tab's callers: a job shared with another tab keeps going.
   explainQueue.dropTab(tabId);
 });
+// A tab that loads a new page (a reload, or leaving GitHub) lets go of the
+// pause; its new page says again if it holds it (review on #71).
+forgetTabOnLoad(chrome.tabs.onUpdated, backgroundPause);
 
 // Listeners must be added on the first run of the worker, before it goes idle,
 // so Chrome can wake it for later messages.
