@@ -173,6 +173,25 @@
         </div>
 
         <div class="field">
+          <label for="skipInBackground">Skip in background</label>
+          <textarea
+            id="skipInBackground"
+            name="skipInBackground"
+            rows="6"
+            spellcheck="false"
+            aria-describedby="skipInBackground-hint"
+          ></textarea>
+          <p class="hint" id="skipInBackground-hint">
+            Files Explain ahead leaves alone, one pattern per line, as in .gitignore:
+            <code>*.min.js</code> matches in any folder, <code>dist/</code> a folder anywhere, and
+            <code>!keep.min.js</code> keeps a file a pattern above skips. Files the repository's
+            .gitattributes marks <code>linguist-generated</code> or <code>linguist-vendored</code>
+            are skipped too. Hovering or clicking a line in one still explains it.
+          </p>
+          <p class="error" data-error-for="skipInBackground" role="alert"></p>
+        </div>
+
+        <div class="field">
           <label class="check">
             <input id="letModelThink" name="letModelThink" type="checkbox" />
             Let the model think

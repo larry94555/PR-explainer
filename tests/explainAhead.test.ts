@@ -1170,4 +1170,128 @@ describe('Whole PR (PR 10.6)', () => {
       expect(unreadable.progress).toEqual([null]);
     });
   });
+
+  describe('skipping generated and vendored files (PR 11.4)', () => {
+    /** Skips b.ts and d.ts, as a lockfile and a bundle would be. */
+    const skipBD = async () => (file: string) => file === 'b.ts' || file === 'd.ts';
+
+    it('queues no line of a skipped file, and tells the queue only the rest', async () => {
+      const env = prSetup({ skipFile: skipBD });
+      env.setScreen([]);
+      env.ahead.restart();
+      await env.idle();
+      const all = [env.ahead.running(), ...env.ahead.queued()];
+      expect(all).toEqual([
+        'a.ts:added:1',
+        'a.ts:added:2',
+        'c.ts:added:1',
+        'c.ts:added:2',
+        'e.ts:added:1',
+        'e.ts:added:2',
+      ]);
+      for (let i = 0; i < all.length; i++) await finishCurrent(env);
+      expect(env.explain).toHaveBeenCalledTimes(6);
+      expect(env.texts().some((t) => /[bd]\.ts/.test(t))).toBe(false);
+      expect(env.events).toContainEqual({ type: 'skipped', files: ['b.ts', 'd.ts'] });
+    });
+
+    it('leaves a skipped file on screen alone too, with Lines on screen', async () => {
+      const env = setup({
+        skipFile: skipBD,
+        lines: () =>
+          [shown('b.ts', 1), shown('c.ts', 1)].map((l) => ({
+            ...l,
+            request: () => ({
+              text: `screen ${l.key}`,
+              subject: { filePath: l.filePath!, startLine: 1 },
+            }),
+          })),
+      });
+      env.ahead.restart();
+      vi.advanceTimersByTime(AHEAD_IDLE_MS);
+      await settle();
+      expect(env.texts()).toEqual(['screen c.ts:added:1']);
+      expect(env.ahead.queued()).toEqual([]);
+    });
+
+    it('counts only the files it explains, and says how many it skipped', async () => {
+      const progress: (AheadProgress | null)[] = [];
+      const env = prSetup({ skipFile: skipBD, onProgress: (p) => progress.push(p) });
+      env.setScreen([]);
+      env.ahead.restart();
+      await env.idle();
+      expect(progress.at(-1)).toEqual({ done: 0, total: 6, skipped: 2 });
+      for (let i = 0; i < 6; i++) await finishCurrent(env);
+      expect(progress.at(-1)).toEqual({ done: 6, total: 6, skipped: 2 });
+    });
+
+    it('says so when every file is skipped, and sends nothing (review on #73)', async () => {
+      const progress: (AheadProgress | null)[] = [];
+      const env = prSetup({
+        skipFile: async () => () => true,
+        onProgress: (p) => progress.push(p),
+        doneShownMs: 5_000,
+      });
+      env.ahead.restart();
+      await env.idle();
+      expect(env.explain).not.toHaveBeenCalled();
+      expect(env.ahead.queued()).toEqual([]);
+      expect(progress.at(-1)).toEqual({ done: 0, total: 0, skipped: 5 });
+      vi.advanceTimersByTime(5_000);
+      expect(progress.at(-1)).toBeNull();
+    });
+
+    it('queues the rest when the check throws for a file (review on #73)', async () => {
+      const env = prSetup({
+        skipFile: async () => (file: string) => {
+          if (file === 'b.ts') throw new SyntaxError('Invalid regular expression');
+          return file === 'd.ts';
+        },
+      });
+      env.setScreen([]);
+      env.ahead.restart();
+      await env.idle();
+      const all = [env.ahead.running(), ...env.ahead.queued()];
+      expect(all).toHaveLength(8);
+      expect(all.some((key) => key?.startsWith('d.ts'))).toBe(false);
+      expect(all.filter((key) => key?.startsWith('b.ts'))).toHaveLength(2);
+    });
+
+    it('skips nothing when the files to skip cannot be worked out', async () => {
+      const env = prSetup({ skipFile: async () => Promise.reject(new Error('offline')) });
+      env.setScreen([]);
+      env.ahead.restart();
+      await env.idle();
+      expect(env.ahead.queued()).toHaveLength(PR_LINES.length - 1);
+    });
+
+    it('asks again at each wait, so a changed setting is used after the next scroll', async () => {
+      let skipped = new Set(['b.ts']);
+      const env = prSetup({ skipFile: async () => (file: string) => skipped.has(file) });
+      env.setScreen([]);
+      env.ahead.restart();
+      await env.idle();
+      expect(env.ahead.queued().some((key) => key.startsWith('b.ts'))).toBe(false);
+      skipped = new Set();
+      env.ahead.restart();
+      await env.idle();
+      expect(env.ahead.queued().filter((key) => key.startsWith('b.ts'))).toHaveLength(2);
+    });
+
+    it('ignores an answer for a wait a scroll has replaced', async () => {
+      let answer!: (skip: (file: string) => boolean) => void;
+      const skipFile = vi
+        .fn<NonNullable<ExplainAheadDeps['skipFile']>>()
+        .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
+        .mockImplementation(skipBD);
+      const env = prSetup({ skipFile });
+      env.setScreen([]);
+      env.ahead.restart();
+      vi.advanceTimersByTime(AHEAD_IDLE_MS);
+      env.ahead.cancel();
+      answer(() => false);
+      await settle();
+      expect(env.explain).not.toHaveBeenCalled();
+    });
+  });
 });

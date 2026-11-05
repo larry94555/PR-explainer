@@ -89,6 +89,15 @@ export interface Settings {
    */
   backgroundOnBattery: BatteryMode;
   /**
+   * Skip in background (PR 11.4): the files Explain ahead leaves alone, one
+   * pattern per line, written as in .gitignore (`*.min.js`, `dist/`, `!keep.js`
+   * to keep one). Files the repository's .gitattributes marks
+   * linguist-generated or linguist-vendored are skipped too. Hover and clicks
+   * still explain them. The content script reads it straight from storage
+   * (src/skipFiles.ts, which keeps its own copy of the defaults).
+   */
+  skipInBackground: string;
+  /**
    * Keep answers for, in days (PR 10.9): how long explanations are kept on
    * this computer after Chrome closes, in IndexedDB
    * (src/explain/persistentCache.ts). An answer not used for this long is
@@ -129,6 +138,28 @@ export type AheadMode = (typeof AHEAD_MODES)[number];
 export const BATTERY_MODES = ['pause', 'keep'] as const;
 export type BatteryMode = (typeof BATTERY_MODES)[number];
 
+/** Skip in background's patterns until changed (PR 11.4), as in src/skipFiles.ts. */
+export const DEFAULT_SKIP_PATTERNS: readonly string[] = Object.freeze([
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'Cargo.lock',
+  'go.sum',
+  'poetry.lock',
+  '*.min.js',
+  '*.min.css',
+  '*.map',
+  '*.snap',
+  '*.pb.go',
+  '*_pb2.py',
+  'dist/',
+  'vendor/',
+  'node_modules/',
+]);
+
+/** The most text Skip in background may hold, well within chrome.storage.sync's 8 KB per item. */
+export const SKIP_IN_BACKGROUND_MAX_LENGTH = 4000;
+
 export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   llmUrl: 'http://localhost:11434',
   model: '',
@@ -142,6 +173,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   explainAhead: 'off',
   requestsAtOnce: 1,
   backgroundOnBattery: 'pause',
+  skipInBackground: DEFAULT_SKIP_PATTERNS.join('\n'),
   keepAnswersDays: 7,
   letModelThink: false,
   streamAnswers: false,
@@ -271,6 +303,11 @@ function checkField(field: SettingsField, value: unknown): string | null {
       return (BATTERY_MODES as readonly unknown[]).includes(value)
         ? null
         : 'Background work on battery must be Pause or Keep going.';
+    case 'skipInBackground':
+      if (typeof value !== 'string') return 'Skip in background must be text.';
+      return value.length > SKIP_IN_BACKGROUND_MAX_LENGTH
+        ? `Skip in background must be at most ${SKIP_IN_BACKGROUND_MAX_LENGTH} characters.`
+        : null;
     case 'keepAnswersDays':
       return checkNumber(value, KEEP_ANSWERS_DAYS_RANGE, true, 'Keep answers for');
     case 'letModelThink':
@@ -340,6 +377,14 @@ function normalize(settings: Settings): Settings {
   const result = { ...settings };
   if (typeof result.model === 'string') result.model = result.model.trim();
   if (typeof result.chatModel === 'string') result.chatModel = result.chatModel.trim();
+  if (typeof result.skipInBackground === 'string') {
+    // One pattern per line, without the spaces around it or blank lines.
+    result.skipInBackground = result.skipInBackground
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+      .join('\n');
+  }
   if (typeof result.llmUrl === 'string') {
     // Accept "http://localhost:11434/" and store it without the slash.
     result.llmUrl = result.llmUrl.trim().replace(/\/+$/, '');

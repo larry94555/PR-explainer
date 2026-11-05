@@ -30,6 +30,19 @@ select {
   font: inherit;
 }
 
+/* Skip in background (PR 11.4): one pattern per line. */
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.35rem;
+  font:
+    0.9em ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  resize: vertical;
+}
+
 .row {
   display: flex;
   gap: 0.5rem;

@@ -57,6 +57,11 @@
 // then cleared after AHEAD_DONE_SHOWN_MS; it is cleared too when Whole PR is
 // off or stops (leaving the PR, click-to-explain off, the diff unreadable).
 //
+// Files nobody reads, such as lockfiles, minified bundles and generated or
+// vendored code, are left out of both modes (PR 11.4, `skipFile`,
+// src/skipFiles.ts), and the progress says how many of the PR's files were
+// skipped. Hover and clicks still explain them.
+//
 // Up to `concurrency` requests are sent at once (the Requests at once
 // setting, 1 by default), each still one line or one hunk.
 //
@@ -314,7 +319,8 @@ export type AheadEvent =
       status: 'done' | 'failed';
       cached: boolean;
     }
-  | { type: 'limit'; count: number; wholePr: boolean };
+  | { type: 'limit'; count: number; wholePr: boolean }
+  | { type: 'skipped'; files: string[] };
 
 /**
  * How far Whole PR has got (PR 10.7): `done` of the PR's `total` changed
@@ -324,6 +330,8 @@ export interface AheadProgress {
   done: number;
   total: number;
   limited?: number;
+  /** How many of the PR's files were skipped as generated or vendored (PR 11.4), when any. */
+  skipped?: number;
 }
 
 export interface ExplainAheadDeps {
@@ -346,6 +354,12 @@ export interface ExplainAheadDeps {
    * (PR 10.4), or null when it cannot be read. Used with Whole PR.
    */
   prLines?(): Promise<AheadLine[] | null>;
+  /**
+   * Which files to leave alone (PR 11.4, src/skipFiles.ts): true for a file
+   * whose lines are not explained ahead, in either mode. Asked once per wait.
+   * Left out, or when it rejects, nothing is skipped.
+   */
+  skipFile?(): Promise<(filePath: string) => boolean>;
   /**
    * The PR and its head commit (null when the page does not say), so Whole
    * PR's limit and the lines done are kept across page changes of the same
@@ -452,6 +466,8 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
   let build = 0;
   // Whole PR's lines worth explaining (PR 10.7), once the diff is read.
   let prKeys: Set<string> | undefined;
+  // How many of the PR's files Whole PR skipped (PR 11.4).
+  let skippedFiles = 0;
   // What onProgress was last told, so it hears only changes.
   let shown: string | undefined;
   // The PR was seen done, so its tick is shown once.
@@ -476,7 +492,8 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
   /** Tells onProgress how far Whole PR has got, or clears it. */
   const report = () => {
     if (!deps.onProgress) return;
-    if (!prKeys || prKeys.size === 0 || !active() || !wholePr()) {
+    // Every line skipped still says so (review on #73), as a finished PR.
+    if (!prKeys || (prKeys.size === 0 && skippedFiles === 0) || !active() || !wholePr()) {
       tell(null);
       return;
     }
@@ -485,12 +502,17 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
     const total = prKeys.size;
     if (count < total) {
       const stopped = asked >= cap() && running.length === 0 && queue.length === 0;
-      tell({ done: count, total, ...(stopped && { limited: cap() }) });
+      tell({
+        done: count,
+        total,
+        ...(stopped && { limited: cap() }),
+        ...(skippedFiles > 0 && { skipped: skippedFiles }),
+      });
       return;
     }
     if (finished) return;
     finished = true;
-    tell({ done: total, total });
+    tell({ done: total, total, ...(skippedFiles > 0 && { skipped: skippedFiles }) });
     clearTimeout(doneTimer);
     doneTimer = setTimeout(() => tell(null), doneShownMs);
   };
@@ -689,6 +711,32 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
     report();
   };
 
+  /** Whether `line`'s file is one `skip` leaves alone. */
+  const skips = (skip: ((filePath: string) => boolean) | null, line: AheadLine) => {
+    if (skip === null || line.filePath === undefined) return false;
+    // A check that throws skips nothing rather than stopping the pass (review on #73).
+    try {
+      return skip(line.filePath);
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * Runs `then` with the files to skip: at once when there is no skipFile,
+   * else once it answers, unless a newer wait has started meanwhile.
+   */
+  const withSkip = (mine: number, then: (skip: ((filePath: string) => boolean) | null) => void) => {
+    if (!deps.skipFile) {
+      then(null);
+      return;
+    }
+    const go = (skip: ((filePath: string) => boolean) | null) => {
+      if (mine === build && active()) then(skip);
+    };
+    deps.skipFile().then(go, () => go(null));
+  };
+
   const restart = () => {
     clearTimers();
     queue = [];
@@ -697,28 +745,39 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
     if (!active()) return;
     idleTimer = setTimeout(() => {
       idleTimer = undefined;
-      const onScreen = deps.lines();
-      if (!wholePr() || !deps.prLines) {
-        prKeys = undefined;
-        fill(onScreen);
-        return;
-      }
-      // The PR's whole diff, read once per head commit; the lines on screen
-      // when it cannot be read.
-      deps.prLines().then(
-        (prLines) => {
-          if (mine !== build || !active()) return;
-          prKeys = prLines
-            ? new Set(prLines.filter((l) => worthExplaining(l.text)).map((l) => l.key))
-            : undefined;
-          fill(prLines ? orderWholePr(prLines, onScreen) : onScreen);
-        },
-        () => {
-          if (mine !== build || !active()) return;
+      withSkip(mine, (skip) => {
+        const onScreen = deps.lines().filter((line) => !skips(skip, line));
+        if (!wholePr() || !deps.prLines) {
           prKeys = undefined;
           fill(onScreen);
-        },
-      );
+          return;
+        }
+        // The PR's whole diff, read once per head commit; the lines on screen
+        // when it cannot be read.
+        deps.prLines().then(
+          (all) => {
+            if (mine !== build || !active()) return;
+            if (!all) {
+              prKeys = undefined;
+              fill(onScreen);
+              return;
+            }
+            const skipped = [...new Set(all.filter((l) => skips(skip, l)).map((l) => l.filePath!))];
+            if (skipped.length !== skippedFiles && skipped.length > 0) {
+              deps.onEvent?.({ type: 'skipped', files: skipped });
+            }
+            skippedFiles = skipped.length;
+            const prLines = all.filter((line) => !skips(skip, line));
+            prKeys = new Set(prLines.filter((l) => worthExplaining(l.text)).map((l) => l.key));
+            fill(orderWholePr(prLines, onScreen));
+          },
+          () => {
+            if (mine !== build || !active()) return;
+            prKeys = undefined;
+            fill(onScreen);
+          },
+        );
+      });
     }, idleMs);
   };
 
@@ -746,6 +805,7 @@ export function createExplainAhead(deps: ExplainAheadDeps): ExplainAhead {
         asked = 0;
         pageKey = page;
         prKeys = undefined;
+        skippedFiles = 0;
         finished = false;
       }
       group = newGroupId();
