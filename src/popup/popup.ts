@@ -121,6 +121,8 @@ export interface AnchorRect {
   top: number;
   bottom: number;
   left: number;
+  /** Where the code ends, for the chat's pointer (PR 11.14). */
+  right?: number;
 }
 
 /**

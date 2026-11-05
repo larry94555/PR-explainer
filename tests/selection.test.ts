@@ -301,12 +301,16 @@ describe.each(layouts)('selecting lines on the $name layout', ({ code, file, add
     dragSelect(code('R42'), code('R45'));
     mouse('mouseup', code('R45'));
     uiButton()!.click();
-    expect(addToChat).toHaveBeenCalledWith({
-      text: expect.stringContaining('Selection: 5 lines'),
-      subject: expect.objectContaining({ startLine: 42, endLine: 45 }),
-      code: expect.objectContaining({ filePath: 'docs/roadmap.md', startLine: 42, endLine: 45 }),
-      facts: expect.objectContaining({ where: 'docs/roadmap.md, lines 42 to 45' }),
-    });
+    expect(addToChat).toHaveBeenCalledWith(
+      {
+        text: expect.stringContaining('Selection: 5 lines'),
+        subject: expect.objectContaining({ startLine: 42, endLine: 45 }),
+        code: expect.objectContaining({ filePath: 'docs/roadmap.md', startLine: 42, endLine: 45 }),
+        facts: expect.objectContaining({ where: 'docs/roadmap.md, lines 42 to 45' }),
+      },
+      // The whole block, for the chat's pointer (PR 11.14).
+      expect.objectContaining({ getBoundingClientRect: expect.any(Function) }),
+    );
     expect(env.deps.explain).not.toHaveBeenCalled();
     expect(env.popups).toEqual([]);
     expect(highlighted()).toEqual([]);

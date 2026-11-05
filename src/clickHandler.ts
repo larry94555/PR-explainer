@@ -90,7 +90,7 @@ export interface ClickHandlerDeps {
    * (PR 5.4). Returns false when no chat is open, and the code is explained
    * in the popup as usual. Leaving it out means there is never a chat to add to.
    */
-  addToChat?(request: ExplainRequest): boolean;
+  addToChat?(request: ExplainRequest, anchor: PopupAnchor): boolean;
   /**
    * Saves a 👍 or 👎 on an answer, or takes it back (PR 11.11). Never given
    * the code or the answer. Leaving it out hides the rating buttons.
@@ -111,6 +111,8 @@ export interface ChatStart extends ChatSeed {
   subject: ChatSubject;
   /** True when the explanation came from Regenerate, so the chat starts over. */
   regenerated: boolean;
+  /** The clicked row or selected block, for the chat to point at (PR 11.14). */
+  anchor: PopupAnchor;
 }
 
 /** The code to explain: the context block for the model, and where it is. */
@@ -507,7 +509,7 @@ export function explainCode(
   onClose?: () => void,
   trace?: ClickTrace,
 ): void {
-  if (deps.addToChat?.(request)) {
+  if (deps.addToChat?.(request, anchor)) {
     deps.onContext?.(request.text);
     onClose?.();
     return;
@@ -575,7 +577,7 @@ export function explainInPopup(
     // explanation is shown.
     ...(openChat && {
       onAsk: () => {
-        if (explanation) openChat({ context: text, explanation, subject, regenerated });
+        if (explanation) openChat({ context: text, explanation, subject, regenerated, anchor });
       },
     }),
   });

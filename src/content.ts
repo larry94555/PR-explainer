@@ -33,6 +33,7 @@ import {
 } from './chat/chatPanel';
 import { ChatSessions, type ChatSession } from './chat/chatSession';
 import { createChatOpener, createSidePanelLink, trackChatPlace } from './chat/sidePanelChat';
+import { createCodePointer, type PointerAnchor } from './chat/codePointer';
 import { resolveTheme, watchTheme } from './theme';
 import { createClickHandler, listenForClicks, type ClickHandlerDeps } from './clickHandler';
 import { trackEnabled } from './enabledState';
@@ -689,6 +690,13 @@ const streamSetting = trackStreamSetting(chrome.storage.sync, chrome.storage.onC
 // What each PR's chat was first about, so the Open chat shortcut (PR 11.9)
 // can open it on the page again.
 const chatSubjects = new Map<string, ChatSubject>();
+// The code each PR's chat points at (PR 11.14): the clicked row or selected
+// block, outlined with an arrow from the chat while the chat is open.
+const chatAnchors = new Map<string, PointerAnchor>();
+const codePointer = createCodePointer({
+  chatRect: () => currentChatPanel()?.host.getBoundingClientRect() ?? null,
+  isOpen: () => openChat() !== null,
+});
 /** Opens the chat for `session` in `place`, closing any other, with an optional note. */
 function showChat(
   place: 'sidepanel' | 'page',
@@ -713,6 +721,9 @@ function showChat(
   );
   if (note) chat.addNote(note);
   currentChat.set(chat, pr);
+  const anchor = pr !== undefined ? chatAnchors.get(pr) : undefined;
+  if (anchor) codePointer.show(anchor);
+  else codePointer.hide();
   chat.focus();
 }
 
@@ -740,12 +751,13 @@ const explainDeps: ClickHandlerDeps = {
   // answers streamed from the service worker (src/chat/chatFlow.ts).
   // With Chat opens in on Side panel (PR 11.8), the side panel is asked for
   // at once, from the click; if Chrome refuses, the chat opens on the page.
-  openChat: ({ subject, regenerated, ...seed }) => {
+  openChat: ({ subject, regenerated, anchor, ...seed }) => {
     const pr = prName(location.href);
     warmUpChatModel(pr);
     placeChat((place, note) => {
       // The page may have moved on while the side panel opened.
       if (prName(location.href) !== pr) return;
+      if (pr !== undefined) chatAnchors.set(pr, anchor);
       showChat(place, pr, chatSessionFor(chats, pr, seed, { regenerated }), subject, note);
     });
   },
@@ -757,7 +769,14 @@ const explainDeps: ClickHandlerDeps = {
     });
   },
   // While the chat is open, clicked code in its PR joins the conversation (PR 5.4).
-  addToChat: ({ text, subject }) => currentChat.addCode(prName(location.href), text, subject),
+  addToChat: ({ text, subject }, anchor) => {
+    const pr = prName(location.href);
+    if (!currentChat.addCode(pr, text, subject)) return false;
+    // The pointer moves to the code the chat moved on to (PR 11.14).
+    if (pr !== undefined) chatAnchors.set(pr, anchor);
+    codePointer.show(anchor);
+    return true;
+  },
   // Dev builds also log the context block sent to the model.
   onContext:
     import.meta.env.MODE === 'development'

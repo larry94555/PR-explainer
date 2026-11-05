@@ -148,7 +148,13 @@ export function blockAnchor(rows: readonly Element[]): PopupAnchor {
     getBoundingClientRect(): AnchorRect {
       const first = rows[0]!.getBoundingClientRect();
       const last = rows.at(-1)!.getBoundingClientRect();
-      return { top: first.top, bottom: last.bottom, left: first.left };
+      const right = Math.max(first.right, last.right);
+      return {
+        top: first.top,
+        bottom: last.bottom,
+        left: first.left,
+        ...(Number.isFinite(right) && { right }),
+      };
     },
   };
 }
