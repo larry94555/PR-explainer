@@ -38,6 +38,13 @@
 //   dropped, and stopped if it is running. Jobs can also be re-prioritised
 //   and dropped by PR. Closing a tab lets go of only that tab's callers, so a
 //   job another tab also waits for keeps running.
+// - Chrome stops the service worker after about 30 seconds with no events
+//   (PR 11.5). `onChange` hears every change, so the worker can save
+//   `saved()` (the background jobs, running ones first, without answers) to
+//   chrome.storage.session (src/explain/savedQueue.ts), and `restore` puts
+//   them back when it starts again: a job that was running goes first in
+//   its priority, and the rest keep their order. A request for a restored
+//   job joins it, so nothing is done twice.
 //
 // It knows nothing about Chrome or Ollama: `run` does the work (the explain
 // handler in src/background.ts), so the tests drive it with a fake.
@@ -87,7 +94,9 @@ export type QueueEventType =
   | 'retry'
   | 'cancelled'
   | 'joined'
-  | 'dropped';
+  | 'dropped'
+  /** The worker started again and put back the jobs it had saved (PR 11.5). */
+  | 'restored';
 
 export interface QueueEvent {
   type: QueueEventType;
@@ -117,6 +126,8 @@ export interface QueueDeps<P, R> {
    * start, so a change to Requests at once (PR 10.6) applies at once.
    */
   concurrency?: number | (() => number);
+  /** Hears every change to the jobs, so they can be saved (PR 11.5). */
+  onChange?(): void;
   /** Clock in milliseconds. Defaults to Date.now. */
   now?(): number;
   onEvent?(event: QueueEvent): void;
@@ -150,7 +161,32 @@ export interface PrefetchQueue<P, R> {
   setPaused(paused: boolean): void;
   /** The labels of the running and waiting jobs, in the order they would run. */
   state(): { running: string[]; waiting: string[] };
+  /**
+   * The background jobs to keep across a worker restart (PR 11.5): running
+   * ones first, then the waiting ones in the order they would run. Clicks
+   * and Regenerate are left out, as their popup's port closes with the
+   * worker, and so are hovers, as the pointer has moved on by then.
+   */
+  saved(): SavedJob<P>[];
+  /**
+   * Puts back jobs saved by an earlier worker, ahead of anything queued
+   * since in their priority, in the order given. A job already queued (a
+   * page asked again first) is kept as it is. Returns how many were put back.
+   */
+  restore(saved: readonly SavedJob<P>[]): number;
 }
+
+/** A background job as it is saved across a worker restart (PR 11.5). */
+export interface SavedJob<P> {
+  spec: JobSpec<P>;
+  /** The tabs waiting for it, so closing one still lets go of it. */
+  tabs: number[];
+  /** It was running when saved. */
+  running?: boolean;
+}
+
+/** The priorities a saved job can have: background work a page does not wait on. */
+const SAVED_PRIORITIES: readonly JobPriority[] = ['on-screen', 'near-screen', 'rest'];
 
 interface Caller<R> {
   click: boolean;
@@ -201,6 +237,7 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       );
 
   const emit = (type: QueueEventType, job: Job<P, R>, elapsedMs?: number) => {
+    deps.onChange?.();
     if (!deps.onEvent) return;
     const runningCount = running().length;
     deps.onEvent({
@@ -427,8 +464,64 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
       pump();
     });
 
+  /** A caller that waits for nothing: the answer goes to the cache. */
+  const placeholder = (tab?: number): Caller<R> => ({
+    click: false,
+    ...(tab !== undefined && { tab }),
+    resolve: () => {},
+    reject: () => {},
+  });
+
+  const saved = (): SavedJob<P>[] => {
+    const keep = (job: Job<P, R>) => SAVED_PRIORITIES.includes(job.spec.priority);
+    const save = (job: Job<P, R>): SavedJob<P> => {
+      const tabs = [...job.callers].flatMap((caller) =>
+        caller.tab === undefined ? [] : [caller.tab],
+      );
+      return {
+        spec: job.spec,
+        tabs: [...new Set(tabs)],
+        ...(job.run && { running: true }),
+      };
+    };
+    return [...running().filter(keep).map(save), ...waiting().filter(keep).map(save)];
+  };
+
+  const restore = (list: readonly SavedJob<P>[]): number => {
+    const fresh = list.filter(
+      (item) => SAVED_PRIORITIES.includes(item.spec.priority) && !jobs.has(item.spec.id),
+    );
+    // Ahead of the jobs queued since, in the order saved.
+    front -= fresh.length;
+    fresh.forEach((item, i) => {
+      const callers = item.tabs.length
+        ? item.tabs.map((tab) => placeholder(tab))
+        : [placeholder(item.spec.tab)];
+      jobs.set(item.spec.id, {
+        spec: item.spec,
+        seq: ++seq,
+        front: front + i,
+        attempts: 0,
+        callers: new Set(callers),
+      });
+    });
+    const runningCount = running().length;
+    deps.onChange?.();
+    deps.onEvent?.({
+      type: 'restored',
+      label: `${fresh.length} job${fresh.length === 1 ? '' : 's'} restored`,
+      priority: fresh[0]?.spec.priority ?? 'rest',
+      running: runningCount,
+      waiting: jobs.size - runningCount,
+    });
+    pump();
+    return fresh.length;
+  };
+
   return {
     add,
+    saved,
+    restore,
     prioritise(match, priority) {
       let changed = 0;
       for (const job of jobs.values()) {
@@ -436,7 +529,10 @@ export function createPrefetchQueue<P, R>(deps: QueueDeps<P, R>): PrefetchQueue<
         job.spec = { ...job.spec, priority };
         changed += 1;
       }
-      if (changed) pump();
+      if (changed) {
+        deps.onChange?.();
+        pump();
+      }
       return changed;
     },
     drop(match) {

@@ -15,6 +15,7 @@ import {
   type BatteryNavigatorLike,
 } from './batteryState';
 import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
+import { createWorkerPort } from './workerPort';
 import { chatSessionFor, CurrentChat, startChat } from './chat/chatFlow';
 import { currentChatPanel, openChatPanel } from './chat/chatPanel';
 import { ChatSessions } from './chat/chatSession';
@@ -549,10 +550,27 @@ const ahead = createExplainAhead({
     );
   },
   lines: () => visibleAddedLines(document),
-  onEvent: (event) => console.info(`[PR Explainer] ${describeAhead(event)}`),
+  onEvent: (event) => {
+    console.info(`[PR Explainer] ${describeAhead(event)}`);
+    // Work started: keep the service worker running while it lasts (PR 11.5).
+    if (event.type === 'started') workerPort.update();
+  },
   // Whole PR's progress on the toolbar icon, for this tab (PR 10.7).
   onProgress: (progress) => {
     sendRequest('aheadProgress', progress).catch(() => {});
+  },
+});
+
+// While Explain ahead has work, a port to the service worker keeps Chrome
+// from stopping it (PR 11.5, src/workerPort.ts). If Chrome stops it anyway,
+// the worker puts its queue back when it starts again, and Explain ahead
+// carries on at once instead of waiting for a click or a scroll.
+const workerPort = createWorkerPort({
+  runtime: chrome.runtime,
+  hasWork: () => ahead.runningAll().length > 0 || ahead.queued().length > 0,
+  onRestart: (restored) => {
+    console.info(`[PR Explainer] worker restarted, ${restored} jobs restored`);
+    if (features.attached) ahead.restart();
   },
 });
 

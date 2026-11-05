@@ -95,6 +95,33 @@ describe('debug log (PR 9.3)', () => {
     expect(added!.id).toBe(3);
   });
 
+  it('keeps the queue\'s "worker restarted" entry after a restart and sends it live (PR 11.5)', async () => {
+    const { storage, log } = setup();
+    await log.add([input(1)]);
+    // Chrome stops the worker; the new one puts back its queue and says so.
+    const again = createDebugLog({ storage, isOn: async () => true });
+    const heard: DebugLogPortMessage[] = [];
+    again.listen((message) => heard.push(message));
+    const restart: DebugEntryInput = {
+      kind: 'queue',
+      group: 'q2',
+      cause: 'queue',
+      at: 5,
+      event: {
+        type: 'restored',
+        label: '12 jobs restored',
+        priority: 'rest',
+        running: 0,
+        waiting: 12,
+      },
+    };
+    await again.add([restart]);
+    const entries = await again.read();
+    expect(entries.map((e) => e.id)).toEqual([1, 2]);
+    expect(entries[1]).toMatchObject({ kind: 'queue', event: { type: 'restored', waiting: 12 } });
+    expect(heard).toEqual([{ type: 'entry', entry: entries[1] }]);
+  });
+
   it('sends each new entry to every listener until it stops listening', async () => {
     const { log } = setup();
     const heard: DebugLogPortMessage[] = [];

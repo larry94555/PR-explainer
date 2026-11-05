@@ -93,6 +93,7 @@ export const QUEUE_EVENT_LABELS: Record<DebugQueueEntry['event']['type'], string
   cancelled: 'cancelled for a click, put back',
   joined: 'joined',
   dropped: 'dropped',
+  restored: 'worker restarted',
 };
 
 /** A Queue group's counts (PR 10.7). */
@@ -618,7 +619,8 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
         'span',
         'queue-meta',
         [
-          event.priority,
+          // A restart is about the whole queue, not one priority (PR 11.5).
+          event.type === 'restored' ? '' : event.priority,
           event.tab !== undefined ? `tab ${event.tab}` : '',
           event.elapsedMs !== undefined ? formatMs(event.elapsedMs) : '',
           `${event.running} running, ${event.waiting} waiting`,

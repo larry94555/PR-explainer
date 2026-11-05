@@ -8,6 +8,7 @@ import {
   type QueueDeps,
   type QueueEvent,
 } from '../src/explain/prefetchQueue';
+import { createSavedQueue, SAVED_QUEUE_KEY } from '../src/explain/savedQueue';
 
 interface Result {
   status: 'done' | 'failed';
@@ -749,5 +750,239 @@ describe('hunk jobs (PR 10.5)', () => {
     expect(explainJob({ context: 's', hunk: { text: 's', lines: [line('one')] } }).priority).toBe(
       'on-screen',
     );
+  });
+});
+
+/** An in-memory chrome.storage.session; it outlives each worker made on it, like the real one. */
+function fakeSession() {
+  const data: Record<string, unknown> = {};
+  const writes: unknown[] = [];
+  return {
+    data,
+    writes,
+    get: async (keys: string[]) =>
+      Object.fromEntries(keys.filter((k) => k in data).map((k) => [k, structuredClone(data[k])])),
+    set: async (items: Record<string, unknown>) => {
+      // Stored as a copy, like Chrome does.
+      Object.assign(data, structuredClone(items));
+      writes.push(structuredClone(items[SAVED_QUEUE_KEY]));
+    },
+  };
+}
+
+/**
+ * One run of the service worker on `session`: a queue, its saver, and the
+ * restart started as background.ts starts it. A new call is the worker
+ * Chrome starts again; the old one's queue is simply forgotten.
+ */
+function worker(
+  session: ReturnType<typeof fakeSession>,
+  openTabs: number[] = [1, 2],
+  overrides: Partial<QueueDeps<string, Result>> = {},
+) {
+  const saver = createSavedQueue<string>({ storage: session, openTabs: async () => openTabs });
+  const env = setup({ onChange: () => saver.changed(), ...overrides });
+  const restart = saver.start(env.queue);
+  return { ...env, saver, restart };
+}
+
+describe('the background queue across a worker restart (PR 11.5)', () => {
+  const ids = (session: ReturnType<typeof fakeSession>) =>
+    (session.data[SAVED_QUEUE_KEY] as { spec: { id: string } }[]).map((job) => job.spec.id);
+
+  it('saves its background jobs on each change, running first, without answers', async () => {
+    const session = fakeSession();
+    const w = worker(session);
+    expect(await w.restart).toEqual({ restarted: false, restored: 0 });
+    void w.queue.add(w.job('a', 'on-screen', { tab: 1, pr: 'o/r#1', order: 3 }));
+    void w.queue.add(w.job('b', 'rest', { tab: 2 }));
+    void w.queue.add(w.job('c', 'near-screen', { tab: 1 }));
+    await w.saver.flushed();
+    expect(session.data[SAVED_QUEUE_KEY]).toEqual([
+      {
+        spec: {
+          id: 'a',
+          label: 'a',
+          priority: 'on-screen',
+          payload: 'a',
+          tab: 1,
+          pr: 'o/r#1',
+          order: 3,
+        },
+        tabs: [1],
+        running: true,
+      },
+      { spec: expect.objectContaining({ id: 'c' }), tabs: [1] },
+      { spec: expect.objectContaining({ id: 'b' }), tabs: [2] },
+    ]);
+    w.live()[0]!.finish();
+    await settle();
+    await w.saver.flushed();
+    // Finished: gone, and the next one is saved as running.
+    expect(ids(session)).toEqual(['c', 'b']);
+    expect((session.data[SAVED_QUEUE_KEY] as { running?: boolean }[])[0]!.running).toBe(true);
+    // A burst of changes is one write.
+    const before = session.writes.length;
+    w.queue.drop(() => true);
+    await w.saver.flushed();
+    expect(session.writes.length).toBe(before + 1);
+    expect(session.data[SAVED_QUEUE_KEY]).toEqual([]);
+  });
+
+  it('leaves out clicks, hovers and Regenerate, whose page stops waiting when the worker does', async () => {
+    const session = fakeSession();
+    const w = worker(session);
+    await w.restart;
+    void w.queue.add(w.job('click', 'click', { tab: 1 }));
+    void w.queue.add(w.job('hover', 'hovered', { tab: 1 }));
+    void w.queue.add(w.job('line', 'rest', { tab: 1 }));
+    await w.saver.flushed();
+    expect(ids(session)).toEqual(['line']);
+  });
+
+  it('restores the jobs after a restart in the same order, the running job first', async () => {
+    const session = fakeSession();
+    const first = worker(session);
+    await first.restart;
+    for (const id of ['near', 'screen-1', 'screen-2']) {
+      void first.queue.add(first.job(id, id === 'near' ? 'near-screen' : 'on-screen', { tab: 1 }));
+    }
+    // "near" started first, then the on-screen ones queued behind it.
+    expect(first.queue.state()).toEqual({ running: ['near'], waiting: ['screen-1', 'screen-2'] });
+    void first.queue.add(first.job('rest-1', 'rest', { tab: 2 }));
+    await first.saver.flushed();
+
+    // Chrome stops the worker: a new one starts on the same session storage.
+    const second = worker(session);
+    expect(await second.restart).toEqual({ restarted: true, restored: 4 });
+    // Priority still comes first; the job that was running goes first in its own.
+    expect(second.queue.state()).toEqual({
+      running: ['screen-1'],
+      waiting: ['screen-2', 'near', 'rest-1'],
+    });
+    expect(second.events.at(-2)).toMatchObject({
+      type: 'restored',
+      label: '4 jobs restored',
+      running: 0,
+      waiting: 4,
+    });
+    // A new line of the same priority waits behind the restored ones.
+    void second.queue.add(second.job('screen-3', 'on-screen', { tab: 1 }));
+    expect(second.queue.state().waiting.slice(0, 2)).toEqual(['screen-2', 'screen-3']);
+  });
+
+  it('puts a running job back first among jobs of its priority', async () => {
+    const session = fakeSession();
+    const first = worker(session);
+    await first.restart;
+    void first.queue.add(first.job('x', 'rest', { tab: 1, order: 50 }));
+    void first.queue.add(first.job('y', 'rest', { tab: 1, order: 1 }));
+    void first.queue.add(first.job('z', 'rest', { tab: 1, order: 2 }));
+    expect(first.queue.state()).toEqual({ running: ['x'], waiting: ['y', 'z'] });
+    await first.saver.flushed();
+    const second = worker(session);
+    await second.restart;
+    expect(second.queue.state()).toEqual({ running: ['x'], waiting: ['y', 'z'] });
+  });
+
+  it('drops the jobs of tabs that have closed, keeping a job another open tab waits for', async () => {
+    const session = fakeSession();
+    const first = worker(session, [1, 2]);
+    await first.restart;
+    void first.queue.add(first.job('busy', 'on-screen', { tab: 1 }));
+    void first.queue.add(first.job('only-1', 'rest', { tab: 1 }));
+    void first.queue.add(first.job('shared', 'rest', { tab: 1 }));
+    void first.queue.add(first.job('shared', 'rest', { tab: 2 }));
+    void first.queue.add(first.job('only-2', 'rest', { tab: 2 }));
+    await first.saver.flushed();
+    // Tab 1 closed while the worker was stopped.
+    const second = worker(session, [2]);
+    expect(await second.restart).toEqual({ restarted: true, restored: 2 });
+    expect(second.queue.state()).toEqual({ running: ['shared'], waiting: ['only-2'] });
+    // Closing tab 2 too lets go of them.
+    expect(second.queue.dropTab(2)).toBe(2);
+    expect(second.queue.state()).toEqual({ running: [], waiting: [] });
+  });
+
+  it('finishes a restored job whose answer is now cached at once, logged as skipped', async () => {
+    const session = fakeSession();
+    const first = worker(session);
+    await first.restart;
+    void first.queue.add(first.job('a', 'on-screen', { tab: 1 }));
+    await first.saver.flushed();
+    // The handler answers from the cache without the model.
+    const second = worker(session, [1], {
+      run: async () => ({ status: 'done', text: 'x', cached: true }),
+    });
+    await second.restart;
+    await settle();
+    expect(second.types()).toEqual(['restored 1 job restored', 'started a', 'skipped a']);
+    await second.saver.flushed();
+    expect(session.data[SAVED_QUEUE_KEY]).toEqual([]);
+  });
+
+  it('does nothing twice: a page asking again joins the restored job', async () => {
+    const session = fakeSession();
+    const first = worker(session);
+    await first.restart;
+    void first.queue.add(first.job('a', 'on-screen', { tab: 1 }));
+    await first.saver.flushed();
+    const second = worker(session);
+    await second.restart;
+    // Explain ahead sends the same line again once it hears of the restart.
+    const answer = second.queue.add(second.job('a', 'on-screen', { tab: 1 }));
+    expect(second.runs).toHaveLength(1);
+    second.live()[0]!.finish();
+    await expect(answer).resolves.toMatchObject({ text: 'answer to a' });
+    expect(second.runs).toHaveLength(1);
+  });
+
+  it('keeps a job a page queued before the restore finished, and does not overwrite what was saved', async () => {
+    const session = fakeSession();
+    const first = worker(session);
+    await first.restart;
+    void first.queue.add(first.job('a', 'rest', { tab: 1 }));
+    void first.queue.add(first.job('b', 'rest', { tab: 1 }));
+    await first.saver.flushed();
+    const writes = session.writes.length;
+    const second = worker(session);
+    // Before the saved jobs are read back.
+    void second.queue.add(second.job('b', 'rest', { tab: 1, label: 'b again' }));
+    await Promise.resolve();
+    expect(session.writes.length).toBe(writes);
+    expect(await second.restart).toEqual({ restarted: true, restored: 1 });
+    expect(second.runs.map((r) => r.payload)).toEqual(['b']);
+    expect(second.queue.state().waiting).toEqual(['a']);
+    await second.saver.flushed();
+    expect(ids(session).sort()).toEqual(['a', 'b']);
+  });
+
+  it('ignores saved jobs it cannot read and a storage that fails', async () => {
+    const session = fakeSession();
+    session.data[SAVED_QUEUE_KEY] = [
+      null,
+      { spec: { id: 1 }, tabs: [1] },
+      { spec: { id: 'x', label: 'x', priority: 'nope', payload: {} }, tabs: [1] },
+      { spec: { id: 'ok', label: 'ok', priority: 'rest', payload: { context: 'c' } }, tabs: [1] },
+    ];
+    const w = worker(session, [1]);
+    expect(await w.restart).toEqual({ restarted: true, restored: 1 });
+    expect(w.queue.state().running).toEqual(['ok']);
+
+    const broken = createSavedQueue<string>({
+      storage: {
+        get: async () => {
+          throw new Error('gone');
+        },
+        set: async () => {
+          throw new Error('gone');
+        },
+      },
+      openTabs: async () => [],
+    });
+    const env = setup({ onChange: () => broken.changed() });
+    expect(await broken.start(env.queue)).toEqual({ restarted: false, restored: 0 });
+    void env.queue.add(env.job('a', 'rest', { tab: 1 }));
+    await expect(broken.flushed()).resolves.toBeUndefined();
   });
 });

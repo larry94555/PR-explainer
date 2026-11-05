@@ -282,6 +282,37 @@ describe('debug window (PR 9.4)', () => {
     });
   });
 
+  it('shows "worker restarted, N jobs restored" in a Queue group (PR 11.5)', () => {
+    const w = setup();
+    w.port().send({
+      type: 'snapshot',
+      entries: [
+        {
+          id: nextId++,
+          kind: 'queue',
+          group: 'q-restart',
+          cause: 'queue',
+          at: T0,
+          event: {
+            type: 'restored',
+            label: '12 jobs restored',
+            priority: 'rest',
+            running: 0,
+            waiting: 12,
+          },
+        },
+      ],
+      running: [],
+    });
+    const item = w.all('.queue-event')[0]!;
+    expect(item.dataset.event).toBe('restored');
+    // No priority: the restart is about the whole queue.
+    expect(item.textContent).toBe(
+      '14:02:07.315worker restarted12 jobs restored0 running, 12 waiting',
+    );
+    expect(w.q('.queue-counts').textContent).toBe('12 waiting · 0 running · 0 done · 0 cancelled');
+  });
+
   it("counts a Queue group's jobs waiting, running, done and cancelled (PR 10.7)", () => {
     const at = (type: QueueEvent['type'], running: number, waiting: number) => ({
       id: nextId++,

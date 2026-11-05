@@ -10,6 +10,7 @@ declare const chrome: {
   contextMenus: import('./debug/debugWindowOpener').ContextMenusLike;
   action: import('./toolbarToggle').ActionLike;
   tabs: {
+    query(info: Record<string, never>): Promise<{ id?: number }[]>;
     onRemoved: { addListener(listener: (tabId: number) => void): void };
     onUpdated: {
       addListener(listener: (tabId: number, changeInfo: { status?: string }) => void): void;
