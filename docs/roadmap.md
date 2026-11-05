@@ -100,7 +100,7 @@ Each roadmap PR marks itself **Done** here (and in its heading) in the PR itself
 | 11.0 | Plan Milestone 11 | Small | ✅ Done ([#53](https://github.com/larry94555/PR-explainer/pull/53)) |
 | 11.1 | Start the request when the mouse goes down | Small | ✅ Done ([#69](https://github.com/larry94555/PR-explainer/pull/69)) |
 | 11.2 | Explain on hover, on by default and quicker | Small | Not started |
-| 11.3 | Pause background work on battery | Small | Not started |
+| 11.3 | Pause background work on battery | Small | ✅ Done ([#71](https://github.com/larry94555/PR-explainer/pull/71)) |
 | 11.4 | Skip generated and vendored files when explaining ahead | Small | Not started |
 | 11.5 | Keep the background queue when Chrome stops the service worker | Medium | Not started |
 | 11.6 | Ollama status banner that recovers on its own | Medium | Not started |
@@ -1191,11 +1191,12 @@ At 6.4 tokens per second, 2 seconds is about 12 tokens, so `deepseek-r1:7b` on t
   4. Move the pointer quickly down 20 lines. Confirm at most one request runs at a time and the cancelled count goes up.
   5. Set **Hover wait** to 1000, save, and confirm a half-second rest no longer starts a request.
 
-### PR 11.3: Pause background work on battery (Small)
+### PR 11.3: Pause background work on battery (Small) ✅ Done
+- **Status:** Done ([#71](https://github.com/larry94555/PR-explainer/pull/71)). As planned, with three details. The service worker hears from every PR tab and pauses while any open tab says so, keeping that across worker restarts in `chrome.storage.session` (`src/backgroundPause.ts`, tested in `backgroundPause.test.ts`). A tab holds the pause only while it shows a PR's diffs with click-to-explain on and Explain on hover or Explain ahead on, so the icon does not show ⏸ when nothing is held back; a tab that moves off a PR, is turned off, reloads or leaves GitHub lets go of it, so it never blocks the other tabs (review on #71, tested in `batteryState.test.ts` and `backgroundPause.test.ts`). The pause shows over Whole PR's progress in a tab, and click-to-explain off still shows OFF (`toggle.test.ts`). Plugging in starts Explain ahead's wait again for the lines on screen.
 - **Why it's needed:** Hover, Explain ahead and whole-PR prefetch keep the CPU busy, which drains a laptop battery fast and turns the fan on. Today the only way to avoid that is to turn them off and remember to turn them back on.
 - **Problem it solves:** A new **Background work on battery** setting: **Pause** (the default) or **Keep going**. The content script reads the charging state with `navigator.getBattery()` (the service worker cannot) and tells the service worker when it changes. While on battery and paused, hover, Explain ahead and the background queue send nothing new and let a running request finish. Your own clicks and chat questions are never paused. The toolbar badge (PR 10.7) shows "⏸" with the tooltip "Background work paused: on battery". When the browser does not report a battery (a desktop, or a browser without the API), nothing is paused.
 - **Unit tests added:** `batteryState.test.ts` (fake battery manager) checks charging, on battery, the change events, and no battery API. `prefetch.test.ts`, `explainAhead.test.ts` and `prefetchQueue.test.ts` check that each pauses on battery and starts again when plugged in, that a click still runs, and that **Keep going** never pauses. `settings.test.ts` checks the default.
-- **Screenshots:** the setting, and the toolbar badge while paused, light and dark.
+- **Screenshots:** the setting, [light](screenshots/pr-11.3/1-setting-light.png) and [dark](screenshots/pr-11.3/1-setting-dark.png) (the built settings page), and the toolbar badge while paused with its tooltip, [light](screenshots/pr-11.3/2-badge-paused-light.png) and [dark](screenshots/pr-11.3/2-badge-paused-dark.png) (the built extension in Chromium, sent the pause from an extension tab).
 - **How to test (Windows 11, Command Prompt):**
   1. Run `npm install` if you have not since the last pull, then `npm test`. Confirm all tests pass. Run `npm run lint` and `npm run build` and confirm both succeed.
   2. Run `npm run dev`, reload the extension, and tick **Explain on hover** and **Debug window**.

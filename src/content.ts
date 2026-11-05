@@ -8,6 +8,12 @@
 // entry must not share imports with other entries: Vite would move shared
 // code into a chunk loaded with `import`, which fails in a content script.
 // Type-only imports (such as src/messaging/protocol.ts) are fine.
+import {
+  createPauseReporter,
+  holdsPause,
+  trackBackgroundPause,
+  type BatteryNavigatorLike,
+} from './batteryState';
 import { setBadgeEnabled, setBadgeStatus, syncBadge } from './badge';
 import { chatSessionFor, CurrentChat, startChat } from './chat/chatFlow';
 import { currentChatPanel, openChatPanel } from './chat/chatPanel';
@@ -176,6 +182,8 @@ const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (va
     ahead.restart();
   }
   update();
+  // A tab turned off lets go of the pause; turned on, it may hold it again.
+  reportPause();
 });
 
 let pinged = false;
@@ -369,11 +377,45 @@ const askWorkerHunk: NonNullable<ExplainAheadDeps['explainHunk']> = (request, { 
   );
 };
 
+// Background work on battery (PR 11.3): on battery, with the setting on
+// Pause (the default), Explain on hover and Explain ahead send nothing new,
+// and the service worker's queue starts no background job (it hears from
+// every PR tab, src/backgroundPause.ts). A running request is let finish.
+// Clicks and chat questions are never paused.
+const backgroundPause = trackBackgroundPause({
+  nav: navigator as Navigator & BatteryNavigatorLike,
+  storage: chrome.storage.sync,
+  events: chrome.storage.onChanged,
+  onChange: (paused) => {
+    console.info(`[PR Explainer] background work ${paused ? 'paused: on battery' : 'resumed'}`);
+    reportPause();
+    // Plugged in: Explain ahead looks at the lines on screen again.
+    if (!paused && features.attached) ahead.restart();
+  },
+});
+// Tells the service worker whether this tab holds the pause: only while it
+// shows a PR's diffs with click-to-explain on and some background work
+// turned on, so a tab that moved off a PR or was turned off never pauses the
+// other tabs (review on #71). The icon then shows the pause only while
+// something is held back.
+const pauseReporter = createPauseReporter({
+  wanted: () =>
+    holdsPause({
+      paused: backgroundPause.paused(),
+      onDiffs: features.attached,
+      enabled: enabled.current(),
+      backgroundOn: hoverSetting.current() || aheadSetting.current() !== 'off',
+    }),
+  send: (paused) => sendRequest('backgroundPaused', { paused }),
+});
+const reportPause = () => pauseReporter.update();
+
 // Explain on hover (PR 8.7): with the setting on, resting the pointer on a
 // line starts its explanation, and a click joins it in the service worker's
 // queue (src/prefetch.ts, PR 10.3).
 const hoverSetting = trackHoverSetting(chrome.storage.sync, chrome.storage.onChanged, (on) => {
   if (!on) prefetcher.cancel();
+  reportPause();
 });
 function describePrefetch(event: PrefetchEvent): string {
   const seconds = 'elapsedMs' in event ? ` after ${(event.elapsedMs / 1000).toFixed(1)} s` : '';
@@ -394,6 +436,7 @@ function describePrefetch(event: PrefetchEvent): string {
 const aheadSetting = trackAheadSetting(chrome.storage.sync, chrome.storage.onChanged, (mode) => {
   if (mode === 'off') ahead.cancel();
   else if (features.attached) ahead.restart();
+  reportPause();
 });
 const requestsSetting = trackRequestsSetting(chrome.storage.sync, chrome.storage.onChanged);
 /** The PR and its head commit, for Whole PR's per-PR limit. */
@@ -431,6 +474,7 @@ const ahead = createExplainAhead({
   pageKey: aheadPage,
   concurrency: () => requestsSetting.current(),
   isEnabled: () => enabled.current() === true,
+  isPaused: () => backgroundPause.paused(),
   // One request at a time: not while a click's or a chat answer is being
   // written, not while Explain on hover runs, and not in a hidden tab.
   isBusy: () => {
@@ -456,6 +500,7 @@ const prefetcher = createPrefetcher({
   explain: askWorker,
   isOn: () => hoverSetting.current(),
   isEnabled: () => enabled.current() === true,
+  isPaused: () => backgroundPause.paused(),
   // One request at a time: not while a click's answer is still coming, and
   // not while the chat is open (a click then goes to the chat).
   isBusy: () => {
@@ -591,6 +636,7 @@ const features = new DiffPageFeatures(() => {
 
 update();
 features.sync(location.href);
+reportPause();
 // Read the description ahead of the first click, so it does not wait.
 readDescriptionAhead();
 
@@ -610,6 +656,8 @@ function onPageChanged(url: string): void {
   // A redraw can also drop the badge.
   update();
   features.sync(url);
+  // Off a PR's diffs, the tab lets go of the pause (review on #71).
+  reportPause();
   prMetadata.forget();
   fileContexts.forget();
   patchRequests.forget();

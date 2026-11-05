@@ -135,6 +135,8 @@ describe('settings', () => {
         explainAhead: 'off',
         // On a CPU, requests at once share the same cores (PR 10.6).
         requestsAtOnce: 1,
+        // Background work drains the battery and turns the fan on (PR 11.3).
+        backgroundOnBattery: 'pause',
         // A whole PR prefetched once stays done for a week (PR 10.9).
         keepAnswersDays: 7,
         // Thinking was most of the wait on a reasoning model (PR 9.5).
@@ -184,6 +186,7 @@ describe('settings', () => {
         explainOnHover: true,
         explainAhead: 'pr' as const,
         requestsAtOnce: 2,
+        backgroundOnBattery: 'keep' as const,
         keepAnswersDays: 30,
         letModelThink: true,
         streamAnswers: true,
@@ -341,6 +344,28 @@ describe('settings', () => {
       const promise = saveSettings({ explainOnHover: 1 as unknown as boolean }, fakeStorage());
       await expectRejectedFields(promise, ['explainOnHover']);
       await expect(promise).rejects.toThrow('Explain on hover must be on or off.');
+    });
+
+    it('accepts Pause or Keep going for Background work on battery and nothing else (PR 11.3)', async () => {
+      for (const mode of ['pause', 'keep'] as const) {
+        await expect(
+          saveSettings({ backgroundOnBattery: mode }, fakeStorage()),
+        ).resolves.toMatchObject({ backgroundOnBattery: mode });
+      }
+      for (const bad of [true, 'off', '']) {
+        const promise = saveSettings(
+          { backgroundOnBattery: bad as unknown as 'pause' },
+          fakeStorage(),
+        );
+        await expectRejectedFields(promise, ['backgroundOnBattery']);
+        await expect(promise).rejects.toThrow(
+          'Background work on battery must be Pause or Keep going.',
+        );
+      }
+      const key = storageKey('backgroundOnBattery');
+      expect((await getSettings(fakeStorage({ [key]: 'never' }))).backgroundOnBattery).toBe(
+        'pause',
+      );
     });
 
     it('accepts Off, Lines on screen or Whole PR for Explain ahead and nothing else (PR 10.6)', async () => {

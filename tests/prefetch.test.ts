@@ -349,6 +349,56 @@ describe('explain on hover', () => {
     expect(env.explain).toHaveBeenCalledTimes(1);
   });
 
+  describe('on battery (PR 11.3)', () => {
+    it('sends nothing while paused, and starts again once plugged in', () => {
+      let paused = true;
+      const env = setup({ isPaused: () => paused });
+      env.hover('a');
+      vi.advanceTimersByTime(5000);
+      expect(env.explain).not.toHaveBeenCalled();
+
+      paused = false;
+      env.hover('b');
+      vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+      expect(env.explain).toHaveBeenCalledTimes(1);
+      expect(env.prefetcher.running()).toBe('b');
+    });
+
+    it('does not start if unplugged during the wait', () => {
+      let paused = false;
+      const env = setup({ isPaused: () => paused });
+      env.hover('a');
+      paused = true;
+      vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+      expect(env.explain).not.toHaveBeenCalled();
+    });
+
+    it('lets a running prefetch finish when unplugged', async () => {
+      let paused = false;
+      const env = setup({ isPaused: () => paused });
+      env.hover('a');
+      vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+      paused = true;
+      expect(env.streams[0]!.stopped).toBe(false);
+      env.streams[0]!.finish();
+      await settle();
+      expect(env.events.at(-1)).toMatchObject({ type: 'finished', key: 'a', status: 'done' });
+    });
+
+    it('still sends a click while paused', () => {
+      const env = setup({ isPaused: () => true });
+      env.prefetcher.explain('context of a', () => {}, { fresh: false });
+      expect(env.explain).toHaveBeenCalledTimes(1);
+    });
+
+    it('never pauses with Keep going (isPaused always false)', () => {
+      const env = setup({ isPaused: () => false });
+      env.hover('a');
+      vi.advanceTimersByTime(PREFETCH_DELAY_MS);
+      expect(env.explain).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('does nothing while a mouse button is held (dragging to select lines)', () => {
     const env = setup();
     env.hover('a');

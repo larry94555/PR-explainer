@@ -11,6 +11,9 @@ declare const chrome: {
   action: import('./toolbarToggle').ActionLike;
   tabs: {
     onRemoved: { addListener(listener: (tabId: number) => void): void };
+    onUpdated: {
+      addListener(listener: (tabId: number, changeInfo: { status?: string }) => void): void;
+    };
   };
   storage: {
     sync: import('./settings').StorageAreaLike;

@@ -147,6 +147,21 @@
         </div>
 
         <div class="field">
+          <label for="backgroundOnBattery">Background work on battery</label>
+          <select id="backgroundOnBattery" name="backgroundOnBattery">
+            <option value="pause">Pause</option>
+            <option value="keep">Keep going</option>
+          </select>
+          <p class="hint">
+            What Explain on hover and Explain ahead do while the laptop runs on battery.
+            <strong>Pause</strong> sends nothing new until it is plugged in again, and lets an
+            explanation already running finish; the toolbar icon shows ⏸ meanwhile.
+            <strong>Keep going</strong> never pauses. Your own clicks and chat questions always run.
+          </p>
+          <p class="error" data-error-for="backgroundOnBattery" role="alert"></p>
+        </div>
+
+        <div class="field">
           <label class="check">
             <input id="letModelThink" name="letModelThink" type="checkbox" />
             Let the model think

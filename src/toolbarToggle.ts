@@ -8,6 +8,10 @@
 // its tooltip (PR 10.7, showAheadProgress). Chrome keeps these per tab, so
 // other tabs still show ON or OFF.
 //
+// While background work is paused on battery (PR 11.3, src/backgroundPause.ts)
+// and click-to-explain is on, every tab shows "⏸" instead, with the reason
+// in its tooltip (showPaused).
+//
 // Runs in the service worker. Chrome and storage are passed in so the tests
 // can use fakes.
 
@@ -65,6 +69,19 @@ export function progressBadge(progress: AheadProgress, enabled: boolean): Action
   };
 }
 
+/** The pause's colour (PR 11.3): GitHub's attention yellow. */
+export const PAUSED_COLOR = '#9a6700';
+export const PAUSED_TITLE = 'Background work paused: on battery';
+
+/**
+ * What the icon shows while background work is paused on battery (PR 11.3),
+ * above the usual on line. Click-to-explain off shows OFF instead.
+ */
+export function pausedBadge(enabled: boolean): ActionBadge {
+  if (!enabled) return actionBadge(false);
+  return { text: '⏸', color: PAUSED_COLOR, title: `${PAUSED_TITLE}\n${actionBadge(true).title}` };
+}
+
 async function draw(action: ActionLike, badge: ActionBadge, tabId?: number): Promise<void> {
   const tab = tabId === undefined ? {} : { tabId };
   await Promise.all([
@@ -105,6 +122,11 @@ export function setupToolbarToggle(deps: { action: ActionLike; storage: LocalSto
    * or off look there when `progress` is null (PR 10.7).
    */
   showProgress(tabId: number, progress: AheadProgress | null): Promise<void>;
+  /**
+   * Shows or clears the pause on battery (PR 11.3) on the icon, for every
+   * tab, over Whole PR's progress.
+   */
+  showPaused(paused: boolean): Promise<void>;
   /** Forgets a closed tab. */
   forgetTab(tabId: number): void;
 } {
@@ -119,11 +141,19 @@ export function setupToolbarToggle(deps: { action: ActionLike; storage: LocalSto
   // cleared). Chrome keeps a tab's look until it is set again, so a click on
   // the button redraws these too.
   const tabs = new Map<number, AheadProgress | null>();
+  // Background work paused on battery (PR 11.3): shown over everything else.
+  let paused = false;
+  const drawAll = (enabled: boolean) =>
+    draw(action, paused ? pausedBadge(enabled) : actionBadge(enabled));
   const drawTab = (tabId: number, enabled: boolean) => {
     const progress = tabs.get(tabId);
     return draw(
       action,
-      progress ? progressBadge(progress, enabled) : actionBadge(enabled),
+      paused
+        ? pausedBadge(enabled)
+        : progress
+          ? progressBadge(progress, enabled)
+          : actionBadge(enabled),
       tabId,
     ).catch(() => {
       // The tab has closed.
@@ -134,13 +164,13 @@ export function setupToolbarToggle(deps: { action: ActionLike; storage: LocalSto
   action.onClicked.addListener(() =>
     run(async () => {
       const enabled = await toggleEnabled(storage);
-      await showActionBadge(action, enabled);
+      await drawAll(enabled);
       await Promise.all([...tabs.keys()].map((tabId) => drawTab(tabId, enabled)));
     }),
   );
   // Chrome forgets the badge when the browser restarts, so draw it each time
   // the worker starts.
-  run(async () => showActionBadge(action, await readEnabled(storage)));
+  run(async () => drawAll(await readEnabled(storage)));
   return {
     idle: () => queue,
     showProgress: (tabId, progress) => {
@@ -149,6 +179,16 @@ export function setupToolbarToggle(deps: { action: ActionLike; storage: LocalSto
         // keeps a tab's look after the worker restarts (review on #66).
         tabs.set(tabId, progress);
         await drawTab(tabId, await readEnabled(storage));
+      });
+      return queue;
+    },
+    showPaused: (value) => {
+      run(async () => {
+        if (value === paused) return;
+        paused = value;
+        const enabled = await readEnabled(storage);
+        await drawAll(enabled);
+        await Promise.all([...tabs.keys()].map((tabId) => drawTab(tabId, enabled)));
       });
       return queue;
     },
