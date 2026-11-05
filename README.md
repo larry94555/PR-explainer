@@ -114,7 +114,7 @@ If the settings page says Ollama refused the request, follow the fix it shows (i
 5. Press **Alt+E** to explain the line that has keyboard focus, and **Esc** to close the popup or chat.
 6. Click the toolbar icon to turn click-to-explain **off** (and back on) whenever you want GitHub's normal click behaviour.
 
-Optional settings worth knowing: **Explain on hover** starts the answer when your pointer rests on a line, so it is often ready by the time you click, **Show prompt** shows exactly what was sent to the model, and **Let the model think** (off by default) lets a reasoning model such as `deepseek-r1` think before it answers, which is slower.
+Optional settings worth knowing: **Explain on hover** (on by default) starts the answer when your pointer rests on a line for the **Hover wait** (300 ms by default), so it is often ready by the time you click, **Show prompt** shows exactly what was sent to the model, and **Let the model think** (off by default) lets a reasoning model such as `deepseek-r1` think before it answers, which is slower.
 
 ## Documentation
 

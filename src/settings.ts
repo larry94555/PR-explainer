@@ -49,11 +49,19 @@ export interface Settings {
   keepAliveMinutes: number;
   /**
    * Start explaining a diff line once the pointer rests on it (PR 8.7), so a
-   * click often shows the answer at once. Off by default, because it uses the
-   * model for lines the user may never click. The content script reads it
-   * straight from storage (src/prefetch.ts).
+   * click often shows the answer at once. On by default since PR 11.2: it
+   * sends one request at a time, never on battery (PR 11.3), during the
+   * warm-up or in a hidden tab. A saved off is kept. The content script
+   * reads it straight from storage (src/prefetch.ts).
    */
   explainOnHover: boolean;
+  /**
+   * Hover wait (PR 11.2): how long the pointer rests on a line, in
+   * milliseconds, before Explain on hover starts. 300 by default: most people
+   * rest on a line for less than a second before clicking it. The content
+   * script reads it straight from storage (src/prefetch.ts).
+   */
+  hoverWaitMs: number;
   /**
    * Explain changed lines before they are clicked, once the Files changed tab
    * has been idle for a moment, so most clicks are answered from the cache:
@@ -129,7 +137,8 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   maxResponseTokens: 120,
   contextTokens: 0,
   keepAliveMinutes: 30,
-  explainOnHover: false,
+  explainOnHover: true,
+  hoverWaitMs: 300,
   explainAhead: 'off',
   requestsAtOnce: 1,
   backgroundOnBattery: 'pause',
@@ -187,6 +196,8 @@ export const MAX_RESPONSE_TOKENS_RANGE = { min: 1, max: 32768 } as const;
 export const KEEP_ALIVE_MINUTES_RANGE = { min: 0, max: 1440 } as const;
 /** A set context size must be in this range; 0 means automatic. */
 export const CONTEXT_TOKENS_RANGE = { min: 512, max: 131072 } as const;
+/** Hover wait (PR 11.2), in milliseconds. */
+export const HOVER_WAIT_MS_RANGE = { min: 150, max: 2000 } as const;
 /** Requests at once (PR 10.6). */
 export const REQUESTS_AT_ONCE_RANGE = { min: 1, max: 4 } as const;
 /** Keep answers for (PR 10.9): up to a year; 0 keeps them only until Chrome closes. */
@@ -248,6 +259,8 @@ function checkField(field: SettingsField, value: unknown): string | null {
       return checkNumber(value, KEEP_ALIVE_MINUTES_RANGE, true, 'Keep model loaded');
     case 'explainOnHover':
       return typeof value === 'boolean' ? null : 'Explain on hover must be on or off.';
+    case 'hoverWaitMs':
+      return checkNumber(value, HOVER_WAIT_MS_RANGE, true, 'Hover wait');
     case 'explainAhead':
       return (AHEAD_MODES as readonly unknown[]).includes(value)
         ? null

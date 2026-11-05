@@ -8,7 +8,8 @@
 // warm-up or a chat question), newest first. The background queue (PR 10.3)
 // has its own "Queue" groups, listing each job it queued, started, finished
 // or cancelled for a click, under a line counting the jobs waiting, running,
-// done and cancelled (PR 10.7). Opening a row shows the request (a chat prompt
+// done and cancelled (PR 10.7); the summary counts Explain on hover's
+// requests and how many were cancelled before they finished (PR 11.2). Opening a row shows the request (a chat prompt
 // message by message, with its role), the reply (thinking apart from the
 // answer), Ollama's own timings, and the click's tasks from PR 9.1. A row
 // still running shows its reply growing and its time ticking.
@@ -131,6 +132,37 @@ export function formatQueueCounts(counts: QueueCounts): string {
     `${cancelled} cancelled`,
     ...(failed > 0 ? [`${failed} failed`] : []),
   ].join(' · ');
+}
+
+/** Explain on hover's requests in the window (PR 11.2). */
+export interface HoverCounts {
+  /** Hover requests the queue took. */
+  sent: number;
+  /** Of those, the ones stopped before they finished (the pointer moved on). */
+  cancelled: number;
+}
+
+/**
+ * Counts Explain on hover's requests from the queue's events (PR 11.2): each
+ * hovered line queued, and each one dropped before it finished because the
+ * pointer moved to another line. A hovered line a click joined has become the
+ * click's, so it is not counted as cancelled.
+ */
+export function hoverCounts(entries: Iterable<DebugEntry>): HoverCounts {
+  let sent = 0;
+  let cancelled = 0;
+  for (const entry of entries) {
+    if (entry.kind !== 'queue' || entry.event.priority !== 'hovered') continue;
+    if (entry.event.type === 'queued') sent += 1;
+    else if (entry.event.type === 'dropped') cancelled += 1;
+  }
+  return { sent, cancelled };
+}
+
+/** "Explain on hover: 12 sent, 9 cancelled before finishing", or "" when none were sent. */
+export function formatHoverCounts({ sent, cancelled }: HoverCounts): string {
+  if (sent === 0 && cancelled === 0) return '';
+  return `Explain on hover: ${sent} sent, ${cancelled} cancelled before finishing`;
 }
 
 const TARGET_LABELS: Record<RoundTripTarget, string> = { github: 'GitHub', ollama: 'Ollama' };
@@ -792,7 +824,10 @@ export function createDebugWindow(root: HTMLElement, deps: DebugWindowDeps): Deb
     for (const id of groupViews.keys()) if (!groupIds.has(id)) groupViews.delete(id);
     empty.hidden = shown.length > 0;
     const trips = shown.reduce((n, g) => n + visibleRows(g).length, 0);
-    summary.textContent = `${trips} round trip${trips === 1 ? '' : 's'} in ${shown.length} group${shown.length === 1 ? '' : 's'}`;
+    const hover = formatHoverCounts(hoverCounts(entries.values()));
+    summary.textContent =
+      `${trips} round trip${trips === 1 ? '' : 's'} in ${shown.length} group${shown.length === 1 ? '' : 's'}` +
+      (hover ? ` · ${hover}` : '');
   };
 
   // --- Controls ---

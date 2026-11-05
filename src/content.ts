@@ -34,7 +34,13 @@ import { traceLine } from './trace/clickTrace';
 import { createFileContextLoader, headShaFromPage, type CodeSpan } from './fileContext';
 import { aheadLines, createPatchRequestLoader, describePatchResult } from './patchRequests';
 import type { FileContext } from './explain/explainPrompt';
-import { createPrefetcher, trackHoverSetting, type PrefetchEvent } from './prefetch';
+import {
+  createPrefetcher,
+  hoverWaitOf,
+  HOVER_WAIT_KEY,
+  trackHoverSetting,
+  type PrefetchEvent,
+} from './prefetch';
 import {
   createExplainAhead,
   trackAheadSetting,
@@ -49,6 +55,7 @@ import { installSelection } from './selection';
 import { createGithubFetch, createGithubRoundTrips } from './net/githubFetch';
 import { trackDebugSetting } from './debug/debugSetting';
 import { trackStreamSetting } from './streamSetting';
+import { trackSyncValue } from './syncFlag';
 
 // Every request the content script makes goes through this, and it only
 // reaches GitHub (PR 7.4). Each one is recorded as a round trip, so a click
@@ -206,6 +213,8 @@ function pingWorker(): void {
 
 // Loading a model can take longer than a normal request's timeout.
 const WARMUP_TIMEOUT_MS = 120_000;
+// Warm-ups this tab sent that have not answered yet.
+let warmupsRunning = 0;
 
 /**
  * Asks the service worker to load the model while the user reads the diffs,
@@ -216,9 +225,13 @@ const WARMUP_TIMEOUT_MS = 120_000;
 function warmUpModel(): void {
   const pr = prName(location.href);
   if (!pr || !showsDiffs(location.href) || enabled.current() !== true) return;
-  sendRequest('warmup', { pr, debugId: pageOpen.id }, { timeoutMs: WARMUP_TIMEOUT_MS }).catch(
-    () => {},
-  );
+  // Explain on hover waits until the model is loaded (PR 11.2).
+  warmupsRunning += 1;
+  sendRequest('warmup', { pr, debugId: pageOpen.id }, { timeoutMs: WARMUP_TIMEOUT_MS })
+    .catch(() => {})
+    .finally(() => {
+      warmupsRunning -= 1;
+    });
 }
 
 /**
@@ -417,6 +430,13 @@ const hoverSetting = trackHoverSetting(chrome.storage.sync, chrome.storage.onCha
   if (!on) prefetcher.cancel();
   reportPause();
 });
+// Hover wait (PR 11.2): how long the pointer rests on a line first.
+const hoverWait = trackSyncValue(
+  HOVER_WAIT_KEY,
+  chrome.storage.sync,
+  chrome.storage.onChanged,
+  hoverWaitOf,
+);
 function describePrefetch(event: PrefetchEvent): string {
   const seconds = 'elapsedMs' in event ? ` after ${(event.elapsedMs / 1000).toFixed(1)} s` : '';
   if (event.type === 'finished') {
@@ -499,8 +519,12 @@ const prefetcher = createPrefetcher({
   // The service worker's queue puts a hover ahead of the line explained ahead.
   explain: askWorker,
   isOn: () => hoverSetting.current(),
+  delayMs: () => hoverWait.current(),
   isEnabled: () => enabled.current() === true,
   isPaused: () => backgroundPause.paused(),
+  // Not while the model is still loading (PR 8.3), nor in a hidden tab (PR 11.2).
+  isWarmingUp: () => warmupsRunning > 0,
+  isHidden: () => document.visibilityState === 'hidden',
   // One request at a time: not while a click's answer is still coming, and
   // not while the chat is open (a click then goes to the chat).
   isBusy: () => {

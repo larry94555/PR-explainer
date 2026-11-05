@@ -2,7 +2,9 @@
 import {
   createDebugWindow,
   formatMs,
+  formatHoverCounts,
   formatQueueCounts,
+  hoverCounts,
   queueCounts,
   RECONNECT_MS,
   splitThinking,
@@ -315,6 +317,50 @@ describe('debug window (PR 9.4)', () => {
       '2 waiting · 1 running · 0 done · 0 cancelled',
     );
     expect(queueCounts([])).toEqual({ waiting: 0, running: 0, done: 0, cancelled: 0, failed: 0 });
+  });
+
+  it("counts Explain on hover's requests and those cancelled before they finished (PR 11.2)", () => {
+    const at = (type: QueueEvent['type'], label: string, priority: QueueEvent['priority']) => ({
+      id: nextId++,
+      kind: 'queue' as const,
+      group: 'q',
+      cause: 'queue' as const,
+      at: T0,
+      event: { type, label, priority, running: 0, waiting: 0 },
+    });
+    const events = [
+      // a: the pointer moved on while it ran.
+      at('queued', 'a', 'hovered'),
+      at('started', 'a', 'hovered'),
+      at('dropped', 'a', 'hovered'),
+      // b: the pointer moved on before it started.
+      at('queued', 'b', 'hovered'),
+      at('dropped', 'b', 'hovered'),
+      // c: finished, so its answer is in the cache.
+      at('queued', 'c', 'hovered'),
+      at('started', 'c', 'hovered'),
+      at('finished', 'c', 'hovered'),
+      // d: a click joined it, so it is the click's now.
+      at('queued', 'd', 'hovered'),
+      at('joined', 'd', 'click'),
+      // Explain ahead's own drops are not hover's.
+      at('queued', 'e', 'on-screen'),
+      at('dropped', 'e', 'on-screen'),
+    ];
+    expect(hoverCounts(events)).toEqual({ sent: 4, cancelled: 2 });
+    expect(formatHoverCounts(hoverCounts(events))).toBe(
+      'Explain on hover: 4 sent, 2 cancelled before finishing',
+    );
+    expect(formatHoverCounts({ sent: 0, cancelled: 0 })).toBe('');
+
+    // The window's summary line shows it, and only once a hover was sent.
+    const w = setup();
+    w.port().send({ type: 'snapshot', entries: events.slice(10), running: [] });
+    expect(w.q('.summary').textContent).toBe('0 round trips in 1 group');
+    w.port().send({ type: 'snapshot', entries: events, running: [] });
+    expect(w.q('.summary').textContent).toBe(
+      '0 round trips in 1 group · Explain on hover: 4 sent, 2 cancelled before finishing',
+    );
   });
 
   it('says how to fill it when the log is empty', () => {

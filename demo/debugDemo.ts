@@ -13,6 +13,8 @@
 // From PR 10.5 a second Queue group shows one job for a whole hunk: a click
 // on one of its lines waits for it and is answered from the cache, and the
 // line its answer left out comes back on its own.
+// From PR 11.2 a third Queue group shows Explain on hover passing over two
+// lines, each cancelled as the pointer moved on, and the summary counts them.
 // No extension APIs and no LLM. Add ?live=0 to the address to skip the live click.
 
 import '../src/debug/debugWindow.css';
@@ -328,6 +330,34 @@ const HUNK_QUEUE_ENTRIES: DebugEntry[] = HUNK_QUEUE_EVENTS.map(([ms, event]) => 
   event,
 }));
 
+// Explain on hover (PR 11.2): the pointer passed over two lines, each
+// stopped once it moved on, then rested on a third. The summary counts them.
+const hov = (
+  type: QueueEvent['type'],
+  n: number,
+  running: number,
+  extra: Partial<QueueEvent> = {},
+) => q(type, line(n), running, 0, { priority: 'hovered', ...extra });
+const HOVER_QUEUE_EVENTS: [number, QueueEvent][] = [
+  [0, hov('queued', 30, 0)],
+  [1, hov('started', 30, 1)],
+  [300, hov('dropped', 30, 0, { elapsedMs: 299 })],
+  [301, hov('queued', 31, 0)],
+  [302, hov('started', 31, 1)],
+  [600, hov('dropped', 31, 0, { elapsedMs: 298 })],
+  [601, hov('queued', 32, 0)],
+  [602, hov('started', 32, 1)],
+  [2_100, hov('finished', 32, 0, { elapsedMs: 1_498 })],
+];
+const HOVER_QUEUE_ENTRIES: DebugEntry[] = HOVER_QUEUE_EVENTS.map(([ms, event]) => ({
+  id: nextId++,
+  kind: 'queue',
+  group: 'queue-3',
+  cause: 'queue',
+  at: aheadAt + 16_000 + ms,
+  event,
+}));
+
 const ENTRIES: DebugEntry[] = [
   // The page reads the PR description as it opens (PR 9.7).
   rt(
@@ -480,6 +510,7 @@ const ENTRIES: DebugEntry[] = [
   ...AHEAD_ENTRIES,
   ...QUEUE_ENTRIES,
   ...HUNK_QUEUE_ENTRIES,
+  ...HOVER_QUEUE_ENTRIES,
   rt(
     'chat-1',
     'chat',
