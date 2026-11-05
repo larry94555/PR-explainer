@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { addMeasurement, type Measurement } from '../src/llm/speedTest';
 import { LlmError, type LlmClient, type ModelInfo } from '../src/llm/types';
 import { initOptionsPage, TEST_PROMPT, type OptionsPageDeps } from '../src/options/optionsPage';
 import {
@@ -51,8 +52,9 @@ function fakeClient(overrides: Partial<LlmClient> = {}): LlmClient {
 
 // Like the real saveSettings: rejects invalid fields, otherwise returns the
 // stored settings.
-function fakeDeps(client: LlmClient, saved: Settings = SAVED) {
+function fakeDeps(client: LlmClient, saved: Settings = SAVED, kept: Measurement[] = []) {
   let stored = { ...saved };
+  let measured = [...kept];
   const deps = {
     getSettings: vi.fn(async () => ({ ...stored })),
     saveSettings: vi.fn(async (update: Partial<Settings>) => {
@@ -65,6 +67,11 @@ function fakeDeps(client: LlmClient, saved: Settings = SAVED) {
     createClient: vi.fn<OptionsPageDeps['createClient']>(() => client),
     now: vi.fn().mockReturnValueOnce(1000).mockReturnValueOnce(1250),
     clearSavedAnswers: vi.fn<OptionsPageDeps['clearSavedAnswers']>(async () => {}),
+    loadMeasurements: vi.fn<OptionsPageDeps['loadMeasurements']>(async () => [...measured]),
+    saveMeasurement: vi.fn<OptionsPageDeps['saveMeasurement']>(async (m) => {
+      measured = addMeasurement(measured, m);
+      return [...measured];
+    }),
   } satisfies OptionsPageDeps;
   return deps;
 }
@@ -1133,5 +1140,216 @@ describe('options page Speed section (PR 8.6)', () => {
     await page.speedTest();
     expect(text('speed-status')).toContain('Could not list models.');
     expect(client.chat).not.toHaveBeenCalled();
+  });
+});
+
+describe('options page Make Ollama faster (PR 11.7)', () => {
+  const rows = () =>
+    [...$<HTMLTableElement>('measure-results').tBodies[0]!.rows].map((r) =>
+      [...r.cells].map((c) => c.textContent),
+    );
+  const commands = () =>
+    [...document.querySelectorAll('#faster-tips pre')].map((c) => c.textContent);
+
+  // The picked model answers after each of `times` in turn, on the page's clock.
+  function timedClient(times: number[], overrides: Partial<LlmClient> = {}) {
+    let t = 0;
+    const client = fakeClient({
+      chat: vi.fn(async (_messages, options) => {
+        t += times.shift()!;
+        return {
+          content: 'ok',
+          model: options.model,
+          timings: { answerTokens: 100, answerMs: 2000 },
+        };
+      }),
+      ...overrides,
+    });
+    return { client, now: () => t };
+  }
+
+  it('lists each setting with what it does and the Command Prompt line on Windows', async () => {
+    await initOptionsPage(document, { ...fakeDeps(fakeClient()), platform: 'windows' });
+
+    expect(text('faster-title')).toBe('Make Ollama faster');
+    expect(text('faster-shell')).toBe('In Command Prompt, run:');
+    expect(commands()).toEqual(['setx OLLAMA_FLASH_ATTENTION 1', 'setx OLLAMA_KV_CACHE_TYPE q8_0']);
+    const tips = [...document.querySelectorAll('#faster-tips li')].map((li) => li.textContent);
+    expect(tips[0]).toContain('flash attention');
+    expect(tips[1]).toContain('Works only with OLLAMA_FLASH_ATTENTION set to 1');
+    expect(text('faster-restart')).toContain('quit Ollama from its icon in the system tray');
+  });
+
+  it('gives the commands for macOS and Linux', async () => {
+    await initOptionsPage(document, { ...fakeDeps(fakeClient()), platform: 'mac' });
+    expect(commands()[0]).toBe('launchctl setenv OLLAMA_FLASH_ATTENTION 1');
+    expect(text('faster-restart')).toContain('menu bar');
+
+    document.documentElement.innerHTML = html;
+    await initOptionsPage(document, fakeDeps(fakeClient()));
+    expect(text('faster-shell')).toContain('sudo systemctl edit ollama.service');
+    expect(commands()[1]).toBe('Environment="OLLAMA_KV_CACHE_TYPE=q8_0"');
+    expect($('faster-restart').querySelector('code')?.textContent).toBe(
+      'sudo systemctl restart ollama',
+    );
+  });
+
+  it('is outside the form, so it is not a setting', () => {
+    expect($('settings-form').contains($('faster'))).toBe(false);
+  });
+
+  it('times only the picked model with Measure, saves the result and shows it', async () => {
+    const { client, now } = timedClient([3_200]);
+    const deps = { ...fakeDeps(client), now, clock: () => Date.UTC(2026, 10, 5, 14, 3) };
+    const page = await initOptionsPage(document, deps);
+    expect($('measure-results').hidden).toBe(true);
+
+    await page.measure();
+
+    expect(client.chat).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(client.chat).mock.calls[0]![1].model).toBe('qwen2.5-coder:7b');
+    // The picked model stays loaded, as it does after the Speed test.
+    expect(vi.mocked(client.chat).mock.calls[0]![1].keepAliveMinutes).toBe(30);
+    expect(deps.saveMeasurement).toHaveBeenCalledWith({
+      model: 'qwen2.5-coder:7b',
+      totalMs: 3_200,
+      tokensPerSecond: 50,
+      at: Date.UTC(2026, 10, 5, 14, 3),
+    });
+    expect(text('measure-status')).toBe('Measured qwen2.5-coder:7b. Saved.');
+    expect($('measure-results').hidden).toBe(false);
+    const [row] = rows();
+    expect(row![0]).toBe('Measured');
+    expect(row!.slice(2)).toEqual(['3.2 s', '50.0', '–']);
+    expect(text('measure-compare')).toBe('');
+  });
+
+  it('shows the second result next to the previous one, with how much faster it is', async () => {
+    const { client, now } = timedClient([3_200, 2_400]);
+    const page = await initOptionsPage(document, { ...fakeDeps(client), now });
+
+    await page.measure();
+    await page.measure();
+
+    expect(rows().map((r) => [r[0], r[2]])).toEqual([
+      ['Before', '3.2 s'],
+      ['Latest', '2.4 s'],
+    ]);
+    expect(text('measure-compare')).toBe('0.8 s faster than before (25% less time).');
+    expect($('measure-compare').className).toBe('faster');
+  });
+
+  it('shows the saved results when the page opens, and those of the model picked', async () => {
+    const kept: Measurement[] = [
+      { model: 'qwen2.5-coder:7b', totalMs: 4_000, at: 1 },
+      { model: 'qwen2.5-coder:7b', totalMs: 5_000, at: 2, processor: '100% CPU' },
+      { model: 'llama3.2:3b', totalMs: 1_000, at: 3 },
+    ];
+    await initOptionsPage(document, fakeDeps(fakeClient(), SAVED, kept));
+    expect(rows().map((r) => [r[0], r[2], r[4]])).toEqual([
+      ['Before', '4.0 s', '–'],
+      ['Latest', '5.0 s', '100% CPU'],
+    ]);
+    expect(text('measure-compare')).toBe('1.0 s slower than before (25% more time).');
+
+    $<HTMLSelectElement>('model').value = 'llama3.2:3b';
+    $('model').dispatchEvent(new Event('change'));
+    expect(rows().map((r) => [r[0], r[2]])).toEqual([['Measured', '1.0 s']]);
+    expect(text('measure-compare')).toBe('');
+  });
+
+  it('shows the results of the model picked with Use this model (review on #76)', async () => {
+    const kept: Measurement[] = [
+      { model: 'qwen2.5-coder:7b', totalMs: 9_000, at: 1 },
+      { model: 'qwen2.5-coder:7b', totalMs: 8_000, at: 2 },
+      { model: 'qwen2.5-coder:3b', totalMs: 3_000, at: 3 },
+    ];
+    let t = 0;
+    const times: Record<string, number> = { 'qwen2.5-coder:7b': 8_000, 'qwen2.5-coder:3b': 3_000 };
+    const client = fakeClient({
+      listModels: vi.fn(async () => Object.keys(times).map((name) => ({ name }))),
+      chat: vi.fn(async (_messages, options) => {
+        t += times[options.model]!;
+        return { content: 'ok', model: options.model };
+      }),
+    });
+    const page = await initOptionsPage(document, {
+      ...fakeDeps(client, SAVED, kept),
+      now: () => t,
+    });
+    expect(rows().map((r) => r[0])).toEqual(['Before', 'Latest']);
+    await page.speedTest();
+
+    [...$('speed-results').querySelectorAll<HTMLButtonElement>('button')]
+      .find((b) => b.textContent === 'Use this model')!
+      .click();
+
+    await vi.waitFor(() => expect($<HTMLSelectElement>('model').value).toBe('qwen2.5-coder:3b'));
+    expect(rows().map((r) => [r[0], r[2]])).toEqual([['Measured', '3.0 s']]);
+    expect(text('measure-compare')).toBe('');
+  });
+
+  it('saves nothing when the model fails, and says why', async () => {
+    const chat = vi.fn(async () => {
+      throw new LlmError('http', 'model requires more system memory');
+    });
+    const deps = fakeDeps(fakeClient({ chat }));
+    const page = await initOptionsPage(document, deps);
+
+    await page.measure();
+
+    expect(deps.saveMeasurement).not.toHaveBeenCalled();
+    expect(text('measure-status')).toBe(
+      'Could not time qwen2.5-coder:7b: model requires more system memory',
+    );
+    expect($('measure-results').hidden).toBe(true);
+  });
+
+  it('asks for a model before measuring', async () => {
+    const client = fakeClient();
+    const page = await initOptionsPage(document, fakeDeps(client, { ...SAVED, model: '' }));
+    await page.measure();
+    expect(text('measure-status')).toBe('Choose a model first.');
+    expect(client.chat).not.toHaveBeenCalled();
+  });
+
+  it('shows the result even when saving it fails', async () => {
+    const { client, now } = timedClient([3_000]);
+    const deps = {
+      ...fakeDeps(client),
+      now,
+      saveMeasurement: vi.fn(async () => {
+        throw new Error('quota');
+      }),
+    };
+    const page = await initOptionsPage(document, deps);
+    await page.measure();
+    expect(text('measure-status')).toBe('Measured qwen2.5-coder:7b, but could not save it: quota');
+    expect(rows()).toHaveLength(1);
+  });
+
+  it('does not measure while the Speed test runs', async () => {
+    let finish!: () => void;
+    const chat = vi.fn(
+      (_messages: unknown, options: { model: string }) =>
+        new Promise<{ content: string; model: string }>((resolve) => {
+          finish = () => resolve({ content: 'ok', model: options.model });
+        }),
+    );
+    const client = fakeClient({
+      listModels: vi.fn(async () => [{ name: 'qwen2.5-coder:7b' }]),
+      chat,
+    });
+    const page = await initOptionsPage(document, fakeDeps(client));
+
+    const running = page.speedTest();
+    await vi.waitFor(() => expect(chat).toHaveBeenCalledTimes(1));
+    expect($<HTMLButtonElement>('measure').disabled).toBe(true);
+    await page.measure();
+    expect(chat).toHaveBeenCalledTimes(1);
+
+    finish();
+    await running;
+    expect($<HTMLButtonElement>('measure').disabled).toBe(false);
   });
 });

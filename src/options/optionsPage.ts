@@ -13,7 +13,10 @@
 // questions, "Same as explanations" by default, with a note on the memory two
 // loaded models need when another one is picked. Keep answers for (PR 10.9)
 // sets how long answers are kept after Chrome closes, and Clear saved answers
-// asks the service worker to empty them.
+// asks the service worker to empty them. Make Ollama faster (PR 11.7) lists
+// Ollama settings that can speed it up, with the command for this computer,
+// and its Measure button times the picked model and keeps the result, so a
+// time from after a change shows next to the one from before.
 //
 // All page logic lives here and takes its dependencies as parameters, so the
 // tests can run it against options.html in jsdom with fakes. main.ts wires in
@@ -29,12 +32,17 @@ import { describeLlmError, type ErrorContext, type Platform } from '../llm/descr
 import { gpuStatus } from '../llm/gpuStatus';
 import { MIN_NUM_CTX } from '../llm/numCtx';
 import {
+  compareMeasurements,
   fastestUnderGoal,
+  measurementFrom,
+  measurementsFor,
   rankResults,
   runSpeedTest,
   speedTestModels,
+  type Measurement,
   type SpeedResult,
 } from '../llm/speedTest';
+import { commandShell, restartStep, setCommand, SPEED_TIPS } from '../llm/speedTips';
 import { thinkOption } from '../llm/contextSize';
 import {
   LATENCY_GOAL_MS,
@@ -66,6 +74,12 @@ export interface OptionsPageDeps {
    * in the service worker, which owns both.
    */
   clearSavedAnswers(): Promise<void>;
+  /** The saved Measure results, oldest first (PR 11.7). */
+  loadMeasurements(): Promise<Measurement[]>;
+  /** Saves one Measure result and returns the list as now kept. */
+  saveMeasurement(measurement: Measurement): Promise<Measurement[]>;
+  /** The time of a measurement, in milliseconds since 1970. Defaults to Date.now. */
+  clock?: () => number;
 }
 
 export const TEST_PROMPT = 'Reply with OK';
@@ -88,6 +102,8 @@ export interface OptionsPage {
   stopSpeedTest(): void;
   /** Clear saved answers (PR 10.9). */
   clearSavedAnswers(): Promise<void>;
+  /** Times the picked model and saves the result (PR 11.7). */
+  measure(): Promise<void>;
 }
 
 function el<T extends HTMLElement>(doc: Document, id: string): T {
@@ -134,6 +150,10 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const stopButton = el<HTMLButtonElement>(doc, 'speed-stop');
   const speedStatus = el(doc, 'speed-status');
   const speedTable = el<HTMLTableElement>(doc, 'speed-results');
+  const measureButton = el<HTMLButtonElement>(doc, 'measure');
+  const measureStatus = el(doc, 'measure-status');
+  const measureTable = el<HTMLTableElement>(doc, 'measure-results');
+  const measureCompare = el(doc, 'measure-compare');
 
   // --- Reading and writing the form ---
 
@@ -495,6 +515,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     modelSelect.value = model;
     speedStatus.textContent = `Now using ${model}. Saved.`;
     showResults(lastResults);
+    showMeasurements();
     if (saved.keepAliveMinutes > 0) {
       try {
         await deps.createClient(saved).loadModel(model, {
@@ -555,6 +576,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     const run = new AbortController();
     speedRun = run;
     speedButton.disabled = true;
+    measureButton.disabled = true;
     stopButton.hidden = false;
     showResults([], false);
     speedStatus.textContent = 'Listing models…';
@@ -607,7 +629,113 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     } finally {
       speedRun = null;
       speedButton.disabled = false;
+      measureButton.disabled = false;
       stopButton.hidden = true;
+    }
+    await checkGpu();
+  }
+
+  // --- Make Ollama faster (PR 11.7) ---
+
+  const platform = deps.platform ?? 'other';
+  el(doc, 'faster-shell').replaceChildren(...withCode(doc, commandShell(platform)));
+  el(doc, 'faster-tips').replaceChildren(
+    ...SPEED_TIPS.map((tip) => {
+      const item = doc.createElement('li');
+      const name = doc.createElement('strong');
+      name.textContent = `${tip.name}=${tip.value}`;
+      const pre = doc.createElement('pre');
+      const code = doc.createElement('code');
+      code.textContent = setCommand(tip, platform);
+      pre.append(code);
+      item.append(name, ` ${tip.what}`, pre);
+      return item;
+    }),
+  );
+  el(doc, 'faster-restart').replaceChildren(...withCode(doc, restartStep(platform)));
+
+  let measurements: Measurement[] = [];
+  let measuring = false;
+
+  // The model's time before and its latest time, side by side, and how they compare.
+  function showMeasurements(): void {
+    const { previous, latest } = measurementsFor(measurements, modelSelect.value);
+    const rows = [
+      ...(previous ? [measurementRow('Before', previous)] : []),
+      ...(latest ? [measurementRow(previous ? 'Latest' : 'Measured', latest)] : []),
+    ];
+    measureTable.tBodies[0]!.replaceChildren(...rows);
+    measureTable.hidden = rows.length === 0;
+    const comparison = previous && latest ? compareMeasurements(previous, latest) : undefined;
+    measureCompare.textContent = comparison?.text ?? '';
+    measureCompare.className = comparison?.kind ?? '';
+  }
+
+  function measurementRow(label: string, m: Measurement): HTMLTableRowElement {
+    const row = doc.createElement('tr');
+    const head = doc.createElement('th');
+    head.scope = 'row';
+    head.textContent = label;
+    row.append(
+      head,
+      cell(doc, formatWhen(m.at)),
+      cell(doc, `${(m.totalMs / 1000).toFixed(1)} s`, 'num'),
+      cell(doc, m.tokensPerSecond?.toFixed(1) ?? '–', 'num'),
+      cell(doc, m.processor ?? '–'),
+    );
+    return row;
+  }
+
+  async function measure(): Promise<void> {
+    if (measuring || speedRun) return;
+    const values = validForm([
+      'llmUrl',
+      'temperature',
+      'maxResponseTokens',
+      'contextTokens',
+      'keepAliveMinutes',
+    ]);
+    if (!values) {
+      measureStatus.textContent = 'Fix the problems above, then try again.';
+      return;
+    }
+    if (!values.model) {
+      measureStatus.textContent = 'Choose a model first.';
+      return;
+    }
+    measuring = true;
+    measureButton.disabled = true;
+    speedButton.disabled = true;
+    measureStatus.textContent = `Timing ${values.model}…`;
+    try {
+      const [result] = await runSpeedTest({
+        client: deps.createClient(values),
+        models: [values.model],
+        current: values.model,
+        temperature: values.temperature,
+        maxResponseTokens: values.maxResponseTokens,
+        keepAliveMinutes: values.keepAliveMinutes,
+        contextTokens: values.contextTokens,
+        now,
+      });
+      const measurement = result && measurementFrom(result, (deps.clock ?? Date.now)());
+      if (!measurement) {
+        const why = result?.status === 'failed' ? result.message : 'It was stopped.';
+        measureStatus.textContent = `Could not time ${values.model}: ${why}`;
+        return;
+      }
+      try {
+        measurements = await deps.saveMeasurement(measurement);
+        measureStatus.textContent = `Measured ${values.model}. Saved.`;
+      } catch (error) {
+        measurements = [...measurements, measurement];
+        measureStatus.textContent = `Measured ${values.model}, but could not save it: ${errorMessage(error)}`;
+      }
+      showMeasurements();
+    } finally {
+      measuring = false;
+      measureButton.disabled = false;
+      speedButton.disabled = false;
     }
     await checkGpu();
   }
@@ -626,6 +754,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   testButton.addEventListener('click', () => void testConnection());
   modelSelect.addEventListener('change', () => {
     showResults(lastResults);
+    showMeasurements();
     showChatModelNote();
     void checkGpu();
     void checkThinking();
@@ -634,6 +763,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   thinkInput.addEventListener('change', () => void checkThinking());
   speedButton.addEventListener('click', () => void speedTest());
   stopButton.addEventListener('click', stopSpeedTest);
+  measureButton.addEventListener('click', () => void measure());
   clearButton.addEventListener('click', () => void clearSavedAnswers());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -649,6 +779,12 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   }
   fillForm(settings);
   await refreshModels();
+  try {
+    measurements = await deps.loadMeasurements();
+  } catch {
+    measurements = [];
+  }
+  showMeasurements();
 
   return {
     refreshModels,
@@ -659,6 +795,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     speedTest,
     stopSpeedTest,
     clearSavedAnswers,
+    measure,
   };
 }
 
@@ -729,6 +866,16 @@ function cell(doc: Document, text: string, className?: string): HTMLTableCellEle
   td.textContent = text;
   if (className) td.className = className;
   return td;
+}
+
+// "Nov 5, 14:03": enough to tell a before from an after.
+function formatWhen(at: number): string {
+  return new Date(at).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function errorMessage(error: unknown): string {

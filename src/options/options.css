@@ -135,6 +135,37 @@ label.check {
   margin: 0.5rem 0 0;
 }
 
+/* Make Ollama faster (PR 11.7): each setting, what it does, and its command. */
+.tips {
+  margin: 0.5rem 0;
+  padding-left: 1.2rem;
+}
+
+.tips li {
+  margin-bottom: 0.6rem;
+}
+
+.tips pre {
+  margin: 0.3rem 0 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.tips pre code {
+  padding: 0;
+  background: none;
+}
+
+#measure-compare.faster {
+  color: #1a7f37;
+}
+
+#measure-compare.slower {
+  color: #9a6700;
+}
+
 .speed table {
   width: 100%;
   margin-top: 0.75rem;
@@ -191,8 +222,13 @@ label.check {
     color: CanvasText;
   }
 
-  .gpu-ok {
+  .gpu-ok,
+  #measure-compare.faster {
     color: #3fb950;
+  }
+
+  #measure-compare.slower {
+    color: #d29922;
   }
 
   .gpu-warn,

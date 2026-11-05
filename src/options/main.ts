@@ -2,6 +2,7 @@
 // chrome.storage settings and the Ollama client.
 import { createLlmClient } from '../llm/createClient';
 import { detectPlatform } from '../llm/describeLlmError';
+import { loadMeasurements, saveMeasurement } from '../llm/speedTest';
 import { getSettings, saveSettings } from '../settings';
 import { initOptionsPage } from './optionsPage';
 
@@ -10,6 +11,8 @@ void initOptionsPage(document, {
   saveSettings: (update) => saveSettings(update),
   createClient: (settings) => createLlmClient(settings),
   platform: detectPlatform(navigator.userAgent),
+  loadMeasurements: () => loadMeasurements(chrome.storage.local),
+  saveMeasurement: (measurement) => saveMeasurement(chrome.storage.local, measurement),
   // The service worker owns the caches (PR 10.9). This talks to it with
   // chrome.runtime directly, not src/messaging/client.ts, which the content
   // script imports: code shared with it must not end up in a chunk.

@@ -165,3 +165,25 @@ Added by hand after the run, from the tables below.
 | Go line | 3 | 53.3 s | 54.2 s | 43.9 s | 660 ms | 392 | 300 | 6.6 |
 | Rust selection | 3 | 53.5 s | 57.7 s | – | 693 ms | 440 | 300 | 6.3 |
 | **All samples** | 15 | 53.3 s | 86.4 s | 40.3 s | 657 ms | 440 | 300 | 6.4 |
+
+## Ollama settings (11.7)
+
+Ollama reads a few settings when it starts that can make answers faster on a laptop. The settings page lists them under **Make Ollama faster**, with the line that sets each one on this computer, and its **Measure** button times one short explanation on the picked model (already loaded, as the Speed test does) and keeps the result, so a time from after a change is shown next to the one from before.
+
+| Setting | What it does |
+| --- | --- |
+| `OLLAMA_FLASH_ATTENTION=1` | A faster way to read the prompt that also needs less memory. Models that do not support it ignore it. |
+| `OLLAMA_KV_CACHE_TYPE=q8_0` | Keeps the context cache in 8 bits instead of 16, about half the memory, so more of the model can fit on the GPU. Needs flash attention. |
+
+How to measure on Windows: click **Measure**, run `setx OLLAMA_FLASH_ATTENTION 1` and `setx OLLAMA_KV_CACHE_TYPE q8_0` in Command Prompt, quit Ollama from its tray icon and start it again, then click **Measure** again. To undo, run `reg delete HKCU\Environment /v OLLAMA_FLASH_ATTENTION /f` (and the same for `OLLAMA_KV_CACHE_TYPE`) and start Ollama again.
+
+What to expect: both settings mostly speed up reading the prompt and save memory. On a model that runs fully on the CPU, where writing the answer is nearly all of the time (see the notes above), the gain is small, often within run-to-run noise, which **Measure** calls "about the same". The larger gain is when the smaller cache lets a model that was partly on the CPU fit fully on the GPU, which the **Runs on** column shows.
+
+### Before and after on this laptop
+
+| Model | Before | After both settings | Runs on (before → after) |
+| --- | ---: | ---: | --- |
+| _not measured yet_ | | | |
+
+These numbers come from the settings page on the laptop the earlier sections ran on, and are added by hand after a run, as the notes above were.
+
