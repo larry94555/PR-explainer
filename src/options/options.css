@@ -224,6 +224,17 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+.speed td.liked {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.speed td.liked .kind {
+  display: block;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
 .speed tr.pick {
   background: color-mix(in srgb, #1a7f37 14%, transparent);
 }

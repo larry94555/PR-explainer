@@ -3,6 +3,7 @@
 import { createLlmClient } from '../llm/createClient';
 import { detectPlatform } from '../llm/describeLlmError';
 import { loadMeasurements, saveMeasurement } from '../llm/speedTest';
+import { parseRatings, RATINGS_KEY } from '../ratings';
 import { getSettings, saveSettings } from '../settings';
 import { initOptionsPage } from './optionsPage';
 import { initShortcuts } from './shortcuts';
@@ -30,6 +31,16 @@ void initOptionsPage(document, {
   clearSavedAnswers: () => askWorker('clearSavedAnswers'),
   // The service worker owns the ratings too (PR 11.11).
   clearRatings: () => askWorker('clearRatings'),
+  // Reading needs no queue, so the page reads the ratings itself (PR 11.12).
+  loadRatings: async () =>
+    parseRatings((await chrome.storage.local.get([RATINGS_KEY]))[RATINGS_KEY]),
+  saveFile: (name, text) => {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const link = Object.assign(document.createElement('a'), { href: url, download: name });
+    link.click();
+    // Chrome has started the download by the time the click returns.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
 });
 
 // Keyboard shortcuts (PR 11.9): the keys Chrome gave the commands, and a

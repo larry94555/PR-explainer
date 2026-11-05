@@ -14,6 +14,7 @@ import {
   formatDate,
   formatGpuShare,
   formatMs,
+  formatLikedTable,
   formatReport,
   formatRuns,
   formatShare,
@@ -49,6 +50,8 @@ import {
   type LevelSummary,
   type TimedRun,
 } from '../scripts/benchStats.ts';
+import { parseSection } from '../scripts/latencyReport.ts';
+import type { Rating } from '../src/ratings';
 import { buildFittedExplainPrompt } from '../src/explain/fitPrompt';
 import { toFileContext } from '../src/explain/explainHandler';
 import { FALLBACK_CONTEXT_TOKENS, promptBudget } from '../src/llm/contextSize';
@@ -279,6 +282,80 @@ describe('formatReport', () => {
     expect(text).toContain('1 run per sample');
     expect(text).toContain('### m\n');
     expect(text).not.toContain('Failed runs');
+  });
+});
+
+describe('the Liked column (PR 11.12)', () => {
+  const model = (name: string, ms: number[]) => ({
+    model: name,
+    rows: [{ sample: 'Short line', runs: ms.map((t) => ok(t)) }],
+  });
+  const rating = (id: number, model: string, up: boolean, kind: Rating['kind']): Rating => ({
+    id: `r${id}`,
+    rating: up ? 'up' : 'down',
+    model,
+    kind,
+    length: 100,
+    elapsedMs: 900,
+    ratedAt: id,
+  });
+  const ratings = [
+    ...[...Array(10)].map((_, i) => rating(i, 'qwen2.5-coder:7b', i < 8, 'click')),
+    ...[...Array(3)].map((_, i) => rating(20 + i, 'qwen2.5-coder:7b', true, 'hunk')),
+    rating(30, 'qwen2.5-coder:1.5b', false, 'chat'),
+  ];
+
+  it('puts the median of each model next to its share of 👍, overall and by kind', () => {
+    expect(
+      formatLikedTable(
+        [model('qwen2.5-coder:7b', [3000]), model('qwen2.5-coder:1.5b', [800])],
+        ratings,
+      ),
+    ).toBe(
+      [
+        '| Model | Median | Liked | Line | Whole hunk | Chat |',
+        '| --- | ---: | ---: | ---: | ---: | ---: |',
+        '| qwen2.5-coder:7b | 3.0 s | 85% (13) | 80% (10) | – (3) | – |',
+        '| qwen2.5-coder:1.5b | 800 ms | – (1) | – | – | – (1) |',
+      ].join('\n'),
+    );
+  });
+
+  it('adds the table to the section only when a ratings file was read', () => {
+    const base: BenchReport = {
+      startedAt: new Date(2026, 10, 5, 7, 0),
+      machine: { os: 'Windows 11', cpu: 'CPU', ramBytes: 16 * 1024 ** 3, gpus: [] },
+      llmUrl: 'http://localhost:11434',
+      runsPerSample: 1,
+      temperature: 0.2,
+      maxResponseTokens: 256,
+      models: [model('qwen2.5-coder:7b', [3000])],
+    };
+    expect(formatReport(base)).not.toContain('Liked');
+    const text = formatReport({
+      ...base,
+      ratings: { file: 'pr-explainer-ratings-2026-11-05.json', list: ratings },
+    });
+    expect(text).toContain(
+      '- **Ratings:** 14 from pr-explainer-ratings-2026-11-05.json; Liked is the share given 👍, ' +
+        'with the number of ratings, and – under 10\n\n| Model | Median | Liked |',
+    );
+    expect(text).toContain('| qwen2.5-coder:7b | 3.0 s | 85% (13) |');
+    // npm run bench:history still reads the section as before.
+    expect(parseSection(text)).toEqual(parseSection(formatReport(base)));
+    expect(parseSection(text).map((r) => r.model)).toEqual(['qwen2.5-coder:7b']);
+  });
+
+  it('reads --ratings, only with the plain timing run', () => {
+    expect(parseBenchArgs(['m', '--ratings', 'r.json'])).toMatchObject({ ratings: 'r.json' });
+    expect(parseBenchArgs(['--ratings=C:\\Users\\me\\r.json']).ratings).toBe(
+      'C:\\Users\\me\\r.json',
+    );
+    expect(parseBenchArgs(['m'])).not.toHaveProperty('ratings');
+    expect(() => parseBenchArgs(['--ratings'])).toThrow('--ratings needs a value');
+    expect(() => parseBenchArgs(['--ratings', 'r.json', '--ahead'])).toThrow(
+      '--ratings goes with the plain timing run',
+    );
   });
 });
 

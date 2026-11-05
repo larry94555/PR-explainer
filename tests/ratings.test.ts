@@ -1,9 +1,19 @@
 import {
   applyRating,
   createRatings,
+  formatLiked,
+  formatLikedByKind,
+  KIND_GROUPS,
+  likedShare,
   MAX_RATINGS,
+  MIN_RATINGS_FOR_SHARE,
+  modelLiked,
   parseRatings,
+  parseRatingsExport,
   RATINGS_KEY,
+  ratingsExport,
+  ratingsFileName,
+  sameModel,
   toRating,
   type Rating,
   type RatingStorage,
@@ -191,5 +201,114 @@ describe('createRatings', () => {
     await ratings.clear();
     expect(storage.data[RATINGS_KEY]).toEqual([]);
     expect(await ratings.list()).toEqual([]);
+  });
+});
+
+describe('how often answers were liked (PR 11.12)', () => {
+  let n = 0;
+  const rated = (
+    model: string,
+    up: number,
+    down: number,
+    kind: Rating['kind'] = 'click',
+  ): Rating[] =>
+    [...Array(up + down)].map((_, i) => ({
+      id: `r${n++}`,
+      rating: i < up ? 'up' : 'down',
+      model,
+      kind,
+      length: 100,
+      elapsedMs: 900,
+      ratedAt: n,
+    }));
+
+  const list = [
+    ...rated('qwen2.5-coder:7b', 6, 2, 'click'),
+    ...rated('qwen2.5-coder:7b', 1, 1, 'hover'),
+    ...rated('qwen2.5-coder:7b', 1, 0, 'ahead'),
+    ...rated('qwen2.5-coder:7b', 1, 3, 'hunk'),
+    ...rated('qwen2.5-coder:7b', 2, 0, 'chat'),
+    ...rated('qwen2.5-coder:1.5b', 3, 1),
+  ];
+
+  it('counts the 👍 for one model, of every kind or of some', () => {
+    expect(likedShare(list, 'qwen2.5-coder:7b')).toEqual({ liked: 11, total: 17 });
+    expect(likedShare(list, 'qwen2.5-coder:7b', ['hunk'])).toEqual({ liked: 1, total: 4 });
+    expect(likedShare(list, 'qwen2.5-coder:1.5b')).toEqual({ liked: 3, total: 4 });
+    expect(likedShare(list, 'llama3.2:3b')).toEqual({ liked: 0, total: 0 });
+    expect(likedShare([], 'qwen2.5-coder:7b')).toEqual({ liked: 0, total: 0 });
+  });
+
+  it('splits by kind, with click, hover and ahead counted as one line', () => {
+    expect(KIND_GROUPS.map((k) => k.label)).toEqual(['Line', 'Whole hunk', 'Chat']);
+    expect(modelLiked(list, 'qwen2.5-coder:7b')).toEqual({
+      all: { liked: 11, total: 17 },
+      byKind: [
+        { label: 'Line', share: { liked: 8, total: 11 } },
+        { label: 'Whole hunk', share: { liked: 1, total: 4 } },
+        { label: 'Chat', share: { liked: 2, total: 2 } },
+      ],
+    });
+    // Kinds with no ratings are left out.
+    expect(modelLiked(list, 'qwen2.5-coder:1.5b').byKind).toEqual([
+      { label: 'Line', share: { liked: 3, total: 4 } },
+    ]);
+  });
+
+  it(`shows the share from ${MIN_RATINGS_FOR_SHARE} ratings, and a dash with the count under that`, () => {
+    expect(MIN_RATINGS_FOR_SHARE).toBe(10);
+    expect(formatLiked({ liked: 0, total: 0 })).toBe('–');
+    expect(formatLiked({ liked: 9, total: 9 })).toBe('– (9)');
+    expect(formatLiked({ liked: 7, total: 10 })).toBe('70% (10)');
+    expect(formatLiked({ liked: 11, total: 17 })).toBe('65% (17)');
+    expect(formatLiked({ liked: 0, total: 12 })).toBe('0% (12)');
+    expect(formatLikedByKind(modelLiked(list, 'qwen2.5-coder:7b'))).toBe(
+      'Line 73% (11) · Whole hunk – (4) · Chat – (2)',
+    );
+  });
+
+  it('treats a model name without a tag as its :latest', () => {
+    expect(sameModel('llama3', 'llama3:latest')).toBe(true);
+    expect(sameModel('llama3:latest', 'llama3')).toBe(true);
+    expect(sameModel('llama3:8b', 'llama3')).toBe(false);
+    expect(likedShare(rated('llama3', 2, 0), 'llama3:latest')).toEqual({ liked: 2, total: 2 });
+  });
+});
+
+describe('Export ratings (PR 11.12)', () => {
+  const now = new Date(Date.UTC(2026, 10, 5, 7, 0));
+  const saved = [toRating(update())!, toRating(update({ id: 'answer-2', rating: 'down' }))!];
+
+  it('names the file by the date', () => {
+    expect(ratingsFileName(now)).toBe('pr-explainer-ratings-2026-11-05.json');
+  });
+
+  it('saves the ratings with what the file is, and reads them back', () => {
+    const file = ratingsExport(saved, now);
+    expect(file).toEqual({
+      app: 'pr-explainer',
+      kind: 'ratings',
+      version: 1,
+      exportedAt: '2026-11-05T07:00:00.000Z',
+      ratings: saved,
+    });
+    expect(parseRatingsExport(JSON.parse(JSON.stringify(file)))).toEqual(saved);
+  });
+
+  it('holds only the rating fields, never an answer', () => {
+    const withText = { ...saved[0]!, answer: 'secret', code: 'const x = 1;' } as Rating;
+    const text = JSON.stringify(ratingsExport([withText], now));
+    expect(text).not.toContain('secret');
+    expect(text).not.toContain('const x');
+  });
+
+  it('reads a bare list too, leaving out ratings that are not valid', () => {
+    expect(parseRatingsExport([saved[0], { id: 'x', rating: 'meh' }])).toEqual([saved[0]]);
+  });
+
+  it('refuses a file that is not a ratings file', () => {
+    for (const bad of [null, 3, 'text', { answers: [] }]) {
+      expect(() => parseRatingsExport(bad)).toThrow('This is not a ratings file.');
+    }
   });
 });

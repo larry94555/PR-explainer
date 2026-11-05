@@ -1,7 +1,9 @@
 // Answer ratings (PR 11.11): a 👍 or 👎 on a finished answer, kept in
 // chrome.storage.local under `ratings` as a local, private record of how good
-// the answers were, to set against the speed numbers (PR 11.12 shows them
-// next to the Speed test).
+// the answers were, to set against the speed numbers. PR 11.12 shows the
+// share of 👍 for each model next to its Speed test time (likedShare and
+// formatLiked below), and Export ratings saves them as a file that
+// `npm run bench -- --ratings <file>` reads.
 //
 // A rating says which model wrote the answer, what kind of answer it was
 // (src/explain's click, hover, ahead or whole hunk; chat is kept for the
@@ -132,4 +134,124 @@ export function createRatings(storage: RatingStorage): Ratings {
     list: () => queued(list),
     clear: () => queued(() => storage.set({ [RATINGS_KEY]: [] })),
   };
+}
+
+// --- How often each model's answers were liked (PR 11.12) ---
+
+/** How many of a model's rated answers got 👍, out of how many were rated. */
+export interface LikedShare {
+  liked: number;
+  total: number;
+}
+
+/** Below this many ratings the share is too rough to show, so it is a dash. */
+export const MIN_RATINGS_FOR_SHARE = 10;
+
+/**
+ * The kinds the Speed test and the bench report split the share by. Click,
+ * hover and Explain ahead all write the same one-line answer, so they count
+ * as one: Line.
+ */
+export const KIND_GROUPS: readonly { label: string; kinds: readonly AnswerKind[] }[] = [
+  { label: 'Line', kinds: ['click', 'hover', 'ahead'] },
+  { label: 'Whole hunk', kinds: ['hunk'] },
+  { label: 'Chat', kinds: ['chat'] },
+];
+
+/**
+ * Whether two model names are the same model: Ollama adds ":latest" to a name
+ * given without a tag, so "llama3" and "llama3:latest" are one model. (The
+ * same rule as isSameModel in src/llm/types.ts, kept here so `npm run bench`
+ * can load this file on its own.)
+ */
+export function sameModel(a: string, b: string): boolean {
+  return a === b || a === `${b}:latest` || b === `${a}:latest`;
+}
+
+/** The share of 👍 among `model`'s ratings, of the given kinds or of every kind. */
+export function likedShare(
+  ratings: readonly Rating[],
+  model: string,
+  kinds?: readonly AnswerKind[],
+): LikedShare {
+  let liked = 0;
+  let total = 0;
+  for (const r of ratings) {
+    if (!sameModel(r.model, model) || (kinds && !kinds.includes(r.kind))) continue;
+    total++;
+    if (r.rating === 'up') liked++;
+  }
+  return { liked, total };
+}
+
+/** A model's share overall and for each kind group that has ratings. */
+export interface ModelLiked {
+  all: LikedShare;
+  byKind: { label: string; share: LikedShare }[];
+}
+
+export function modelLiked(ratings: readonly Rating[], model: string): ModelLiked {
+  return {
+    all: likedShare(ratings, model),
+    byKind: KIND_GROUPS.map(({ label, kinds }) => ({
+      label,
+      share: likedShare(ratings, model, kinds),
+    })).filter((k) => k.share.total > 0),
+  };
+}
+
+/**
+ * "80% (12)": the share of 👍 and the number of ratings. Under
+ * MIN_RATINGS_FOR_SHARE it is "– (4)", and "–" with none.
+ */
+export function formatLiked({ liked, total }: LikedShare): string {
+  if (total === 0) return '–';
+  if (total < MIN_RATINGS_FOR_SHARE) return `– (${total})`;
+  return `${Math.round((liked / total) * 100)}% (${total})`;
+}
+
+/** "Line 75% (8) · Whole hunk – (4)": the share for each kind that has ratings. */
+export function formatLikedByKind(liked: ModelLiked): string {
+  return liked.byKind.map((k) => `${k.label} ${formatLiked(k.share)}`).join(' · ');
+}
+
+// --- Export ratings (PR 11.12) ---
+
+/** What Export ratings saves, and what `npm run bench -- --ratings <file>` reads. */
+export interface RatingsExport {
+  app: 'pr-explainer';
+  kind: 'ratings';
+  version: 1;
+  exportedAt: string;
+  ratings: Rating[];
+}
+
+export function ratingsExport(ratings: readonly Rating[], now: Date): RatingsExport {
+  return {
+    app: 'pr-explainer',
+    kind: 'ratings',
+    version: 1,
+    exportedAt: now.toISOString(),
+    ratings: parseRatings(ratings),
+  };
+}
+
+/** The file name Export ratings suggests, such as pr-explainer-ratings-2026-11-05.json. */
+export function ratingsFileName(now: Date): string {
+  return `pr-explainer-ratings-${now.toISOString().slice(0, 10)}.json`;
+}
+
+/**
+ * The ratings in an exported file (or a bare list of ratings), leaving out
+ * any that are not valid. Throws when it is neither.
+ */
+export function parseRatingsExport(value: unknown): Rating[] {
+  if (Array.isArray(value)) return parseRatings(value);
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as RatingsExport).ratings)
+  )
+    return parseRatings((value as RatingsExport).ratings);
+  throw new Error('This is not a ratings file. Save one with Export ratings on the settings page.');
 }

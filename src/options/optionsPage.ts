@@ -16,7 +16,10 @@
 // asks the service worker to empty them. Make Ollama faster (PR 11.7) lists
 // Ollama settings that can speed it up, with the command for this computer,
 // and its Measure button times the picked model and keeps the result, so a
-// time from after a change shows next to the one from before.
+// time from after a change shows next to the one from before. The Speed
+// test table's Liked column (PR 11.12) shows how often each model's answers
+// got 👍 (src/ratings.ts), overall and by kind, and Export ratings saves the
+// ratings as a file that `npm run bench -- --ratings <file>` reads.
 //
 // All page logic lives here and takes its dependencies as parameters, so the
 // tests can run it against options.html in jsdom with fakes. main.ts wires in
@@ -60,6 +63,15 @@ import {
   type SettingsField,
   type SettingsIssue,
 } from '../settings';
+import {
+  formatLiked,
+  formatLikedByKind,
+  MIN_RATINGS_FOR_SHARE,
+  modelLiked,
+  ratingsExport,
+  ratingsFileName,
+  type Rating,
+} from '../ratings';
 
 export interface OptionsPageDeps {
   getSettings(): Promise<Settings>;
@@ -76,6 +88,10 @@ export interface OptionsPageDeps {
   clearSavedAnswers(): Promise<void>;
   /** Removes every answer rating (PR 11.11), in the service worker, which owns them. */
   clearRatings(): Promise<void>;
+  /** Every saved rating (PR 11.12), for the Speed test's Liked column and Export ratings. */
+  loadRatings(): Promise<Rating[]>;
+  /** Offers `text` as a file named `name` for the user to save (Export ratings, PR 11.12). */
+  saveFile(name: string, text: string): void;
   /** The saved Measure results, oldest first (PR 11.7). */
   loadMeasurements(): Promise<Measurement[]>;
   /** Saves one Measure result and returns the list as now kept. */
@@ -106,6 +122,8 @@ export interface OptionsPage {
   clearSavedAnswers(): Promise<void>;
   /** Clear ratings (PR 11.11). */
   clearRatings(): Promise<void>;
+  /** Export ratings (PR 11.12). */
+  exportRatings(): Promise<void>;
   /** Times the picked model and saves the result (PR 11.7). */
   measure(): Promise<void>;
 }
@@ -140,7 +158,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const clearButton = el<HTMLButtonElement>(doc, 'clear-answers');
   const clearStatus = el(doc, 'clear-status');
   const clearRatingsButton = el<HTMLButtonElement>(doc, 'clear-ratings');
-  const clearRatingsStatus = el(doc, 'clear-ratings-status');
+  const exportRatingsButton = el<HTMLButtonElement>(doc, 'export-ratings');
+  const ratingsStatus = el(doc, 'ratings-status');
   const thinkInput = el<HTMLInputElement>(doc, 'letModelThink');
   const streamInput = el<HTMLInputElement>(doc, 'streamAnswers');
   const thinkingLine = el(doc, 'thinking-status');
@@ -359,15 +378,69 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   // Removes every 👍 and 👎 (PR 11.11).
   async function clearRatings(): Promise<void> {
     clearRatingsButton.disabled = true;
-    clearRatingsStatus.textContent = 'Clearing…';
+    ratingsStatus.textContent = 'Clearing…';
     try {
       await deps.clearRatings();
-      clearRatingsStatus.textContent = 'Ratings cleared.';
+      ratingsStatus.textContent = 'Ratings cleared.';
+      ratings = [];
+      showResults(lastResults);
     } catch (error) {
-      clearRatingsStatus.textContent = `Could not clear ratings: ${errorMessage(error)}`;
+      ratingsStatus.textContent = `Could not clear ratings: ${errorMessage(error)}`;
     } finally {
       clearRatingsButton.disabled = false;
     }
+  }
+
+  // Saves every rating as JSON (PR 11.12), for `npm run bench -- --ratings`.
+  async function exportRatings(): Promise<void> {
+    exportRatingsButton.disabled = true;
+    try {
+      const list = await deps.loadRatings();
+      ratings = list;
+      showResults(lastResults);
+      if (!list.length) {
+        ratingsStatus.textContent = 'There are no ratings to export yet.';
+        return;
+      }
+      const date = new Date((deps.clock ?? Date.now)());
+      deps.saveFile(ratingsFileName(date), JSON.stringify(ratingsExport(list, date), null, 2));
+      ratingsStatus.textContent = `Exported ${list.length} ${list.length === 1 ? 'rating' : 'ratings'}.`;
+    } catch (error) {
+      ratingsStatus.textContent = `Could not export ratings: ${errorMessage(error)}`;
+    } finally {
+      exportRatingsButton.disabled = false;
+    }
+  }
+
+  // The ratings behind the Liked column (PR 11.12). A failure to read them
+  // leaves the column as it was: it is a hint, not part of the test.
+  let ratings: Rating[] = [];
+  async function loadRatings(): Promise<void> {
+    try {
+      ratings = await deps.loadRatings();
+    } catch {
+      // Keep what was there.
+    }
+  }
+
+  function likedCell(model: string): HTMLTableCellElement {
+    const liked = modelLiked(ratings, model);
+    const td = cell(doc, formatLiked(liked.all), 'liked');
+    const { liked: up, total } = liked.all;
+    td.title =
+      total === 0
+        ? `No answers from ${model} have been rated yet.`
+        : total < MIN_RATINGS_FOR_SHARE
+          ? `${up} of ${total} rated answers liked. The share shows from ${MIN_RATINGS_FOR_SHARE} ratings.`
+          : `${up} of ${total} rated answers liked.`;
+    // One line for each kind with ratings, such as "Whole hunk – (4)".
+    for (const kind of liked.byKind) {
+      const line = doc.createElement('span');
+      line.className = 'kind';
+      line.textContent = formatLikedByKind({ all: liked.all, byKind: [kind] });
+      td.append(line);
+    }
+    return td;
   }
 
   // Uses what is in the form, saved or not, so a setup can be tried before saving.
@@ -509,11 +582,11 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
           use.addEventListener('click', () => void useModel(result.model));
           action.append(use);
         }
-        row.append(action);
+        row.append(likedCell(result.model), action);
       } else {
         const why = cell(doc, result.status === 'failed' ? `Failed: ${result.message}` : 'Stopped');
-        why.colSpan = 4;
-        row.append(why);
+        why.colSpan = 3;
+        row.append(why, likedCell(result.model), doc.createElement('td'));
       }
       return row;
     });
@@ -598,6 +671,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     }
     const run = new AbortController();
     speedRun = run;
+    // Ratings given since the page opened count too.
+    void loadRatings().then(() => showResults(lastResults));
     speedButton.disabled = true;
     measureButton.disabled = true;
     stopButton.hidden = false;
@@ -789,6 +864,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   measureButton.addEventListener('click', () => void measure());
   clearButton.addEventListener('click', () => void clearSavedAnswers());
   clearRatingsButton.addEventListener('click', () => void clearRatings());
+  exportRatingsButton.addEventListener('click', () => void exportRatings());
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     void save();
@@ -809,6 +885,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     measurements = [];
   }
   showMeasurements();
+  await loadRatings();
 
   return {
     refreshModels,
@@ -820,6 +897,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     stopSpeedTest,
     clearSavedAnswers,
     clearRatings,
+    exportRatings,
     measure,
   };
 }

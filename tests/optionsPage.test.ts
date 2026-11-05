@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { addMeasurement, type Measurement } from '../src/llm/speedTest';
 import { LlmError, type LlmClient, type ModelInfo } from '../src/llm/types';
 import { initOptionsPage, TEST_PROMPT, type OptionsPageDeps } from '../src/options/optionsPage';
+import type { Rating } from '../src/ratings';
 import {
   EXPLAIN_NOT_SET_NOTE,
   initShortcuts,
@@ -61,7 +62,12 @@ function fakeClient(overrides: Partial<LlmClient> = {}): LlmClient {
 
 // Like the real saveSettings: rejects invalid fields, otherwise returns the
 // stored settings.
-function fakeDeps(client: LlmClient, saved: Settings = SAVED, kept: Measurement[] = []) {
+function fakeDeps(
+  client: LlmClient,
+  saved: Settings = SAVED,
+  kept: Measurement[] = [],
+  rated: Rating[] = [],
+) {
   let stored = { ...saved };
   let measured = [...kept];
   const deps = {
@@ -77,6 +83,8 @@ function fakeDeps(client: LlmClient, saved: Settings = SAVED, kept: Measurement[
     now: vi.fn().mockReturnValueOnce(1000).mockReturnValueOnce(1250),
     clearSavedAnswers: vi.fn<OptionsPageDeps['clearSavedAnswers']>(async () => {}),
     clearRatings: vi.fn<OptionsPageDeps['clearRatings']>(async () => {}),
+    loadRatings: vi.fn<OptionsPageDeps['loadRatings']>(async () => [...rated]),
+    saveFile: vi.fn<OptionsPageDeps['saveFile']>(),
     loadMeasurements: vi.fn<OptionsPageDeps['loadMeasurements']>(async () => [...measured]),
     saveMeasurement: vi.fn<OptionsPageDeps['saveMeasurement']>(async (m) => {
       measured = addMeasurement(measured, m);
@@ -343,11 +351,11 @@ describe('options page', () => {
     deps.clearRatings.mockImplementationOnce(() => new Promise((r) => (finish = r)));
     button.click();
     expect(button.disabled).toBe(true);
-    expect(text('clear-ratings-status')).toBe('Clearing…');
+    expect(text('ratings-status')).toBe('Clearing…');
     finish();
     await vi.waitFor(() => expect(button.disabled).toBe(false));
     expect(deps.clearRatings).toHaveBeenCalledTimes(1);
-    expect(text('clear-ratings-status')).toBe('Ratings cleared.');
+    expect(text('ratings-status')).toBe('Ratings cleared.');
     // Neither the form nor the saved answers are touched.
     expect(deps.saveSettings).not.toHaveBeenCalled();
     expect(deps.clearSavedAnswers).not.toHaveBeenCalled();
@@ -355,9 +363,57 @@ describe('options page', () => {
     deps.clearRatings.mockRejectedValueOnce(new Error('No answer from the extension.'));
     button.click();
     await vi.waitFor(() => expect(button.disabled).toBe(false));
-    expect(text('clear-ratings-status')).toBe(
-      'Could not clear ratings: No answer from the extension.',
-    );
+    expect(text('ratings-status')).toBe('Could not clear ratings: No answer from the extension.');
+  });
+
+  it('Export ratings saves every rating as a JSON file and says how many (PR 11.12)', async () => {
+    const rated: Rating[] = [
+      {
+        id: 'a',
+        rating: 'up',
+        model: 'qwen2.5-coder:7b',
+        kind: 'hunk',
+        length: 300,
+        elapsedMs: 2100,
+        key: 'ab12',
+        ratedAt: 5,
+      },
+    ];
+    const deps = {
+      ...fakeDeps(fakeClient(), SAVED, [], rated),
+      clock: () => Date.UTC(2026, 10, 5, 9, 30),
+    };
+    await initOptionsPage(document, deps);
+    const button = $<HTMLButtonElement>('export-ratings');
+    expect(button.textContent).toBe('Export ratings');
+    expect(button.type).toBe('button');
+
+    button.click();
+    await vi.waitFor(() => expect(text('ratings-status')).toBe('Exported 1 rating.'));
+    expect(deps.saveFile).toHaveBeenCalledTimes(1);
+    const [name, body] = deps.saveFile.mock.calls[0]!;
+    expect(name).toBe('pr-explainer-ratings-2026-11-05.json');
+    expect(JSON.parse(body)).toEqual({
+      app: 'pr-explainer',
+      kind: 'ratings',
+      version: 1,
+      exportedAt: '2026-11-05T09:30:00.000Z',
+      ratings: rated,
+    });
+    expect(button.disabled).toBe(false);
+  });
+
+  it('Export ratings saves nothing when there are no ratings, and says why it failed', async () => {
+    const deps = fakeDeps(fakeClient());
+    const page = await initOptionsPage(document, deps);
+    await page.exportRatings();
+    expect(text('ratings-status')).toBe('There are no ratings to export yet.');
+    expect(deps.saveFile).not.toHaveBeenCalled();
+
+    deps.loadRatings.mockRejectedValueOnce(new Error('storage broke'));
+    await page.exportRatings();
+    expect(text('ratings-status')).toBe('Could not export ratings: storage broke');
+    expect(deps.saveFile).not.toHaveBeenCalled();
   });
 
   it('loads and saves Let the model think (PR 9.5)', async () => {
@@ -951,8 +1007,8 @@ describe('options page Speed section (PR 8.6)', () => {
 
     // llama3.2 is not a coding model, so it is not timed.
     expect(rows()).toEqual([
-      ['qwen2.5-coder:3bFastest under 2 s', '1.5 s', '50.0', '–', 'Use this model'],
-      ['qwen2.5-coder:7b', '14.0 s', '50.0', '–', 'In use'],
+      ['qwen2.5-coder:3bFastest under 2 s', '1.5 s', '50.0', '–', '–', 'Use this model'],
+      ['qwen2.5-coder:7b', '14.0 s', '50.0', '–', '–', 'In use'],
     ]);
     expect($('speed-results').hidden).toBe(false);
     expect($('speed-results').querySelector('tr.pick')?.textContent).toContain('qwen2.5-coder:3b');
@@ -976,7 +1032,7 @@ describe('options page Speed section (PR 8.6)', () => {
       maxResponseTokens: 512,
     });
     expect($<HTMLSelectElement>('model').value).toBe('qwen2.5-coder:3b');
-    expect(rows().map((r) => r[4])).toEqual(['In use', 'Use this model']);
+    expect(rows().map((r) => r[5])).toEqual(['In use', 'Use this model']);
     // Loaded again (the test unloaded it), the way the warm-up loads a model.
     await vi.waitFor(() =>
       expect(client.loadModel).toHaveBeenLastCalledWith('qwen2.5-coder:3b', {
@@ -1133,8 +1189,8 @@ describe('options page Speed section (PR 8.6)', () => {
     const page = await initOptionsPage(document, { ...fakeDeps(client), now });
     await page.speedTest();
     expect(rows()).toEqual([
-      ['qwen2.5-coder:7bFastest under 2 s', '1.2 s', '50.0', '50%/50% CPU/GPU', 'In use'],
-      ['codellama:7b', 'Failed: out of memory'],
+      ['qwen2.5-coder:7bFastest under 2 s', '1.2 s', '50.0', '50%/50% CPU/GPU', '–', 'In use'],
+      ['codellama:7b', 'Failed: out of memory', '–', ''],
     ]);
   });
 
@@ -1161,18 +1217,121 @@ describe('options page Speed section (PR 8.6)', () => {
     expect($('speed-stop').hidden).toBe(false);
     expect(text('speed-status')).toBe('Timing qwen2.5-coder:7b (2 of 2)…');
     // Not marked while the test is still running.
-    expect(rows()).toEqual([['qwen2.5-coder:3b', '0.0 s', '–', '–', 'Use this model']]);
+    expect(rows()).toEqual([['qwen2.5-coder:3b', '0.0 s', '–', '–', '–', 'Use this model']]);
     $('speed-stop').click();
     await running;
 
     expect(text('speed-status')).toBe('Stopped.');
     expect(rows()).toEqual([
-      ['qwen2.5-coder:3b', '0.0 s', '–', '–', 'Use this model'],
-      ['qwen2.5-coder:7b', 'Stopped'],
+      ['qwen2.5-coder:3b', '0.0 s', '–', '–', '–', 'Use this model'],
+      ['qwen2.5-coder:7b', 'Stopped', '–', ''],
     ]);
     expect($('speed-results').querySelector('.badge')).toBeNull();
     expect($<HTMLButtonElement>('speed-test').disabled).toBe(false);
     expect($('speed-stop').hidden).toBe(true);
+  });
+
+  describe('Liked column (PR 11.12)', () => {
+    let n = 0;
+    // `up` 👍 and `down` 👎 for `model`, of one kind.
+    const rate = (model: string, up: number, down: number, kind: Rating['kind'] = 'click') =>
+      [...Array(up + down)].map((_, i): Rating => ({
+        id: `r${n++}`,
+        rating: i < up ? 'up' : 'down',
+        model,
+        kind,
+        length: 200,
+        elapsedMs: 1500,
+        ratedAt: 1_000 + n,
+      }));
+    const liked = () =>
+      [...$<HTMLTableElement>('speed-results').tBodies[0]!.rows].map((r) => {
+        const td = r.querySelector<HTMLTableCellElement>('td.liked')!;
+        return [
+          r.cells[0]!.textContent,
+          td.firstChild?.textContent,
+          // One line per kind, joined here to compare.
+          [...td.querySelectorAll('.kind')].map((k) => k.textContent).join(' · ') || undefined,
+        ];
+      });
+
+    it('has a Liked column before the action', () => {
+      const head = [...$<HTMLTableElement>('speed-results').tHead!.rows[0]!.cells].map((c) =>
+        c.textContent?.trim(),
+      );
+      expect(head.slice(4, 5)).toEqual(['Liked']);
+    });
+
+    it('shows the share of 👍 for each model, by kind, and – under 10 ratings', async () => {
+      const { client, now } = timedClient({ 'qwen2.5-coder:7b': 3_000, 'qwen2.5-coder:3b': 1_500 });
+      const ratings = [
+        ...rate('qwen2.5-coder:7b', 7, 1, 'click'),
+        ...rate('qwen2.5-coder:7b', 1, 1, 'hover'),
+        ...rate('qwen2.5-coder:7b', 2, 2, 'hunk'),
+        ...rate('qwen2.5-coder:3b', 2, 2, 'click'),
+        // Another model's ratings are not counted.
+        ...rate('llama3.2:3b', 9, 0),
+      ];
+      const page = await initOptionsPage(document, {
+        ...fakeDeps(client, SAVED, [], ratings),
+        now,
+      });
+      await page.speedTest();
+      expect(liked()).toEqual([
+        ['qwen2.5-coder:3bFastest under 2 s', '– (4)', 'Line – (4)'],
+        ['qwen2.5-coder:7b', '71% (14)', 'Line 80% (10) · Whole hunk – (4)'],
+      ]);
+      const cells = $('speed-results').querySelectorAll<HTMLElement>('td.liked');
+      expect(cells[0]!.title).toBe('2 of 4 rated answers liked. The share shows from 10 ratings.');
+      expect(cells[1]!.title).toBe('10 of 14 rated answers liked.');
+    });
+
+    it('matches a model saved without a tag, and says when a model has no ratings', async () => {
+      const { client, now } = timedClient({
+        'qwen2.5-coder:latest': 1_000,
+        'qwen2.5-coder:3b': 2_500,
+      });
+      const page = await initOptionsPage(document, {
+        ...fakeDeps(client, SAVED, [], rate('qwen2.5-coder', 10, 0)),
+        now,
+      });
+      await page.speedTest();
+      expect(liked()).toEqual([
+        ['qwen2.5-coder:latestFastest under 2 s', '100% (10)', 'Line 100% (10)'],
+        ['qwen2.5-coder:3b', '–', undefined],
+      ]);
+      expect($('speed-results').querySelectorAll<HTMLElement>('td.liked')[1]!.title).toBe(
+        'No answers from qwen2.5-coder:3b have been rated yet.',
+      );
+    });
+
+    it('reads the ratings again for each Speed test, and empties the column on Clear ratings', async () => {
+      const { client, now } = timedClient({ 'qwen2.5-coder:7b': 1_000 });
+      const deps = { ...fakeDeps(client), now };
+      const page = await initOptionsPage(document, deps);
+      await page.speedTest();
+      expect(liked()).toEqual([['qwen2.5-coder:7bFastest under 2 s', '–', undefined]]);
+
+      deps.loadRatings.mockResolvedValue(rate('qwen2.5-coder:7b', 9, 3));
+      await page.speedTest();
+      await vi.waitFor(() =>
+        expect(liked()).toEqual([
+          ['qwen2.5-coder:7bFastest under 2 s', '75% (12)', 'Line 75% (12)'],
+        ]),
+      );
+
+      await page.clearRatings();
+      expect(liked()).toEqual([['qwen2.5-coder:7bFastest under 2 s', '–', undefined]]);
+    });
+
+    it('keeps the table when the ratings cannot be read', async () => {
+      const { client, now } = timedClient({ 'qwen2.5-coder:7b': 1_000 });
+      const deps = { ...fakeDeps(client), now };
+      deps.loadRatings.mockRejectedValue(new Error('storage broke'));
+      const page = await initOptionsPage(document, deps);
+      await page.speedTest();
+      expect(liked()).toEqual([['qwen2.5-coder:7bFastest under 2 s', '–', undefined]]);
+    });
   });
 
   it('says how to get a model when none is installed', async () => {
