@@ -203,7 +203,7 @@ describe('settings', () => {
         model: '',
         // "Same as explanations" (PR 9.14).
         chatModel: '',
-        chatOpensIn: 'sidepanel',
+        chatOpensIn: 'page',
         temperature: 0.2,
         // One sentence per section arrives sooner (PR 8.4, PR 9.8).
         maxResponseTokens: 120,
@@ -534,22 +534,22 @@ describe('settings', () => {
       expect(followed.current()).toBe(1);
     });
 
-    it('follows Chat opens in in the service worker: Side panel until read, then each save (PR 11.9)', async () => {
+    it('follows Chat opens in in the service worker: On the page until read, then each save (PR 11.9, PR 11.14)', async () => {
       const key = storageKey('chatOpensIn');
       let listener: (
         changes: Record<string, { newValue?: unknown }>,
         area: string,
       ) => void = () => {};
-      const followed = followChatPlace(fakeStorage({ [key]: 'page' }), {
+      const followed = followChatPlace(fakeStorage({ [key]: 'sidepanel' }), {
         addListener: (l) => void (listener = l),
       });
-      expect(followed.current()).toBe('sidepanel');
-      await new Promise((r) => setTimeout(r, 0));
       expect(followed.current()).toBe('page');
-      listener({ [key]: { newValue: 'sidepanel' } }, 'sync');
+      await new Promise((r) => setTimeout(r, 0));
       expect(followed.current()).toBe('sidepanel');
+      listener({ [key]: { newValue: 'page' } }, 'sync');
+      expect(followed.current()).toBe('page');
       listener({ [key]: { newValue: 'nonsense' } }, 'sync');
-      expect(followed.current()).toBe('sidepanel');
+      expect(followed.current()).toBe('page');
       // Read the same way as the content script's copy of the setting.
       expect(['page', 'sidepanel', undefined, 3].map(chatPlaceOf)).toEqual(
         ['page', 'sidepanel', undefined, 3].map(contentChatPlaceOf),
@@ -661,21 +661,22 @@ describe('settings', () => {
       await expect(promise).rejects.toThrow('Show answers as they are written must be on or off.');
     });
 
-    it('opens the chat in the side panel by default, and takes On the page (PR 11.8)', async () => {
-      expect(DEFAULT_SETTINGS.chatOpensIn).toBe('sidepanel');
-      await expect(saveSettings({ chatOpensIn: 'page' }, fakeStorage())).resolves.toMatchObject({
-        chatOpensIn: 'page',
-      });
+    it('opens the chat on the page by default, and takes Side panel (PR 11.8, PR 11.14)', async () => {
+      expect(DEFAULT_SETTINGS.chatOpensIn).toBe('page');
+      await expect(getSettings(fakeStorage())).resolves.toMatchObject({ chatOpensIn: 'page' });
+      await expect(
+        saveSettings({ chatOpensIn: 'sidepanel' }, fakeStorage()),
+      ).resolves.toMatchObject({ chatOpensIn: 'sidepanel' });
       const promise = saveSettings({ chatOpensIn: 'popup' as unknown as 'page' }, fakeStorage());
       await expectRejectedFields(promise, ['chatOpensIn']);
       await expect(promise).rejects.toThrow('Chat opens in must be Side panel or On the page.');
     });
 
-    it('the content script reads Chat opens in under its key, side panel unless page (PR 11.8)', () => {
+    it('the content script reads Chat opens in under its key, on the page unless side panel (PR 11.8, PR 11.14)', () => {
       expect(CHAT_PLACE_KEY).toBe(storageKey('chatOpensIn'));
-      expect(chatPlaceOf('page')).toBe('page');
-      for (const stored of ['sidepanel', undefined, 'other', 1]) {
-        expect(chatPlaceOf(stored)).toBe('sidepanel');
+      expect(chatPlaceOf('sidepanel')).toBe('sidepanel');
+      for (const stored of ['page', undefined, 'other', 1]) {
+        expect(chatPlaceOf(stored)).toBe('page');
       }
     });
 

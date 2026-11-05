@@ -82,11 +82,11 @@ export function setupChatMenu(deps: {
   const made = deps.after
     .catch(() => undefined)
     .then(async () => {
-      let visible = true;
+      let visible = false;
       try {
         visible = await deps.isOn();
       } catch {
-        // Shown, as for the default.
+        // Hidden, as for the default (On the page, PR 11.14).
       }
       menus.create({ id: CHAT_MENU_ID, title: CHAT_MENU_TITLE, contexts: ['action'], visible });
     })
@@ -96,7 +96,7 @@ export function setupChatMenu(deps: {
   const key = storageKey('chatOpensIn');
   onChanged.addListener((changes, areaName) => {
     if (areaName !== 'sync' || !Object.hasOwn(changes, key)) return;
-    const visible = changes[key]?.newValue !== 'page';
+    const visible = changes[key]?.newValue === 'sidepanel';
     void made.then(() => menus.update(CHAT_MENU_ID, { visible })).catch(() => undefined);
   });
   return made;

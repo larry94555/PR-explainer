@@ -90,18 +90,35 @@ function open(subject: ChatSubject, messages: ChatPanelMessage[]): void {
   status.textContent = 'Last event: opened';
 }
 
-document
-  .querySelector('#open-conversation')!
-  .addEventListener('click', () =>
-    open({ filePath: 'src/llm/retry.ts', startLine: 12, endLine: 18 }, CONVERSATION),
-  );
-document
-  .querySelector('#open-line')!
-  .addEventListener('click', () =>
-    open({ filePath: 'src/llm/retry.ts', startLine: 15 }, [
-      { role: 'assistant', text: EXPLANATION },
-    ]),
-  );
+document.querySelector('#open-conversation')!.addEventListener('click', () =>
+  open(
+    {
+      filePath: 'src/llm/retry.ts',
+      startLine: 12,
+      endLine: 18,
+      code: [
+        'export async function retry<T>(fn: () => Promise<T>): Promise<T> {',
+        '  for (let attempt = 0; ; attempt++) {',
+        '    try {',
+        '      return await fn();',
+        '    } catch (error) {',
+        '      if (attempt >= 3) throw error;',
+        '      await sleep(200 * 2 ** attempt);',
+      ].map((text, i) => ({ lineNumber: 12 + i, text })),
+    },
+    CONVERSATION,
+  ),
+);
+document.querySelector('#open-line')!.addEventListener('click', () =>
+  open(
+    {
+      filePath: 'src/llm/retry.ts',
+      startLine: 15,
+      code: [{ lineNumber: 15, text: '      return await fn();' }],
+    },
+    [{ role: 'assistant', text: EXPLANATION }],
+  ),
+);
 document
   .querySelector('#open-unsafe')!
   .addEventListener('click', () =>

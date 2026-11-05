@@ -9,6 +9,10 @@
   <body>
     <main>
       <h1>PR Explainer settings</h1>
+      <div class="save-bar">
+        <button id="save-top" type="submit" form="settings-form">Save</button>
+        <p id="save-top-status" role="status"></p>
+      </div>
       <form id="settings-form" novalidate>
         <div class="field">
           <label for="modelServer">Model server</label>
@@ -65,14 +69,15 @@
         <div class="field">
           <label for="chatOpensIn">Chat opens in</label>
           <select id="chatOpensIn" name="chatOpensIn">
-            <option value="sidepanel">Side panel</option>
             <option value="page">On the page</option>
+            <option value="sidepanel">Side panel</option>
           </select>
           <p class="hint">
-            Where Ask a question opens the chat. <strong>Side panel</strong> shows it in Chrome's
+            Where Ask a question opens the chat. <strong>On the page</strong> (the default) floats
+            it over the bottom right of the page. <strong>Side panel</strong> shows it in Chrome's
             side panel, next to the PR, so it covers no code and stays open while you move between
-            the PR's tabs; it follows the PR in the tab you are on. <strong>On the page</strong>
-            floats it over the bottom right of the page, as before.
+            the PR's tabs; it follows the PR in the tab you are on. Both show the line number and
+            the code you clicked at the top of the chat.
           </p>
           <p class="error" data-error-for="chatOpensIn" role="alert"></p>
         </div>

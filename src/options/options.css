@@ -290,3 +290,27 @@ kbd {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* Save at the top (PR 11.14): stays in view while scrolling, so a change can
+   be saved without looking for the Save button at the end of the form. */
+.save-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0 -1rem 1.25rem;
+  padding: 0.5rem 1rem;
+  background: Canvas;
+  border-bottom: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+}
+
+.save-bar p {
+  margin: 0;
+}
+
+.save-bar .unsaved,
+#save-status.unsaved {
+  font-weight: 600;
+}

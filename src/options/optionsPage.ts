@@ -5,7 +5,8 @@
 // Lines on screen or Whole PR from PR 10.6), Requests at once, Background
 // work on battery (PR 11.3; Pause or Keep going), Let the
 // model think (PR 9.5), the Debug section (Show prompt, PR 6.2, and Debug
-// window, PR 9.3), Save, and Test connection. Under the model, a line says
+// window, PR 9.3), Save (at the top too, with an Unsaved changes note, PR
+// 11.14), and Test connection. Under the model, a line says
 // whether it is a reasoning model and whether its thinking is on (PR 9.5). The
 // Speed section (PR 8.6) says whether the picked model runs on the GPU, and its
 // Speed test times each coding model and lets the user pick the fastest
@@ -114,6 +115,10 @@ export interface BuiltInModelPage {
 }
 
 export const TEST_PROMPT = 'Reply with OK';
+/** Beside both Save buttons once a setting is changed and not yet saved (PR 11.14). */
+export const UNSAVED_TEXT = 'Unsaved changes. Click Save to apply them.';
+/** Beside both Save buttons after a save. */
+export const SAVED_TEXT = 'Saved.';
 // A test reply is only a sign of life; a short limit keeps it fast.
 const TEST_MAX_TOKENS = 32;
 // Long replies are cut so the status line stays readable.
@@ -192,6 +197,9 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const saveButton = el<HTMLButtonElement>(doc, 'save');
   const modelsStatus = el(doc, 'models-status');
   const saveStatus = el(doc, 'save-status');
+  // Save at the top of the page too (PR 11.14), with its own status line.
+  const saveTopButton = el<HTMLButtonElement>(doc, 'save-top');
+  const saveTopStatus = el(doc, 'save-top-status');
   const testStatus = el(doc, 'test-status');
   const gpuLine = el(doc, 'gpu-status');
   const speedButton = el<HTMLButtonElement>(doc, 'speed-test');
@@ -364,24 +372,51 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     }
   }
 
+  // Both Save buttons share one status, shown beside each of them.
+  function showSaveStatus(text: string, unsaved = false): void {
+    for (const status of [saveStatus, saveTopStatus]) {
+      status.textContent = text;
+      status.classList.toggle('unsaved', unsaved);
+    }
+  }
+  function setSaving(saving: boolean): void {
+    saveButton.disabled = saving;
+    saveTopButton.disabled = saving;
+  }
+
+  // Any change in the form is only kept once Save is clicked (PR 11.14).
+  // Counted, so a save can tell whether the form changed while it ran.
+  let edits = 0;
+  function markUnsaved(): void {
+    edits++;
+    showSaveStatus(UNSAVED_TEXT, true);
+  }
+
   async function save(): Promise<void> {
-    saveStatus.textContent = '';
-    saveButton.disabled = true;
+    showSaveStatus('');
+    setSaving(true);
+    const editsBefore = edits;
     try {
       const saved = await deps.saveSettings(readForm());
       showIssues([]);
+      // A change made while saving was not saved (review on #83): keep it in
+      // the form, and keep saying so.
+      if (edits !== editsBefore) {
+        showSaveStatus(UNSAVED_TEXT, true);
+        return;
+      }
       urlInput.value = saved.llmUrl;
       contextInput.value = saved.contextTokens > 0 ? String(saved.contextTokens) : '';
-      saveStatus.textContent = 'Saved.';
+      showSaveStatus(SAVED_TEXT);
     } catch (error) {
       if (error instanceof SettingsValidationError) {
         showIssues(error.issues);
-        saveStatus.textContent = 'Not saved. Fix the problems above.';
+        showSaveStatus('Not saved. Fix the problems above.', true);
       } else {
-        saveStatus.textContent = `Not saved: ${errorMessage(error)}`;
+        showSaveStatus(`Not saved: ${errorMessage(error)}`, true);
       }
     } finally {
-      saveButton.disabled = false;
+      setSaving(false);
     }
   }
 
@@ -974,6 +1009,8 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   clearButton.addEventListener('click', () => void clearSavedAnswers());
   clearRatingsButton.addEventListener('click', () => void clearRatings());
   exportRatingsButton.addEventListener('click', () => void exportRatings());
+  form.addEventListener('input', markUnsaved);
+  form.addEventListener('change', markUnsaved);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     void save();

@@ -57,6 +57,18 @@ export interface ChatSubject {
   startLine: number;
   /** The last line of a selected block; leave out for a single line. */
   endLine?: number;
+  /**
+   * The code that was clicked or selected, line by line exactly as on the
+   * page, with each line's number (PR 11.14). Shown under the header so the
+   * chat says what it is about without looking back at the PR.
+   */
+  code?: SubjectLine[];
+}
+
+/** One line of `ChatSubject.code`. */
+export interface SubjectLine {
+  lineNumber: number;
+  text: string;
 }
 
 /** "line 42", or "lines 12 to 18" for a block. */
@@ -197,10 +209,31 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   const lines = doc.createElement('span');
   lines.className = 'lines';
   subject.append(file, lines);
+  // The clicked code with its line numbers (PR 11.14), between the header and
+  // the messages. Hidden when the subject has no code.
+  const codeBox = doc.createElement('div');
+  codeBox.className = 'subject-code';
+  codeBox.setAttribute('role', 'group');
+  codeBox.setAttribute('aria-label', 'The code this chat is about');
   const setSubject = (next: ChatSubject) => {
     file.textContent = next.filePath;
     lines.textContent = formatLines(next);
     subject.title = `${next.filePath}, ${formatLines(next)}`;
+    const codeLines = next.code ?? [];
+    codeBox.hidden = codeLines.length === 0;
+    codeBox.replaceChildren(
+      ...codeLines.map(({ lineNumber, text }) => {
+        const row = doc.createElement('span');
+        row.className = 'code-line';
+        const number = doc.createElement('span');
+        number.className = 'line-number';
+        number.textContent = String(lineNumber);
+        const code = doc.createElement('code');
+        code.textContent = text;
+        row.append(number, code);
+        return row;
+      }),
+    );
   };
   setSubject(options.subject);
   const newChatButton = doc.createElement('button');
@@ -244,7 +277,7 @@ export function openChatPanel(options: ChatPanelOptions, doc: Document = documen
   hint.textContent = 'Enter to send · Shift+Enter for a new line';
   form.append(input, sendButton, stopButton, hint);
 
-  panel.append(header, list, form);
+  panel.append(header, codeBox, list, form);
   shadow.append(style, panel);
   doc.body.append(host);
   let stopFollowingTheme = () => {};

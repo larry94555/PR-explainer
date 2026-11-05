@@ -746,9 +746,16 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     expect(openChat).toHaveBeenCalledWith({
       context: env.contexts[1],
       explanation: DONE.explanation,
-      subject: { filePath: 'docs/roadmap.md', startLine: 44 },
+      subject: {
+        filePath: 'docs/roadmap.md',
+        startLine: 44,
+        code: [{ lineNumber: 44, text: expect.stringContaining('Friendly LLM error messages') }],
+      },
       regenerated: false,
+      // The clicked row, for the chat to point at (PR 11.14).
+      anchor: env.popups[1]!.anchor,
     });
+    expect(openChat.mock.calls[0]![0].anchor.getBoundingClientRect().right).toBeDefined();
 
     // After Regenerate the chat is marked to start over, even with the same text.
     env.popups[1]!.pressRegenerate();
@@ -785,12 +792,20 @@ describe.each(layouts)('click handler on the $name layout', ({ file, code, heade
     const addToChat = vi.fn(() => chatOpen);
     env.deps.addToChat = addToChat;
     click(code('R44'));
-    expect(addToChat).toHaveBeenCalledWith({
-      text: expect.stringContaining('docs/roadmap.md'),
-      subject: { filePath: 'docs/roadmap.md', startLine: 44 },
-      code: expect.objectContaining({ startLine: 44, endLine: 44 }),
-      facts: expect.objectContaining({ where: 'docs/roadmap.md, line 44' }),
-    });
+    expect(addToChat).toHaveBeenCalledWith(
+      {
+        text: expect.stringContaining('docs/roadmap.md'),
+        subject: {
+          filePath: 'docs/roadmap.md',
+          startLine: 44,
+          code: [{ lineNumber: 44, text: expect.stringContaining('Friendly LLM error messages') }],
+        },
+        code: expect.objectContaining({ startLine: 44, endLine: 44 }),
+        facts: expect.objectContaining({ where: 'docs/roadmap.md, line 44' }),
+      },
+      // The clicked row, for the chat's pointer (PR 11.14).
+      expect.objectContaining({ getBoundingClientRect: expect.any(Function) }),
+    );
     expect(env.deps.explain).not.toHaveBeenCalled();
     expect(env.popups).toEqual([]);
 

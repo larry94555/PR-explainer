@@ -4,7 +4,7 @@
 // the active tab's PR.
 import { CurrentChat, startChat } from '../src/chat/chatFlow';
 import type { ChatResult } from '../src/chat/chatHandler';
-import { CHAT_PANEL_ID, type ChatPanel } from '../src/chat/chatPanel';
+import { CHAT_PANEL_ID, type ChatPanel, type ChatSubject } from '../src/chat/chatPanel';
 import { openChatFromShortcut, type ChatShortcutDeps } from '../src/chat/chatShortcut';
 import { ChatSessions, type ChatSeed } from '../src/chat/chatSession';
 import {
@@ -206,6 +206,24 @@ describe('setupChatMenu', () => {
     expect(menus.update).toHaveBeenLastCalledWith(CHAT_MENU_ID, { visible: true });
   });
 
+  it('hides Open chat when the setting cannot be read, or is removed, as On the page is the default (PR 11.14)', async () => {
+    const { menus } = fakeMenus();
+    const { onChanged, fire } = fakeChanged();
+    await setupChatMenu({
+      menus,
+      sidePanel: { open: vi.fn(async () => {}) },
+      onChanged,
+      isOn: async () => {
+        throw new Error('storage is gone');
+      },
+      after: Promise.resolve(),
+    });
+    expect(menus.create).toHaveBeenCalledWith(expect.objectContaining({ visible: false }));
+    fire({ 'settings.chatOpensIn': {} });
+    await flush();
+    expect(menus.update).toHaveBeenLastCalledWith(CHAT_MENU_ID, { visible: false });
+  });
+
   it('opens the side panel in the clicked window at once', () => {
     const { menus, clicks } = fakeMenus();
     const open = vi.fn(async () => {});
@@ -380,7 +398,12 @@ interface Asked {
 }
 
 /** Starts a chat the way content.ts does, drawn in the side panel. */
-function chatIn(page: FakePage, sessions = new ChatSessions(), pr = 'owner/repo#1') {
+function chatIn(
+  page: FakePage,
+  sessions = new ChatSessions(),
+  pr = 'owner/repo#1',
+  subject: ChatSubject = SUBJECT,
+) {
   const asked: Asked[] = [];
   const session = sessions.get(pr) ?? sessions.restart(pr, SEED);
   const chat = startChat(
@@ -395,7 +418,7 @@ function chatIn(page: FakePage, sessions = new ChatSessions(), pr = 'owner/repo#
       openPanel: (options) => page.link.open({ ...options, streamAnswers: true }),
     },
     session,
-    SUBJECT,
+    subject,
   );
   return { chat, asked, session, sessions };
 }
@@ -445,6 +468,24 @@ describe('side panel chat', () => {
     expect(doc.getElementById(CHAT_PANEL_ID)?.dataset.layout).toBe('fill');
     expect(view.shown()[0]?.[1]).toContain(SEED.explanation.what);
     expect(page.link.shown).toBe(true);
+  });
+
+  it('shows the clicked line and its number at the top of the side panel (PR 11.14)', async () => {
+    const browser = fakeBrowser();
+    const page = browser.addPage(1, 'https://github.com/owner/repo/pull/1/files');
+    browser.setActive(1);
+    chatIn(page, new ChatSessions(), 'owner/repo#1', {
+      ...SUBJECT,
+      code: [{ lineNumber: SUBJECT.startLine, text: 'const timeoutMs = 30_000;' }],
+    });
+    const doc = sidePanelDocument();
+    const side = createSidePanelPage(doc, browser.sideTabs);
+    await opened(side);
+    const root = inSidePanel(doc).root()!;
+    const box = root.querySelector<HTMLElement>('.subject-code')!;
+    expect(box.hidden).toBe(false);
+    expect(box.querySelector('.line-number')!.textContent).toBe(String(SUBJECT.startLine));
+    expect(box.querySelector('code')!.textContent).toBe('const timeoutMs = 30_000;');
   });
 
   it('sends a question from the side panel and shows the answer as the page gets it', async () => {
