@@ -87,7 +87,11 @@ export interface ContextMenusLike {
     visible: boolean;
   }): unknown;
   update(id: string, properties: { visible: boolean }): Promise<void>;
-  onClicked: { addListener(listener: (info: { menuItemId: string | number }) => void): void };
+  onClicked: {
+    addListener(
+      listener: (info: { menuItemId: string | number }, tab?: { windowId?: number }) => void,
+    ): void;
+  };
 }
 
 /**

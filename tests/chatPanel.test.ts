@@ -539,3 +539,75 @@ describe('chat panel', () => {
     });
   });
 });
+
+// PR 11.8: the same panel draws the chat in Chrome's side panel.
+describe('chat panel in both places', () => {
+  afterEach(() => {
+    currentChatPanel()?.close();
+    document.documentElement.removeAttribute('data-color-mode');
+  });
+
+  const host = () => document.getElementById(CHAT_PANEL_ID)!;
+  const chat = () => shadow().querySelector<HTMLElement>('.chat')!;
+
+  it('floats over the page as a dialog by default', () => {
+    open();
+    expect(host().dataset.layout).toBeUndefined();
+    expect(chat().getAttribute('role')).toBe('dialog');
+  });
+
+  it('fills the side panel as a region with layout fill', () => {
+    open({ layout: 'fill' });
+    expect(host().dataset.layout).toBe('fill');
+    expect(chat().getAttribute('role')).toBe('region');
+    const style = shadow().querySelector('style')!.textContent!;
+    expect(style).toContain(":host([data-layout='fill'])");
+  });
+
+  it('works the same in the side panel: send, answer, stop and New chat', () => {
+    const onSend = vi.fn();
+    const onStop = vi.fn();
+    const onNewChat = vi.fn();
+    const panel = open({ layout: 'fill', onSend, onStop, onNewChat, streamAnswers: true });
+    type('Why retry?');
+    press('Enter');
+    expect(onSend).toHaveBeenCalledWith('Why retry?');
+    const answer = panel.addMessage('assistant', '');
+    panel.setBusy(true);
+    answer.update('Because the network fails.');
+    expect(shown()).toEqual([
+      ['user', 'Why retry?'],
+      ['assistant', 'Because the network fails.'],
+    ]);
+    shadow().querySelector<HTMLButtonElement>('.stop')!.click();
+    expect(onStop).toHaveBeenCalledTimes(1);
+    shadow().querySelector<HTMLButtonElement>('.new-chat')!.click();
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not closed by Esc in the side panel, but is on the page', () => {
+    const side = open({ layout: 'fill' });
+    press('Escape');
+    expect(side.isOpen).toBe(true);
+    side.close();
+    const onPage = open();
+    press('Escape');
+    expect(onPage.isOpen).toBe(false);
+  });
+
+  it('takes the theme it is given instead of the page it is on', () => {
+    document.documentElement.setAttribute('data-color-mode', 'light');
+    open({ layout: 'fill', theme: 'dark' });
+    expect(host().dataset.theme).toBe('dark');
+    // A change on this page does not move it; the side panel sets it.
+    document.documentElement.setAttribute('data-color-mode', 'dark');
+    document.documentElement.setAttribute('data-color-mode', 'light');
+    expect(host().dataset.theme).toBe('dark');
+  });
+
+  it('follows the page it is on when no theme is given', () => {
+    document.documentElement.setAttribute('data-color-mode', 'dark');
+    open();
+    expect(host().dataset.theme).toBe('dark');
+  });
+});

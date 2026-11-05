@@ -24,6 +24,7 @@ import {
   skipPatternsOf,
 } from '../src/skipFiles';
 import { STREAM_SETTING_KEY, trackStreamSetting } from '../src/streamSetting';
+import { CHAT_PLACE_KEY, chatPlaceOf } from '../src/chat/sidePanelChat';
 import {
   AHEAD_SETTING_KEY,
   REQUESTS_AT_ONCE,
@@ -138,6 +139,7 @@ describe('settings', () => {
         model: '',
         // "Same as explanations" (PR 9.14).
         chatModel: '',
+        chatOpensIn: 'sidepanel',
         temperature: 0.2,
         // One sentence per section arrives sooner (PR 8.4, PR 9.8).
         maxResponseTokens: 120,
@@ -197,6 +199,7 @@ describe('settings', () => {
         llmUrl: 'http://127.0.0.1:8080',
         model: 'qwen2.5-coder:1.5b',
         chatModel: 'qwen2.5-coder:7b',
+        chatOpensIn: 'page' as const,
         temperature: 0.7,
         maxResponseTokens: 2048,
         contextTokens: 8192,
@@ -555,6 +558,24 @@ describe('settings', () => {
       const promise = saveSettings({ streamAnswers: 'on' as unknown as boolean }, fakeStorage());
       await expectRejectedFields(promise, ['streamAnswers']);
       await expect(promise).rejects.toThrow('Show answers as they are written must be on or off.');
+    });
+
+    it('opens the chat in the side panel by default, and takes On the page (PR 11.8)', async () => {
+      expect(DEFAULT_SETTINGS.chatOpensIn).toBe('sidepanel');
+      await expect(saveSettings({ chatOpensIn: 'page' }, fakeStorage())).resolves.toMatchObject({
+        chatOpensIn: 'page',
+      });
+      const promise = saveSettings({ chatOpensIn: 'popup' as unknown as 'page' }, fakeStorage());
+      await expectRejectedFields(promise, ['chatOpensIn']);
+      await expect(promise).rejects.toThrow('Chat opens in must be Side panel or On the page.');
+    });
+
+    it('the content script reads Chat opens in under its key, side panel unless page (PR 11.8)', () => {
+      expect(CHAT_PLACE_KEY).toBe(storageKey('chatOpensIn'));
+      expect(chatPlaceOf('page')).toBe('page');
+      for (const stored of ['sidepanel', undefined, 'other', 1]) {
+        expect(chatPlaceOf(stored)).toBe('sidepanel');
+      }
     });
 
     it('the content script reads Show answers as they are written under its key (PR 9.6)', () => {

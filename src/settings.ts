@@ -26,6 +26,14 @@ export interface Settings {
    * Explain ahead always use `model`. Read it through chatModelOf.
    */
   chatModel: string;
+  /**
+   * Chat opens in (PR 11.8): `sidepanel` (the default) shows the chat in
+   * Chrome's side panel, next to the page, where it covers no code and stays
+   * open while GitHub moves between the PR's tabs; `page` is the panel that
+   * floats over the bottom right of the page (PR 5.2). The content script
+   * reads it straight from storage (src/chat/sidePanelChat.ts).
+   */
+  chatOpensIn: ChatPlace;
   /** Sampling temperature, 0 to 2. Low values give steadier explanations. */
   temperature: number;
   /**
@@ -138,6 +146,10 @@ export type AheadMode = (typeof AHEAD_MODES)[number];
 export const BATTERY_MODES = ['pause', 'keep'] as const;
 export type BatteryMode = (typeof BATTERY_MODES)[number];
 
+/** The choices of Chat opens in (PR 11.8). */
+export const CHAT_PLACES = ['sidepanel', 'page'] as const;
+export type ChatPlace = (typeof CHAT_PLACES)[number];
+
 /** Skip in background's patterns until changed (PR 11.4), as in src/skipFiles.ts. */
 export const DEFAULT_SKIP_PATTERNS: readonly string[] = Object.freeze([
   'package-lock.json',
@@ -164,6 +176,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   llmUrl: 'http://localhost:11434',
   model: '',
   chatModel: '',
+  chatOpensIn: 'sidepanel',
   temperature: 0.2,
   maxResponseTokens: 120,
   contextTokens: 0,
@@ -289,6 +302,10 @@ function checkField(field: SettingsField, value: unknown): string | null {
       );
     case 'keepAliveMinutes':
       return checkNumber(value, KEEP_ALIVE_MINUTES_RANGE, true, 'Keep model loaded');
+    case 'chatOpensIn':
+      return (CHAT_PLACES as readonly unknown[]).includes(value)
+        ? null
+        : 'Chat opens in must be Side panel or On the page.';
     case 'explainOnHover':
       return typeof value === 'boolean' ? null : 'Explain on hover must be on or off.';
     case 'hoverWaitMs':

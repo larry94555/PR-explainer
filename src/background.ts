@@ -51,6 +51,7 @@ import {
   saveSettings,
   storageKey,
 } from './settings';
+import { openSidePanel, setupChatMenu } from './sidePanelOpener';
 import { setupToolbarToggle } from './toolbarToggle';
 
 console.info('[PR Explainer] service worker started');
@@ -83,11 +84,20 @@ const debugWindow = createDebugWindowOpener({
   storage: chrome.storage.session,
   url: chrome.runtime.getURL('debug.html'),
 });
-void setupDebugMenu({
+const debugMenu = setupDebugMenu({
   menus: chrome.contextMenus,
   onChanged: chrome.storage.onChanged,
   isOn: async () => (await getSettings()).debugWindow,
   open: () => debugWindow.open(),
+});
+// The chat in Chrome's side panel (PR 11.8): the toolbar button's menu gets
+// Open chat while Chat opens in is Side panel, made after the debug item.
+void setupChatMenu({
+  menus: chrome.contextMenus,
+  sidePanel: chrome.sidePanel,
+  onChanged: chrome.storage.onChanged,
+  isOn: async () => (await getSettings()).chatOpensIn === 'sidepanel',
+  after: debugMenu,
 });
 
 // The model's context window, and whether it can think (PR 9.5), from one
@@ -341,6 +351,14 @@ new MessageRouter()
     return { cleared: true as const };
   })
   .on('openDebugWindow', async () => ({ window: await debugWindow.open() }))
+  // The popup's Ask a question button (PR 11.8). Not async: Chrome opens the
+  // side panel only if open() is called before anything is awaited.
+  .on('openSidePanel', (_payload, sender) =>
+    openSidePanel(
+      chrome.sidePanel,
+      sender.tab?.id !== undefined ? { tabId: sender.tab.id } : undefined,
+    ),
+  )
   .on('backgroundPaused', (payload, sender) => {
     const tabId = sender.tab?.id;
     if (tabId !== undefined) backgroundPause.report(tabId, payload.paused);
