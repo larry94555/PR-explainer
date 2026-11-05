@@ -136,33 +136,67 @@ export function formatQueueCounts(counts: QueueCounts): string {
 
 /** Explain on hover's requests in the window (PR 11.2). */
 export interface HoverCounts {
-  /** Hover requests the queue took. */
+  /** Hover requests the queue started, so the model was asked (a put-back run started again counts again). */
   sent: number;
   /** Of those, the ones stopped before they finished (the pointer moved on). */
   cancelled: number;
+  /** Hover jobs dropped while still waiting, before the model was asked (review on #72). */
+  droppedBeforeStart: number;
 }
 
 /**
- * Counts Explain on hover's requests from the queue's events (PR 11.2): each
- * hovered line queued, and each one dropped before it finished because the
- * pointer moved to another line. A hovered line a click joined has become the
- * click's, so it is not counted as cancelled.
+ * Counts Explain on hover's requests from the queue's events (PR 11.2),
+ * oldest first. A hovered line is sent when the queue starts it, not when it
+ * is queued, since it can wait behind a click or the battery pause and be
+ * dropped before the model is asked (review on #72). A drop while it runs is
+ * a cancel; a drop while it waits is counted apart. A hovered line a click
+ * joined becomes the click's, so its later drop is not hover's.
  */
 export function hoverCounts(entries: Iterable<DebugEntry>): HoverCounts {
-  let sent = 0;
-  let cancelled = 0;
-  for (const entry of entries) {
-    if (entry.kind !== 'queue' || entry.event.priority !== 'hovered') continue;
-    if (entry.event.type === 'queued') sent += 1;
-    else if (entry.event.type === 'dropped') cancelled += 1;
+  const counts: HoverCounts = { sent: 0, cancelled: 0, droppedBeforeStart: 0 };
+  // Hovered jobs now running, by label.
+  const running = new Set<string>();
+  const events = [...entries]
+    .filter((entry): entry is DebugQueueEntry => entry.kind === 'queue')
+    .sort((a, b) => a.id - b.id);
+  for (const { event } of events) {
+    const { label } = event;
+    const hovered = event.priority === 'hovered';
+    switch (event.type) {
+      case 'started':
+        if (hovered) {
+          counts.sent += 1;
+          running.add(label);
+        } else running.delete(label);
+        break;
+      case 'dropped':
+        if (running.delete(label)) counts.cancelled += 1;
+        else if (hovered) counts.droppedBeforeStart += 1;
+        break;
+      case 'joined':
+        // A click took it over.
+        if (!hovered) running.delete(label);
+        break;
+      case 'queued':
+        break;
+      default:
+        // Finished, failed, in the cache, put back for a click or tried again: not running.
+        running.delete(label);
+    }
   }
-  return { sent, cancelled };
+  return counts;
 }
 
-/** "Explain on hover: 12 sent, 9 cancelled before finishing", or "" when none were sent. */
-export function formatHoverCounts({ sent, cancelled }: HoverCounts): string {
-  if (sent === 0 && cancelled === 0) return '';
-  return `Explain on hover: ${sent} sent, ${cancelled} cancelled before finishing`;
+/**
+ * "Explain on hover: 12 sent, 9 cancelled before finishing", with how many
+ * were dropped before they started when some were, or "" when there were none.
+ */
+export function formatHoverCounts({ sent, cancelled, droppedBeforeStart }: HoverCounts): string {
+  if (sent === 0 && droppedBeforeStart === 0) return '';
+  return (
+    `Explain on hover: ${sent} sent, ${cancelled} cancelled before finishing` +
+    (droppedBeforeStart > 0 ? `, ${droppedBeforeStart} dropped before starting` : '')
+  );
 }
 
 const TARGET_LABELS: Record<RoundTripTarget, string> = { github: 'GitHub', ollama: 'Ollama' };

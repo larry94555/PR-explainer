@@ -319,7 +319,7 @@ describe('debug window (PR 9.4)', () => {
     expect(queueCounts([])).toEqual({ waiting: 0, running: 0, done: 0, cancelled: 0, failed: 0 });
   });
 
-  it("counts Explain on hover's requests and those cancelled before they finished (PR 11.2)", () => {
+  it("counts Explain on hover's requests that started, and those cancelled before they finished (PR 11.2)", () => {
     const at = (type: QueueEvent['type'], label: string, priority: QueueEvent['priority']) => ({
       id: nextId++,
       kind: 'queue' as const,
@@ -329,37 +329,56 @@ describe('debug window (PR 9.4)', () => {
       event: { type, label, priority, running: 0, waiting: 0 },
     });
     const events = [
-      // a: the pointer moved on while it ran.
+      // a: the pointer moved on while it ran: sent, then cancelled.
       at('queued', 'a', 'hovered'),
       at('started', 'a', 'hovered'),
       at('dropped', 'a', 'hovered'),
-      // b: the pointer moved on before it started.
+      // b: the pointer moved on before it started (it waited behind a
+      // click): never sent to the model (review on #72).
       at('queued', 'b', 'hovered'),
       at('dropped', 'b', 'hovered'),
       // c: finished, so its answer is in the cache.
       at('queued', 'c', 'hovered'),
       at('started', 'c', 'hovered'),
       at('finished', 'c', 'hovered'),
-      // d: a click joined it, so it is the click's now.
+      // d: a click joined it while it ran, so its later drop is the click's.
       at('queued', 'd', 'hovered'),
+      at('started', 'd', 'hovered'),
       at('joined', 'd', 'click'),
+      at('dropped', 'd', 'click'),
       // Explain ahead's own drops are not hover's.
       at('queued', 'e', 'on-screen'),
+      at('started', 'e', 'on-screen'),
       at('dropped', 'e', 'on-screen'),
     ];
-    expect(hoverCounts(events)).toEqual({ sent: 4, cancelled: 2 });
+    expect(hoverCounts(events)).toEqual({ sent: 3, cancelled: 1, droppedBeforeStart: 1 });
     expect(formatHoverCounts(hoverCounts(events))).toBe(
-      'Explain on hover: 4 sent, 2 cancelled before finishing',
+      'Explain on hover: 3 sent, 1 cancelled before finishing, 1 dropped before starting',
     );
-    expect(formatHoverCounts({ sent: 0, cancelled: 0 })).toBe('');
+    // Only queued and dropped: nothing was sent.
+    expect(hoverCounts(events.slice(3, 5))).toEqual({
+      sent: 0,
+      cancelled: 0,
+      droppedBeforeStart: 1,
+    });
+    // Queued, started and dropped; and a run that finished.
+    expect(hoverCounts([...events.slice(0, 3), ...events.slice(5, 8)])).toEqual({
+      sent: 2,
+      cancelled: 1,
+      droppedBeforeStart: 0,
+    });
+    expect(formatHoverCounts({ sent: 2, cancelled: 1, droppedBeforeStart: 0 })).toBe(
+      'Explain on hover: 2 sent, 1 cancelled before finishing',
+    );
+    expect(formatHoverCounts({ sent: 0, cancelled: 0, droppedBeforeStart: 0 })).toBe('');
 
-    // The window's summary line shows it, and only once a hover was sent.
+    // The window's summary line shows it, and only once there was a hover.
     const w = setup();
-    w.port().send({ type: 'snapshot', entries: events.slice(10), running: [] });
+    w.port().send({ type: 'snapshot', entries: events.slice(12), running: [] });
     expect(w.q('.summary').textContent).toBe('0 round trips in 1 group');
     w.port().send({ type: 'snapshot', entries: events, running: [] });
     expect(w.q('.summary').textContent).toBe(
-      '0 round trips in 1 group · Explain on hover: 4 sent, 2 cancelled before finishing',
+      '0 round trips in 1 group · Explain on hover: 3 sent, 1 cancelled before finishing, 1 dropped before starting',
     );
   });
 
