@@ -275,6 +275,19 @@ describe('Whole PR progress on the toolbar icon (PR 10.7)', () => {
     );
   });
 
+  it('says how many generated or vendored files it skipped (PR 11.4)', () => {
+    expect(progressBadge({ done: 12, total: 40, skipped: 3 }, true).title).toBe(
+      'Explained 12 of 40 changed lines\nSkipped 3 generated or vendored files\n' +
+        'PR Explainer is on. Click to turn it off.',
+    );
+    expect(progressBadge({ done: 40, total: 40, skipped: 1 }, true).title).toBe(
+      'Explained all 40 changed lines\nSkipped 1 generated or vendored file\n' +
+        'PR Explainer is on. Click to turn it off.',
+    );
+    // None skipped says nothing about it.
+    expect(progressBadge({ done: 1, total: 2, skipped: 0 }, true).title).not.toMatch(/Skipped/);
+  });
+
   it("draws a tab's progress on that tab only, and puts back ON when cleared", async () => {
     const { storage } = fakeStorage();
     const { action, shown } = fakeTabAction();

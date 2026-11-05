@@ -6,7 +6,7 @@
 
 | Part of the extension | Talks to | What it sends |
 |---|---|---|
-| The script on GitHub pages | `https://github.com`, `https://raw.githubusercontent.com` and, for one address only, `https://api.github.com` | Requests for the PR's description and the full files it changes, from raw.githubusercontent.com (public repositories) or from the file's page on github.com with your GitHub sign-in (private repositories). The list of the PR's changed files and their diffs from GitHub's API (`/repos/{owner}/{repo}/pulls/{n}/files`), sent without your GitHub sign-in, so it works for public repositories only. This is what GitHub's own pages load. |
+| The script on GitHub pages | `https://github.com`, `https://raw.githubusercontent.com` and, for one address only, `https://api.github.com` | Requests for the PR's description and the full files it changes, from raw.githubusercontent.com (public repositories) or from the file's page on github.com with your GitHub sign-in (private repositories). The list of the PR's changed files and their diffs from GitHub's API (`/repos/{owner}/{repo}/pulls/{n}/files`), sent without your GitHub sign-in, so it works for public repositories only. The repository's `.gitattributes` at the PR's head, from raw.githubusercontent.com without your sign-in, to leave generated and vendored files out of Explain ahead. This is what GitHub's own pages load. |
 | The service worker and the settings page | The LLM URL on the settings page only (default `http://localhost:11434`) | The prompt: the clicked code, the code around it, the PR's title and description, and your chat questions. |
 
 Nothing else is contacted: no analytics, no tracking, no error reporting, no update checks, and no fonts, scripts or images from the web.

@@ -50,6 +50,12 @@ import {
   type ExplainAheadDeps,
 } from './explainAhead';
 import { createPrMetadataLoader, type PrMetadata } from './prMetadata';
+import {
+  createGitattributesLoader,
+  skipPatternsOf,
+  skipReason,
+  SKIP_SETTING_KEY,
+} from './skipFiles';
 import { parsePrUrl } from './prUrl';
 import { installSelection } from './selection';
 import { createGithubFetch, createGithubRoundTrips } from './net/githubFetch';
@@ -121,6 +127,20 @@ const patchRequests = createPatchRequestLoader({
     );
     if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
     return response.json();
+  },
+  headSha: (pr) => headShaFromPage(document, pr),
+});
+
+// The repository's .gitattributes at the PR's head (PR 11.4), read once per
+// PR and head commit from raw.githubusercontent.com, without your sign-in,
+// for the files it marks generated or vendored. Explain ahead leaves those
+// and the Skip in background setting's patterns alone (src/skipFiles.ts).
+const gitattributes = createGitattributesLoader({
+  fetchText: async (url, signal) => {
+    const response = await githubFetch(url, { credentials: 'omit', signal }, 'gitattributes');
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
+    return response.text();
   },
   headSha: (pr) => headShaFromPage(document, pr),
 });
@@ -459,6 +479,16 @@ const aheadSetting = trackAheadSetting(chrome.storage.sync, chrome.storage.onCha
   reportPause();
 });
 const requestsSetting = trackRequestsSetting(chrome.storage.sync, chrome.storage.onChanged);
+// Skip in background (PR 11.4): a save takes effect at the next wait.
+const skipSetting = trackSyncValue(
+  SKIP_SETTING_KEY,
+  chrome.storage.sync,
+  chrome.storage.onChanged,
+  skipPatternsOf,
+  () => {
+    if (features.attached && aheadSetting.current() !== 'off') ahead.restart();
+  },
+);
 /** The PR and its head commit, for Whole PR's per-PR limit. */
 function aheadPage(): { pr: string; head: string | null } | undefined {
   const pr = parsePrUrl(location.href);
@@ -466,6 +496,10 @@ function aheadPage(): { pr: string; head: string | null } | undefined {
   return pr && name ? { pr: name, head: headShaFromPage(document, pr) } : undefined;
 }
 function describeAhead(event: AheadEvent): string {
+  if (event.type === 'skipped') {
+    const n = event.files.length;
+    return `explain ahead skipped ${n} generated or vendored file${n === 1 ? '' : 's'}: ${event.files.join(', ')}`;
+  }
   if (event.type === 'limit') {
     return `explain ahead stopped at ${event.count} lines ${event.wholePr ? 'for this PR' : 'on this page'}`;
   }
@@ -490,6 +524,13 @@ const ahead = createExplainAhead({
       return null;
     }
     return aheadLines(result);
+  },
+  // Generated and vendored files, and the Skip in background patterns.
+  skipFile: async () => {
+    const pr = parsePrUrl(location.href);
+    const rules = pr ? await gitattributes.load(pr) : [];
+    const patterns = skipSetting.current();
+    return (filePath) => skipReason(filePath, patterns, rules) !== null;
   },
   pageKey: aheadPage,
   concurrency: () => requestsSetting.current(),
@@ -685,6 +726,7 @@ function onPageChanged(url: string): void {
   prMetadata.forget();
   fileContexts.forget();
   patchRequests.forget();
+  gitattributes.forget();
   // A prefetch or wait from before the move is for code that may be gone.
   prefetcher.pageChanged();
   onClick.cancelPress();

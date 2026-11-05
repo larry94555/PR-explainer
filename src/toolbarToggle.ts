@@ -55,17 +55,21 @@ export const DONE_COLOR = '#1a7f37';
  * tick), and the counts in the tooltip, above the usual on or off line.
  */
 export function progressBadge(progress: AheadProgress, enabled: boolean): ActionBadge {
-  const { done, total, limited } = progress;
+  const { done, total, limited, skipped } = progress;
   const complete = done >= total;
   const lines = `changed line${total === 1 ? '' : 's'}`;
   const counts = complete
     ? `Explained all ${total} ${lines}`
     : `Explained ${done} of ${total} ${lines}` +
       (limited !== undefined ? ` (stopped at the ${limited}-line limit)` : '');
+  // Files left alone as generated or vendored (PR 11.4).
+  const skippedLine = skipped
+    ? `\nSkipped ${skipped} generated or vendored file${skipped === 1 ? '' : 's'}`
+    : '';
   return {
     text: complete ? '✓' : `${Math.min(99, Math.floor((done / total) * 100))}%`,
     color: complete ? DONE_COLOR : PROGRESS_COLOR,
-    title: `${counts}\n${actionBadge(enabled).title}`,
+    title: `${counts}${skippedLine}\n${actionBadge(enabled).title}`,
   };
 }
 

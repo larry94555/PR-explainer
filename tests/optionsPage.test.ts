@@ -4,6 +4,7 @@ import { LlmError, type LlmClient, type ModelInfo } from '../src/llm/types';
 import { initOptionsPage, TEST_PROMPT, type OptionsPageDeps } from '../src/options/optionsPage';
 import {
   DEFAULT_SETTINGS,
+  DEFAULT_SKIP_PATTERNS,
   SettingsValidationError,
   validateSettings,
   type Settings,
@@ -24,6 +25,7 @@ const SAVED: Settings = {
   explainAhead: 'off',
   requestsAtOnce: 1,
   backgroundOnBattery: 'pause',
+  skipInBackground: DEFAULT_SETTINGS.skipInBackground,
   keepAnswersDays: 7,
   letModelThink: false,
   streamAnswers: false,
@@ -138,6 +140,39 @@ describe('options page', () => {
       expect(text('save-status')).toBe('Not saved. Fix the problems above.');
     }
     expect(await deps.getSettings()).toMatchObject({ hoverWaitMs: 1000 });
+  });
+
+  it('loads and saves Skip in background, the default patterns first (PR 11.4)', async () => {
+    const deps = fakeDeps(fakeClient());
+    const page = await initOptionsPage(document, deps);
+    const box = $<HTMLTextAreaElement>('skipInBackground');
+    expect(box.tagName).toBe('TEXTAREA');
+    expect(box.value.split('\n')).toEqual([...DEFAULT_SKIP_PATTERNS]);
+    expect(document.querySelector('label[for="skipInBackground"]')!.textContent!.trim()).toBe(
+      'Skip in background',
+    );
+    const hint = box.closest('.field')!.querySelector('.hint')!.textContent!;
+    expect(hint).toMatch(/linguist-generated/);
+    expect(hint).toMatch(/clicking a line in one still explains it/i);
+
+    // Remove the lockfiles and add a pattern (settings.test.ts checks that
+    // saving drops spaces and blank lines).
+    box.value = '*.min.js\ngenerated/\n!keep.min.js';
+    await page.save();
+    expect(await deps.getSettings()).toMatchObject({
+      skipInBackground: '*.min.js\ngenerated/\n!keep.min.js',
+    });
+    await initOptionsPage(document, deps);
+    expect($<HTMLTextAreaElement>('skipInBackground').value).toBe(
+      '*.min.js\ngenerated/\n!keep.min.js',
+    );
+
+    // Too long for chrome.storage.sync is refused.
+    $<HTMLTextAreaElement>('skipInBackground').value = 'a'.repeat(4001);
+    await page.save();
+    expect(errorFor('skipInBackground')).toBe(
+      'Skip in background must be at most 4000 characters.',
+    );
   });
 
   it('loads and saves Background work on battery: Pause by default, or Keep going (PR 11.3)', async () => {
@@ -654,6 +689,7 @@ describe('options page', () => {
       explainAhead: 'off',
       requestsAtOnce: 1,
       backgroundOnBattery: 'pause',
+      skipInBackground: DEFAULT_SETTINGS.skipInBackground,
       keepAnswersDays: 7,
       letModelThink: false,
       streamAnswers: false,

@@ -5,6 +5,7 @@ import {
   chatSettings,
   hasOwnChatModel,
   DEFAULT_SETTINGS,
+  DEFAULT_SKIP_PATTERNS,
   followRequestsAtOnce,
   HOVER_WAIT_MS_RANGE,
   REQUESTS_AT_ONCE_RANGE,
@@ -17,6 +18,11 @@ import {
   type Settings,
   type StorageAreaLike,
 } from '../src/settings';
+import {
+  DEFAULT_SKIP_PATTERNS as CONTENT_SKIP_PATTERNS,
+  SKIP_SETTING_KEY,
+  skipPatternsOf,
+} from '../src/skipFiles';
 import { STREAM_SETTING_KEY, trackStreamSetting } from '../src/streamSetting';
 import {
   AHEAD_SETTING_KEY,
@@ -147,6 +153,8 @@ describe('settings', () => {
         requestsAtOnce: 1,
         // Background work drains the battery and turns the fan on (PR 11.3).
         backgroundOnBattery: 'pause',
+        // Lockfiles, bundles and generated code nobody clicks (PR 11.4).
+        skipInBackground: DEFAULT_SKIP_PATTERNS.join('\n'),
         // A whole PR prefetched once stays done for a week (PR 10.9).
         keepAnswersDays: 7,
         // Thinking was most of the wait on a reasoning model (PR 9.5).
@@ -198,6 +206,7 @@ describe('settings', () => {
         explainAhead: 'pr' as const,
         requestsAtOnce: 2,
         backgroundOnBattery: 'keep' as const,
+        skipInBackground: '*.min.js\ndist/',
         keepAnswersDays: 30,
         letModelThink: true,
         streamAnswers: true,
@@ -472,6 +481,29 @@ describe('settings', () => {
       const storage = fakeStorage({ [storageKey('explainOnHover')]: false });
       expect((await getSettings(storage)).explainOnHover).toBe(false);
       expect((await getSettings(fakeStorage())).explainOnHover).toBe(true);
+    });
+
+    it('keeps Skip in background as one pattern per line, up to 4000 characters (PR 11.4)', async () => {
+      const saved = await saveSettings(
+        { skipInBackground: '  *.min.js \r\n\n dist/\n' },
+        fakeStorage(),
+      );
+      expect(saved.skipInBackground).toBe('*.min.js\ndist/');
+      // Empty skips nothing, and is kept as empty rather than the defaults.
+      const storage = fakeStorage();
+      await saveSettings({ skipInBackground: '' }, storage);
+      expect((await getSettings(storage)).skipInBackground).toBe('');
+      for (const bad of ['a'.repeat(4001), 3 as unknown as string]) {
+        await expectRejectedFields(saveSettings({ skipInBackground: bad }, fakeStorage()), [
+          'skipInBackground',
+        ]);
+      }
+    });
+
+    it('the content script reads Skip in background under its key, with the same defaults (PR 11.4)', () => {
+      expect(SKIP_SETTING_KEY).toBe(storageKey('skipInBackground'));
+      expect([...CONTENT_SKIP_PATTERNS]).toEqual([...DEFAULT_SKIP_PATTERNS]);
+      expect(skipPatternsOf(DEFAULT_SETTINGS.skipInBackground)).toEqual([...DEFAULT_SKIP_PATTERNS]);
     });
 
     it('accepts a Hover wait from 150 to 2000 ms, whole numbers only (PR 11.2)', async () => {

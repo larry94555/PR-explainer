@@ -114,6 +114,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
   const aheadSelect = el<HTMLSelectElement>(doc, 'explainAhead');
   const requestsInput = el<HTMLInputElement>(doc, 'requestsAtOnce');
   const batterySelect = el<HTMLSelectElement>(doc, 'backgroundOnBattery');
+  const skipInput = el<HTMLTextAreaElement>(doc, 'skipInBackground');
   const keepAnswersInput = el<HTMLInputElement>(doc, 'keepAnswersDays');
   const clearButton = el<HTMLButtonElement>(doc, 'clear-answers');
   const clearStatus = el(doc, 'clear-status');
@@ -151,6 +152,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     aheadSelect.value = settings.explainAhead;
     requestsInput.value = String(settings.requestsAtOnce);
     batterySelect.value = settings.backgroundOnBattery;
+    skipInput.value = settings.skipInBackground;
     keepAnswersInput.value = String(settings.keepAnswersDays);
     thinkInput.checked = settings.letModelThink;
     streamInput.checked = settings.streamAnswers;
@@ -180,6 +182,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
       explainAhead: aheadSelect.value as Settings['explainAhead'],
       requestsAtOnce: requests === '' ? NaN : Number(requests),
       backgroundOnBattery: batterySelect.value as Settings['backgroundOnBattery'],
+      skipInBackground: skipInput.value,
       keepAnswersDays: keepAnswers === '' ? NaN : Number(keepAnswers),
       letModelThink: thinkInput.checked,
       streamAnswers: streamInput.checked,
