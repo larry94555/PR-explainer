@@ -649,4 +649,47 @@ describe('side panel chat', () => {
     await flush();
     expect(last()).toEqual(['assistant', 'Half an answer.']);
   });
+
+  it('holds back the answer being written when a clicked line was noted after it (review on #77)', async () => {
+    const browser = fakeBrowser();
+    const page = browser.addPage(1, 'https://github.com/owner/repo/pull/1/files');
+    browser.setActive(1);
+    let resolve!: (result: ChatResult) => void;
+    let chunk!: (text: string) => void;
+    const session = new ChatSessions().restart('owner/repo#1', SEED);
+    const chat = startChat(
+      {
+        ask: (_messages, onChunk) => {
+          chunk = onChunk;
+          return { result: new Promise<ChatResult>((res) => (resolve = res)), stop: vi.fn() };
+        },
+        openPanel: (options) => page.link.open({ ...options, streamAnswers: false }),
+      },
+      session,
+      SUBJECT,
+    );
+    const doc = sidePanelDocument();
+    await opened(createSidePanelPage(doc, browser.sideTabs));
+    inSidePanel(doc).ask('Why?');
+    chunk('Half an');
+    // Another line is clicked while the answer is written: its note follows the answer.
+    expect(chat.addCode('L3: retry()', { filePath: 'src/llm/retry.ts', startLine: 3 })).toBe(true);
+    // The side panel moves away and back.
+    page.port!.other!.postMessage({ type: 'detach' });
+    page.port!.other!.disconnect();
+    const doc2 = sidePanelDocument();
+    await opened(createSidePanelPage(doc2, browser.sideTabs));
+    const later = inSidePanel(doc2);
+    expect(later.shown().slice(-2)).toEqual([
+      ['assistant', ''],
+      ['note', 'Now looking at src/llm/retry.ts line 3'],
+    ]);
+    chunk(' answer.');
+    resolve({ status: 'done', answer: 'Half an answer.', model: 'm' });
+    await flush();
+    expect(later.shown().slice(-2)).toEqual([
+      ['assistant', 'Half an answer.'],
+      ['note', 'Now looking at src/llm/retry.ts line 3'],
+    ]);
+  });
 });

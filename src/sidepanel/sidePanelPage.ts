@@ -122,10 +122,14 @@ export function createSidePanelPage(
     setTheme(update.theme);
     emptyEl.hidden = true;
     // The answer being written, if it is held back until it ends (PR 9.6).
-    const last = update.entries.at(-1);
+    // It is the last answer, even when a note for code clicked meanwhile
+    // (PR 5.4) comes after it (review on #77).
+    const lastAnswer = [...update.entries]
+      .reverse()
+      .find((entry) => entry.kind === 'message' && entry.role === 'assistant');
     const holding =
-      update.busy && !update.streamAnswers && last?.kind === 'message' && last.role === 'assistant'
-        ? last
+      update.busy && !update.streamAnswers && lastAnswer?.kind === 'message'
+        ? lastAnswer
         : undefined;
     panel = openChatPanel(
       {
