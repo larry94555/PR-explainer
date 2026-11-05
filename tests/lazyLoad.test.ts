@@ -35,6 +35,7 @@ function attach() {
       ({
         host: document.createElement('div'),
         state: 'loading',
+        pinned: false,
         elapsedMs: 0,
         showLoading: () => {},
         showPartial: () => {},

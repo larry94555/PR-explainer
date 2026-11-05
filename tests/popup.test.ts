@@ -1,8 +1,15 @@
 import type { Explanation } from '../src/explain/parseExplanation';
 import type { RoundTrip, TraceTask } from '../src/trace/types';
 import {
+  answerMarkdown,
+  closeAllPopups,
   computePosition,
+  COPIED_MS,
   currentPopup,
+  MAX_PINNED,
+  openPopups,
+  pinnedPopups,
+  popupWorking,
   formatElapsed,
   TICK_MS,
   GAP,
@@ -41,7 +48,7 @@ function mouseDown(target: EventTarget): void {
 
 describe('popup', () => {
   afterEach(() => {
-    currentPopup()?.close();
+    closeAllPopups();
     document.body.innerHTML = '';
   });
 
@@ -1040,6 +1047,331 @@ describe('popup', () => {
     it('is left out with the setting off (no onDebug)', () => {
       openPopup(ANCHOR, { onAsk: vi.fn() }).showExplanation(SAMPLE, 'm');
       expect(debugButton()).toBeNull();
+    });
+  });
+});
+
+describe('Copy and Pin (PR 11.10)', () => {
+  const FACTS = {
+    where: 'src/retry.ts, line 12',
+    scope: 'retry()',
+    change: 'Added line',
+  };
+  const rootOf = (popup: { host: HTMLElement }) => popup.host.shadowRoot!;
+  const button = (popup: { host: HTMLElement }, name: string) =>
+    rootOf(popup).querySelector<HTMLButtonElement>(`button.${name}`)!;
+  const clipboard = () => {
+    const writes: string[] = [];
+    const write = vi.fn(async (text: string) => {
+      writes.push(text);
+    });
+    return { writes, write };
+  };
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const drag = (popup: { host: HTMLElement }, from: [number, number], to: [number, number]) => {
+    const header = rootOf(popup).querySelector('.header')!;
+    header.dispatchEvent(
+      new MouseEvent('mousedown', {
+        bubbles: true,
+        composed: true,
+        button: 0,
+        clientX: from[0],
+        clientY: from[1],
+      }),
+    );
+    document.dispatchEvent(
+      new MouseEvent('mousemove', { bubbles: true, clientX: to[0], clientY: to[1] }),
+    );
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    closeAllPopups();
+    document.body.innerHTML = '';
+  });
+
+  describe('answerMarkdown', () => {
+    it('gives the file, line and function, then each section under its heading', () => {
+      expect(answerMarkdown(SAMPLE, FACTS)).toBe(
+        [
+          '**src/retry.ts, line 12** in `retry()`',
+          '',
+          '### What it does',
+          '',
+          'Adds a `retry` loop.',
+          '',
+          '- tries **three** times',
+          '- waits longer each time',
+          '',
+          "### Why it's needed",
+          '',
+          'The server is *slow* to start.',
+          '',
+          '### Concerns',
+          '',
+          'None found.',
+          '',
+        ].join('\n'),
+      );
+    });
+
+    it('leaves out the function when unknown, and the line when there are no facts', () => {
+      expect(answerMarkdown(SAMPLE, { where: 'a.ts, line 1', change: 'Added line' })).toMatch(
+        /^\*\*a\.ts, line 1\*\*\n\n### What it does/,
+      );
+      expect(answerMarkdown(SAMPLE)).toMatch(/^### What it does\n\nAdds/);
+    });
+  });
+
+  describe('Copy', () => {
+    it('is shown only once the answer is shown', () => {
+      const popup = openPopup(ANCHOR, { facts: FACTS });
+      const panel = rootOf(popup).querySelector<HTMLElement>('.popup')!;
+      expect(panel.dataset.state).toBe('loading');
+      // In the footer, which the CSS hides outside the done state.
+      const style = rootOf(popup).querySelector('style')!.textContent!;
+      expect(style).toContain(".popup:not([data-state='done']) .footer { display: none; }");
+      expect(button(popup, 'copy').parentElement!.className).toBe('footer');
+      popup.showPartial('### What it does\nAdds');
+      popup.showExplanation(SAMPLE, 'm');
+      expect(panel.dataset.state).toBe('done');
+    });
+
+    it('copies the answer as Markdown and says so', async () => {
+      vi.useFakeTimers();
+      const { writes, write } = clipboard();
+      const popup = openPopup(ANCHOR, { facts: FACTS, writeClipboard: write });
+      popup.showExplanation(SAMPLE, 'm');
+      button(popup, 'copy').click();
+      await vi.waitFor(() => expect(writes).toEqual([answerMarkdown(SAMPLE, FACTS)]));
+      await Promise.resolve();
+      expect(button(popup, 'copy').textContent).toBe('Copied');
+      expect(rootOf(popup).querySelector('[role="status"]')!.textContent).toBe(
+        'Answer copied as Markdown',
+      );
+      vi.advanceTimersByTime(COPIED_MS);
+      expect(button(popup, 'copy').textContent).toBe('Copy');
+      expect(rootOf(popup).querySelector('[role="status"]')!.textContent).toBe('');
+    });
+
+    it('says when the clipboard refuses', async () => {
+      const popup = openPopup(ANCHOR, {
+        writeClipboard: () => Promise.reject(new Error('denied')),
+      });
+      popup.showExplanation(SAMPLE, 'm');
+      button(popup, 'copy').click();
+      await flush();
+      expect(button(popup, 'copy').textContent).toBe('Copy failed');
+      expect(rootOf(popup).querySelector('[role="status"]')!.textContent).toMatch(/Could not copy/);
+    });
+
+    it('copies nothing before the answer, or after Regenerate', async () => {
+      const { writes, write } = clipboard();
+      const popup = openPopup(ANCHOR, { writeClipboard: write, onRegenerate: vi.fn() });
+      button(popup, 'copy').click();
+      popup.showExplanation(SAMPLE, 'm');
+      button(popup, 'regenerate').click();
+      button(popup, 'copy').click();
+      await flush();
+      expect(writes).toEqual([]);
+    });
+
+    it('copies the new answer after Regenerate', async () => {
+      const { writes, write } = clipboard();
+      const popup = openPopup(ANCHOR, { writeClipboard: write, onRegenerate: vi.fn() });
+      popup.showExplanation(SAMPLE, 'm');
+      button(popup, 'regenerate').click();
+      popup.showExplanation({ ...SAMPLE, concerns: 'One.' }, 'm');
+      button(popup, 'copy').click();
+      await flush();
+      expect(writes[0]).toMatch(/### Concerns\n\nOne\.\n$/);
+    });
+  });
+
+  describe('Pin', () => {
+    it('has a label, a pressed state and a tooltip', () => {
+      const popup = openPopup(ANCHOR);
+      const pin = button(popup, 'pin');
+      expect(pin.textContent).toBe('Pin');
+      expect(pin.getAttribute('aria-pressed')).toBe('false');
+      expect(pin.title).toBe('Keep this popup open while you click elsewhere');
+      pin.click();
+      expect(popup.pinned).toBe(true);
+      expect(pin.getAttribute('aria-pressed')).toBe('true');
+      expect(pin.title).toMatch(/^Unpin/);
+      expect(rootOf(popup).querySelector('.popup')!.hasAttribute('data-pinned')).toBe(true);
+    });
+
+    it('keeps a pinned popup open on a click elsewhere', () => {
+      const popup = openPopup(ANCHOR);
+      button(popup, 'pin').click();
+      mouseDown(document.body);
+      expect(popup.state).not.toBe('closed');
+      expect(popup.host.isConnected).toBe(true);
+    });
+
+    it('can be pinned while loading, and still gets its answer', () => {
+      const popup = openPopup(ANCHOR);
+      button(popup, 'pin').click();
+      expect(popupWorking()).toBe(true);
+      popup.showExplanation(SAMPLE, 'm');
+      expect(popup.state).toBe('done');
+      expect(popupWorking()).toBe(false);
+    });
+
+    it('fixes a pinned popup in the window, and drags it by its header', () => {
+      const popup = openPopup(ANCHOR);
+      button(popup, 'pin').click();
+      expect(popup.host.style.position).toBe('fixed');
+      popup.host.style.top = '100px';
+      popup.host.style.left = '40px';
+      drag(popup, [50, 110], [250, 160]);
+      expect(popup.host.style.top).toBe('150px');
+      expect(popup.host.style.left).toBe('240px');
+      // A later update does not move it back next to its line.
+      popup.showExplanation(SAMPLE, 'm');
+      expect(popup.host.style.top).toBe('150px');
+    });
+
+    it('keeps the dragged popup inside the window', () => {
+      const popup = openPopup(ANCHOR);
+      button(popup, 'pin').click();
+      popup.host.style.top = '100px';
+      popup.host.style.left = '40px';
+      drag(popup, [50, 110], [-500, -500]);
+      expect(popup.host.style.top).toBe('0px');
+      expect(popup.host.style.left).toBe('0px');
+      drag(popup, [0, 0], [window.innerWidth + 500, window.innerHeight + 500]);
+      expect(parseFloat(popup.host.style.top)).toBeLessThanOrEqual(window.innerHeight);
+      expect(parseFloat(popup.host.style.left)).toBeLessThanOrEqual(window.innerWidth);
+    });
+
+    it('does not drag a popup that is not pinned, nor from a header button', () => {
+      const popup = openPopup(ANCHOR);
+      const top = popup.host.style.top;
+      drag(popup, [50, 110], [250, 160]);
+      expect(popup.host.style.top).toBe(top);
+      button(popup, 'pin').click();
+      popup.host.style.top = '100px';
+      button(popup, 'pin').dispatchEvent(
+        new MouseEvent('mousedown', { bubbles: true, composed: true, clientX: 0, clientY: 0 }),
+      );
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 300, clientY: 300 }));
+      document.dispatchEvent(new MouseEvent('mouseup'));
+      expect(popup.host.style.top).toBe('100px');
+    });
+
+    it('closes a pinned popup with its close button', () => {
+      const onClose = vi.fn();
+      const popup = openPopup(ANCHOR, { onClose });
+      button(popup, 'pin').click();
+      button(popup, 'close').click();
+      expect(popup.state).toBe('closed');
+      expect(onClose).toHaveBeenCalledOnce();
+      expect(pinnedPopups()).toEqual([]);
+    });
+
+    it('closes a pinned popup with Esc only while it has focus', () => {
+      const popup = openPopup(ANCHOR);
+      button(popup, 'pin').click();
+      (rootOf(popup).activeElement as HTMLElement | null)?.blur();
+      expect(document.activeElement).not.toBe(popup.host);
+      pressKey('Escape');
+      expect(popup.state).not.toBe('closed');
+      rootOf(popup).querySelector<HTMLElement>('.popup')!.focus();
+      expect(document.activeElement).toBe(popup.host);
+      pressKey('Escape');
+      expect(popup.state).toBe('closed');
+    });
+
+    it('opens a second popup beside a pinned one, which stays', () => {
+      const first = openPopup(ANCHOR);
+      first.showExplanation(SAMPLE, 'm');
+      button(first, 'pin').click();
+      const second = openPopup({ top: 300, bottom: 320, left: 40 });
+      expect(first.state).toBe('done');
+      expect(currentPopup()).toBe(second);
+      expect(openPopups()).toEqual([first, second]);
+      // The id names the popup that is not pinned.
+      expect(document.getElementById(POPUP_ID)).toBe(second.host);
+      // Esc with focus in the new one closes it, not the pinned one.
+      pressKey('Escape');
+      expect(second.state).toBe('closed');
+      expect(first.state).toBe('done');
+      // A third replaces nothing pinned either.
+      const third = openPopup(ANCHOR);
+      mouseDown(document.body);
+      expect(third.state).toBe('closed');
+      expect(first.state).toBe('done');
+    });
+
+    it('closes the popup that is not pinned, not the pinned one, on Esc in the pinned one', () => {
+      const first = openPopup(ANCHOR);
+      button(first, 'pin').click();
+      const second = openPopup(ANCHOR);
+      rootOf(first).querySelector<HTMLElement>('.popup')!.focus();
+      pressKey('Escape');
+      expect(first.state).toBe('closed');
+      expect(second.state).not.toBe('closed');
+    });
+
+    it(`pins at most ${MAX_PINNED} at once`, () => {
+      const popups = Array.from({ length: MAX_PINNED }, () => {
+        const popup = openPopup(ANCHOR);
+        button(popup, 'pin').click();
+        return popup;
+      });
+      expect(pinnedPopups()).toEqual(popups);
+      const extra = openPopup(ANCHOR);
+      const pin = button(extra, 'pin');
+      expect(pin.disabled).toBe(true);
+      expect(pin.title).toMatch(/3 popups are pinned already/);
+      pin.click();
+      expect(extra.pinned).toBe(false);
+      expect(pinnedPopups()).toHaveLength(MAX_PINNED);
+      // Closing one lets the open popup be pinned.
+      button(popups[0]!, 'close').click();
+      expect(pin.disabled).toBe(false);
+      pin.click();
+      expect(extra.pinned).toBe(true);
+    });
+
+    it('unpins: the popup closes on a click elsewhere again, and replaces the open one', () => {
+      const first = openPopup(ANCHOR);
+      button(first, 'pin').click();
+      const second = openPopup(ANCHOR);
+      button(first, 'pin').click();
+      expect(first.pinned).toBe(false);
+      expect(second.state).toBe('closed');
+      expect(currentPopup()).toBe(first);
+      expect(first.host.id).toBe(POPUP_ID);
+      expect(first.host.style.position).toBe('absolute');
+      mouseDown(document.body);
+      expect(first.state).toBe('closed');
+    });
+
+    it('closes every popup, pinned or not, when asked (leaving the PR)', () => {
+      const first = openPopup(ANCHOR);
+      button(first, 'pin').click();
+      const second = openPopup(ANCHOR);
+      closeAllPopups();
+      expect(first.state).toBe('closed');
+      expect(second.state).toBe('closed');
+      expect(openPopups()).toEqual([]);
+      expect(document.querySelectorAll('div')).toHaveLength(0);
+    });
+
+    it('reaches Copy and Pin with the keyboard', () => {
+      const popup = openPopup(ANCHOR);
+      popup.showExplanation(SAMPLE, 'm');
+      for (const name of ['copy', 'pin']) {
+        const el = button(popup, name);
+        expect(el.type).toBe('button');
+        expect(el.tabIndex).toBe(0);
+        el.focus();
+        expect(rootOf(popup).activeElement).toBe(el);
+      }
     });
   });
 });

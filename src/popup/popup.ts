@@ -31,7 +31,20 @@
 // latency is always visible. An answer from the cache says "From cache" (or
 // "Prefetched" when Explain ahead wrote it in the background, PR 10.7) and
 // how long the model took when it first wrote it. Only one popup
-// is open at a time: opening a new one closes the old one.
+// is open at a time, apart from pinned ones: opening a new one closes the
+// old one.
+//
+// Copy and Pin (PR 11.10). Once the answer is shown, Copy (in the footer,
+// beside Ask a question, as the header has no room left) puts it on the
+// clipboard as Markdown (answerMarkdown below: the file and line, then the
+// three sections with their headings), ready to paste into a review comment.
+// Pin keeps the popup open: a click elsewhere no longer closes it, Esc closes
+// it only while focus is inside it, and opening another popup leaves it where
+// it is, so two answers can be compared. A pinned popup stays put in the
+// window while the page scrolls, and is moved by dragging its header. Pin
+// again unpins it. At most MAX_PINNED popups are pinned at once; while that
+// many are, the other popups' Pin buttons are turned off. The content script
+// closes pinned popups when the user leaves the PR (closeAllPopups).
 //
 // It follows GitHub's light or dark mode, and changes with it while open
 // (src/theme.ts). Opening it moves keyboard focus into it, so Tab reaches its
@@ -145,6 +158,8 @@ export interface PopupOptions {
   facts?: CodeFacts;
   /** Clock in milliseconds, for the elapsed time. Tests pass a fake one. */
   now?: () => number;
+  /** Writes Copy's text to the clipboard (PR 11.10). Tests pass a fake one. */
+  writeClipboard?: (text: string) => Promise<void>;
 }
 
 /** How often the elapsed time updates while loading. */
@@ -220,6 +235,8 @@ function sectionNode(doc: Document, key: SectionKey, markdown: string): HTMLElem
 export interface Popup {
   readonly host: HTMLElement;
   readonly state: PopupState;
+  /** Pinned popups stay open when the user clicks elsewhere (PR 11.10). */
+  readonly pinned: boolean;
   /**
    * Time since the popup opened (or since showLoading was last called),
    * frozen when the answer or error arrives.
@@ -389,11 +406,60 @@ export function computePosition(
   return { top: top + viewport.scrollY, left: left + viewport.scrollX };
 }
 
-let current: Popup | null = null;
+/** How many popups can be pinned at once (PR 11.10). */
+export const MAX_PINNED = 3;
 
-/** The open popup, if any. */
+/** How long Copy says "Copied" before it goes back to "Copy". */
+export const COPIED_MS = 2000;
+
+/**
+ * The answer as Markdown for a review comment (PR 11.10): the file and line
+ * (with the function, when known) in bold, then each section under its
+ * heading.
+ */
+export function answerMarkdown(explanation: Explanation, facts?: CodeFacts): string {
+  const parts: string[] = [];
+  if (facts) parts.push(`**${facts.where}**` + (facts.scope ? ` in \`${facts.scope}\`` : ''));
+  for (const key of Object.keys(SECTION_TITLES) as SectionKey[]) {
+    parts.push(`### ${SECTION_TITLES[key]}\n\n${explanation[key].trim()}`);
+  }
+  return parts.join('\n\n') + '\n';
+}
+
+// The popup that is not pinned, and the pinned ones, oldest first.
+let current: Popup | null = null;
+const pinned: Popup[] = [];
+// Esc presses a popup has already closed itself for.
+const escHandled = new WeakSet<Event>();
+// Each open popup's Pin button, turned off while MAX_PINNED others are pinned.
+const pinButtons = new Map<Popup, () => void>();
+const refreshPinButtons = () => {
+  for (const refresh of pinButtons.values()) refresh();
+};
+
+/** The open popup that is not pinned, if any. */
 export function currentPopup(): Popup | null {
   return current;
+}
+
+/** The pinned popups, oldest first (PR 11.10). */
+export function pinnedPopups(): readonly Popup[] {
+  return [...pinned];
+}
+
+/** Every open popup: the pinned ones, then the one that is not. */
+export function openPopups(): Popup[] {
+  return current ? [...pinned, current] : [...pinned];
+}
+
+/** Whether any open popup is still waiting for its answer. */
+export function popupWorking(): boolean {
+  return openPopups().some((p) => p.state === 'loading' || p.state === 'streaming');
+}
+
+/** Closes every popup, pinned or not, as when the user leaves the PR. */
+export function closeAllPopups(): void {
+  for (const popup of openPopups()) popup.close();
 }
 
 /** Opens a popup in the loading state next to `anchor`, closing any other popup. */
@@ -465,7 +531,22 @@ export function openPopup(
     debugButton.addEventListener('click', () => options.onDebug?.());
     header.append(debugButton);
   }
-  header.append(stopButton, regenerateButton, closeButton);
+  // In the footer, beside Ask a question: shown only once the answer is shown (PR 11.10).
+  const copyButton = doc.createElement('button');
+  copyButton.className = 'copy';
+  copyButton.type = 'button';
+  copyButton.textContent = 'Copy';
+  copyButton.title = 'Copy the answer as Markdown, for a review comment';
+  const pinButton = doc.createElement('button');
+  pinButton.className = 'pin';
+  pinButton.type = 'button';
+  pinButton.textContent = 'Pin';
+  pinButton.setAttribute('aria-pressed', 'false');
+  // Says what Copy did, for screen readers.
+  const copyStatus = doc.createElement('span');
+  copyStatus.className = 'sr-only';
+  copyStatus.setAttribute('role', 'status');
+  header.append(stopButton, regenerateButton, pinButton, closeButton, copyStatus);
 
   const latency = doc.createElement('div');
   latency.className = 'latency';
@@ -493,6 +574,7 @@ export function openPopup(
   // Shown only once the explanation is shown (see popupStyle.ts).
   const footer = doc.createElement('div');
   footer.className = 'footer';
+  footer.append(copyButton);
   if (options.onAsk) {
     const askButton = doc.createElement('button');
     askButton.className = 'ask';
@@ -548,7 +630,10 @@ export function openPopup(
     elapsedLabel.textContent = `${prefetched ? 'Prefetched' : 'From cache'} · took ${formatElapsed(ms)}`;
   };
 
+  let isPinned = false;
   const place = () => {
+    // A pinned popup stays where it is, or where it was dragged.
+    if (isPinned) return;
     const rect = 'getBoundingClientRect' in anchor ? anchor.getBoundingClientRect() : anchor;
     const box = panel.getBoundingClientRect();
     const { top, left } = computePosition(
@@ -587,12 +672,21 @@ export function openPopup(
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === 'Escape') popup.close();
+    if (event.key !== 'Escape') return;
+    // Focus inside a shadow root shows as its host on the page.
+    const focused = doc.activeElement;
+    // A pinned popup closes only while it has focus; one that is not pinned
+    // closes unless a pinned one has focus (that one closes instead).
+    if (escHandled.has(event)) return;
+    if (isPinned ? focused !== host : pinned.some((p) => p.host === focused)) return;
+    // One Esc closes one popup, whichever order the popups hear it in.
+    escHandled.add(event);
+    popup.close();
   };
   // mousedown, not click: the click that opens a popup (src/clickHandler.ts) has already
   // finished its mousedown, so it cannot close the popup it just opened.
   const onMouseDown = (event: MouseEvent) => {
-    if (!event.composedPath().includes(host)) popup.close();
+    if (!isPinned && !event.composedPath().includes(host)) popup.close();
   };
   doc.addEventListener('keydown', onKeyDown, true);
   doc.addEventListener('mousedown', onMouseDown, true);
@@ -620,6 +714,103 @@ export function openPopup(
     } else setState('stopped');
     options.onStop?.();
   });
+  // The answer shown, for Copy.
+  let answer: Explanation | undefined;
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+  const writeClipboard =
+    options.writeClipboard ?? ((text: string) => win.navigator.clipboard.writeText(text));
+  copyButton.addEventListener('click', () => {
+    if (state !== 'done' || !answer) return;
+    const report = (label: string, status: string) => {
+      if (state === 'closed') return;
+      copyButton.textContent = label;
+      copyStatus.textContent = status;
+      clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(() => {
+        copyButton.textContent = 'Copy';
+        copyStatus.textContent = '';
+      }, COPIED_MS);
+    };
+    writeClipboard(answerMarkdown(answer, options.facts)).then(
+      () => report('Copied', 'Answer copied as Markdown'),
+      () => report('Copy failed', 'Could not copy the answer: Chrome refused the clipboard'),
+    );
+  });
+
+  // Pin (PR 11.10): the popup leaves the one-at-a-time slot and stays fixed
+  // in the window where it is now.
+  const refreshPin = () => {
+    pinButton.setAttribute('aria-pressed', String(isPinned));
+    const full = !isPinned && pinned.length >= MAX_PINNED;
+    pinButton.disabled = full;
+    pinButton.title = isPinned
+      ? 'Unpin: close this popup again when you click elsewhere'
+      : full
+        ? `${MAX_PINNED} popups are pinned already. Close one to pin this one`
+        : 'Keep this popup open while you click elsewhere';
+  };
+  const setPinned = (on: boolean) => {
+    if (on === isPinned || state === 'closed') return;
+    if (on) {
+      if (pinned.length >= MAX_PINNED) return;
+      const box = host.getBoundingClientRect();
+      isPinned = true;
+      pinned.push(popup);
+      if (current === popup) current = null;
+      // The id names the popup that is not pinned.
+      host.removeAttribute('id');
+      host.style.setProperty('position', 'fixed');
+      host.style.setProperty('top', `${box.top}px`);
+      host.style.setProperty('left', `${box.left}px`);
+    } else {
+      isPinned = false;
+      pinned.splice(pinned.indexOf(popup), 1);
+      // Back in the one-at-a-time slot: the popup that held it closes.
+      if (current && current !== popup) current.close();
+      current = popup;
+      host.id = POPUP_ID;
+      place();
+    }
+    panel.toggleAttribute('data-pinned', isPinned);
+    refreshPinButtons();
+  };
+  pinButton.addEventListener('click', () => setPinned(!isPinned));
+
+  // A pinned popup is moved by dragging its header (but not its buttons).
+  header.addEventListener('mousedown', (event) => {
+    if (!isPinned || event.button !== 0) return;
+    if (event.composedPath().some((node) => node instanceof win.HTMLButtonElement)) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startTop = parseFloat(host.style.top) || 0;
+    const startLeft = parseFloat(host.style.left) || 0;
+    const box = panel.getBoundingClientRect();
+    const headerHeight = header.getBoundingClientRect().height;
+    const onMove = (move: MouseEvent) => {
+      // Kept inside the window, with the header always there to drag back.
+      const top = Math.min(
+        Math.max(0, startTop + move.clientY - startY),
+        Math.max(0, win.innerHeight - headerHeight),
+      );
+      const left = Math.min(
+        Math.max(0, startLeft + move.clientX - startX),
+        Math.max(0, win.innerWidth - box.width),
+      );
+      host.style.setProperty('top', `${top}px`);
+      host.style.setProperty('left', `${left}px`);
+    };
+    const onUp = () => {
+      doc.removeEventListener('mousemove', onMove, true);
+      doc.removeEventListener('mouseup', onUp, true);
+      stopDragging = undefined;
+    };
+    doc.addEventListener('mousemove', onMove, true);
+    doc.addEventListener('mouseup', onUp, true);
+    stopDragging = onUp;
+  });
+  let stopDragging: (() => void) | undefined;
+
   regenerateButton.addEventListener('click', () => {
     if (state !== 'done' && state !== 'failed' && state !== 'stopped') return;
     popup.showLoading(modelLabel.textContent || undefined);
@@ -654,6 +845,9 @@ export function openPopup(
     get state() {
       return state;
     },
+    get pinned() {
+      return isPinned;
+    },
     get elapsedMs() {
       return elapsed();
     },
@@ -663,6 +857,7 @@ export function openPopup(
       startTicking();
       hideTimings();
       written = '';
+      answer = undefined;
       shown.clear();
       setBody('loading', ...loadingBody(doc, model || undefined));
     },
@@ -686,6 +881,7 @@ export function openPopup(
     showExplanation(explanation, model, cached) {
       if (state === 'closed' || state === 'stopped') return;
       setModel(model);
+      answer = explanation;
       if (cached) showCached(cached.elapsedMs, cached.prefetched === true);
       else stopTicking('Answered in ');
       const keys = Object.keys(SECTION_TITLES) as SectionKey[];
@@ -837,17 +1033,25 @@ export function openPopup(
       const hadFocus = doc.activeElement === host;
       state = 'closed';
       clearInterval(ticker);
+      clearTimeout(copiedTimer);
+      stopDragging?.();
       stopFollowingTheme();
       doc.removeEventListener('keydown', onKeyDown, true);
       doc.removeEventListener('mousedown', onMouseDown, true);
       host.remove();
       if (hadFocus) restoreFocus(returnFocus);
       if (current === popup) current = null;
+      const index = pinned.indexOf(popup);
+      if (index >= 0) pinned.splice(index, 1);
+      pinButtons.delete(popup);
+      refreshPinButtons();
       options.onClose?.();
     },
   };
 
   current = popup;
+  pinButtons.set(popup, refreshPin);
+  refreshPin();
   popup.showLoading();
   panel.focus({ preventScroll: true });
   return popup;

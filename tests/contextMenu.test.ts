@@ -122,6 +122,7 @@ function setupPage(isEnabled?: () => boolean) {
       return {
         host: document.createElement('div'),
         state: 'loading',
+        pinned: false,
         elapsedMs: 0,
         showLoading: () => {},
         showPartial: () => {},

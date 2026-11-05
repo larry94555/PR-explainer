@@ -69,6 +69,7 @@ function fakePopup(anchor: PopupAnchor, hooks: PopupHooks) {
     calls,
     host: document.createElement('div'),
     elapsedMs: 1234,
+    pinned: false,
     get state() {
       return state;
     },
