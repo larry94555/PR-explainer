@@ -34,7 +34,9 @@ export const POPUP_STYLE = `
     background: var(--pe-subtle-bg);
     border-bottom: 1px solid var(--pe-border);
   }
-  .title { font-weight: 600; }
+  .title { font-weight: 600; white-space: nowrap; }
+  /* The buttons keep their size; the model's name gives way first. */
+  .header > button { flex-shrink: 0; }
   /* One line, cut short with … when the header is full; the whole name is its tooltip. */
   .model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pe-muted); font-size: 12px; }
   .elapsed { color: var(--pe-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -49,7 +51,7 @@ export const POPUP_STYLE = `
     cursor: pointer;
   }
   .close:hover, .close:focus-visible { background: var(--pe-hover-bg); color: var(--pe-fg); }
-  .stop, .regenerate, .details, .debug {
+  .stop, .regenerate, .details, .debug, .copy, .pin {
     border: 1px solid var(--pe-border);
     background: var(--pe-bg);
     color: var(--pe-fg);
@@ -124,6 +126,14 @@ export const POPUP_STYLE = `
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
   }
+  /* Copy and Pin (PR 11.10). Copy is in the footer, shown once the answer is. */
+  .footer { gap: 8px; }
+  .copy:hover, .copy:focus-visible, .pin:not(:disabled):hover, .pin:focus-visible { background: var(--pe-hover-bg); }
+  .pin[aria-pressed='true'] { background: var(--pe-accent-bg); border-color: var(--pe-accent); color: var(--pe-accent); }
+  .pin:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* A pinned popup is dragged by its header. */
+  .popup[data-pinned] .header { cursor: move; }
+  .popup[data-pinned] { border-color: var(--pe-accent); }
   .regenerate:hover, .regenerate:focus-visible { background: var(--pe-accent-bg); border-color: var(--pe-accent); color: var(--pe-accent); }
   /* Regenerate only makes sense once the model has stopped working. */
   .popup:not([data-state='done']):not([data-state='failed']):not([data-state='stopped']) .regenerate { display: none; }
@@ -136,8 +146,8 @@ export const POPUP_STYLE = `
     background: var(--pe-bg);
     border-top: 1px solid var(--pe-border-muted);
   }
-  /* Ask a question only makes sense once there is an explanation to ask about. */
-  .popup:not([data-state='done']) .footer, .footer:empty { display: none; }
+  /* Copy and Ask a question only make sense once there is an explanation. */
+  .popup:not([data-state='done']) .footer { display: none; }
   .ask {
     border: 1px solid var(--pe-success);
     background: var(--pe-success);

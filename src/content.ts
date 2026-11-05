@@ -44,7 +44,7 @@ import {
   sendRequest,
 } from './messaging/client';
 import { closeDetached, DiffPageFeatures, showsDiffs, watchNavigation } from './navigation';
-import { currentPopup, openPopup } from './popup/popup';
+import { closeAllPopups, openPopup, openPopups, popupWorking } from './popup/popup';
 import { buildWaterfall } from './popup/latencyBreakdown';
 import { traceLine } from './trace/clickTrace';
 import { createFileContextLoader, headShaFromPage, type CodeSpan } from './fileContext';
@@ -228,7 +228,7 @@ const enabled = trackEnabled(chrome.storage.local, chrome.storage.onChanged, (va
   // Turning it off also closes an open popup or chat; a late answer is then
   // ignored.
   if (!value) {
-    currentPopup()?.close();
+    closeAllPopups();
     openChat()?.close();
     prefetcher.cancel();
     onClick.cancelPress();
@@ -570,10 +570,8 @@ const ahead = createExplainAhead({
   // One request at a time: not while a click's or a chat answer is being
   // written, not while Explain on hover runs, and not in a hidden tab.
   isBusy: () => {
-    const state = currentPopup()?.state;
     return (
-      state === 'loading' ||
-      state === 'streaming' ||
+      popupWorking() ||
       openChat()?.isBusy === true ||
       prefetcher.running() !== undefined ||
       document.visibilityState === 'hidden'
@@ -667,10 +665,7 @@ const prefetcher = createPrefetcher({
   isHidden: () => document.visibilityState === 'hidden',
   // One request at a time: not while a click's answer is still coming, and
   // not while the chat is open (a click then goes to the chat).
-  isBusy: () => {
-    const state = currentPopup()?.state;
-    return state === 'loading' || state === 'streaming' || openChat() !== null;
-  },
+  isBusy: () => popupWorking() || openChat() !== null,
   // Every build logs prefetches, like the timing of each explanation below.
   onEvent: (event) => console.info(`[PR Explainer] ${describePrefetch(event)}`),
 });
@@ -866,8 +861,9 @@ const features = new DiffPageFeatures(() => {
     ahead.cancel();
     removeSelection();
     selection = null;
-    // Closing the popup also stops its request.
-    currentPopup()?.close();
+    // Closing a popup also stops its request. Pinned ones close too: the
+    // user has left the PR's diffs (PR 11.10).
+    closeAllPopups();
   };
 });
 
@@ -885,10 +881,16 @@ readDescriptionAhead();
 // It may also come back from editing the PR's title or description, or Turbo
 // may redraw the same page after an edit or a push, so the description and
 // the files are read again (PR 6.1, 6.3).
+// The PR the open popups are about.
+let popupsPr = prName(location.href);
 function onPageChanged(url: string): void {
   // A popup or chat whose part of the page GitHub replaced is closed, so
   // its request stops and clicks do not go to it.
-  closeDetached([currentPopup(), currentChatPanel()]);
+  closeDetached([...openPopups(), currentChatPanel()]);
+  // Pinned popups belong to their PR: moving to another PR closes them (PR 11.10).
+  const pr = prName(url);
+  if (pr !== popupsPr) closeAllPopups();
+  popupsPr = pr;
   // A new page is a new group in the debug log (its warm-up and description).
   pageOpen = newPageGroup();
   // A redraw can also drop the badge.
