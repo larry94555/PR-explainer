@@ -318,9 +318,22 @@ describe('Measure results (PR 11.7)', () => {
     expect(measurementsFor(list, 'c')).toEqual({});
   });
 
-  it('treats a model with and without :latest as the same', () => {
+  it('treats a model with and without :latest as the same, in either order', () => {
     const list = addMeasurement([m('llama3', 3000, 1)], m('llama3:latest', 2000, 2));
     expect(measurementsFor(list, 'llama3').previous?.totalMs).toBe(3000);
+    expect(measurementsFor(list, 'llama3:latest').previous?.totalMs).toBe(3000);
+
+    // Saved as llama3:latest, then measured and looked up as llama3 (review on #76).
+    let other = addMeasurement([m('llama3:latest', 3000, 1)], m('llama3', 2500, 2));
+    other = addMeasurement(other, m('llama3:latest', 2000, 3));
+    expect(other).toEqual([m('llama3', 2500, 2), m('llama3:latest', 2000, 3)]);
+    expect(measurementsFor(other, 'llama3')).toEqual({
+      previous: m('llama3', 2500, 2),
+      latest: m('llama3:latest', 2000, 3),
+    });
+    expect(measurementsFor([m('llama3:latest', 1, 1)], 'llama3').latest).toBeDefined();
+    expect(measurementsFor([m('llama3', 1, 1)], 'llama3:latest').latest).toBeDefined();
+    expect(measurementsFor([m('llama3:8b', 1, 1)], 'llama3')).toEqual({});
   });
 
   it(`keeps the ${MAX_MEASURED_MODELS} models measured most recently`, () => {

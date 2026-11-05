@@ -515,6 +515,7 @@ export async function initOptionsPage(doc: Document, deps: OptionsPageDeps): Pro
     modelSelect.value = model;
     speedStatus.textContent = `Now using ${model}. Saved.`;
     showResults(lastResults);
+    showMeasurements();
     if (saved.keepAliveMinutes > 0) {
       try {
         await deps.createClient(saved).loadModel(model, {

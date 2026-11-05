@@ -222,13 +222,21 @@ export function parseMeasurements(raw: unknown): Measurement[] {
  * MAX_MEASURED_MODELS models measured most recently. Oldest first.
  */
 export function addMeasurement(list: readonly Measurement[], added: Measurement): Measurement[] {
-  const sameModel = list.filter((m) => isSameModel(m.model, added.model));
-  const previous = sameModel.at(-1);
-  const others = list.filter((m) => !isSameModel(m.model, added.model));
+  const key = measuredModelKey(added.model);
+  const previous = list.filter((m) => measuredModelKey(m.model) === key).at(-1);
+  const others = list.filter((m) => measuredModelKey(m.model) !== key);
   const kept = [...others, ...(previous ? [previous] : []), added];
-  const models = [...new Set(kept.map((m) => m.model))];
+  const models = [...new Set(kept.map((m) => measuredModelKey(m.model)))];
   const dropped = new Set(models.slice(0, Math.max(0, models.length - MAX_MEASURED_MODELS)));
-  return kept.filter((m) => !dropped.has(m.model));
+  return kept.filter((m) => !dropped.has(measuredModelKey(m.model)));
+}
+
+/**
+ * One name for a model however it is written: Ollama treats `llama3` and
+ * `llama3:latest` as the same model, in either order (review on #76).
+ */
+export function measuredModelKey(model: string): string {
+  return model.includes(':') ? model : `${model}:latest`;
 }
 
 /** The last two measurements of `model`: the one before and the latest. */
@@ -236,7 +244,8 @@ export function measurementsFor(
   list: readonly Measurement[],
   model: string,
 ): { previous?: Measurement; latest?: Measurement } {
-  const own = list.filter((m) => isSameModel(m.model, model));
+  const key = measuredModelKey(model);
+  const own = list.filter((m) => measuredModelKey(m.model) === key);
   const latest = own.at(-1);
   const previous = own.length > 1 ? own.at(-2) : undefined;
   return { ...(previous && { previous }), ...(latest && { latest }) };

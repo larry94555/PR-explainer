@@ -1258,6 +1258,37 @@ describe('options page Make Ollama faster (PR 11.7)', () => {
     expect(text('measure-compare')).toBe('');
   });
 
+  it('shows the results of the model picked with Use this model (review on #76)', async () => {
+    const kept: Measurement[] = [
+      { model: 'qwen2.5-coder:7b', totalMs: 9_000, at: 1 },
+      { model: 'qwen2.5-coder:7b', totalMs: 8_000, at: 2 },
+      { model: 'qwen2.5-coder:3b', totalMs: 3_000, at: 3 },
+    ];
+    let t = 0;
+    const times: Record<string, number> = { 'qwen2.5-coder:7b': 8_000, 'qwen2.5-coder:3b': 3_000 };
+    const client = fakeClient({
+      listModels: vi.fn(async () => Object.keys(times).map((name) => ({ name }))),
+      chat: vi.fn(async (_messages, options) => {
+        t += times[options.model]!;
+        return { content: 'ok', model: options.model };
+      }),
+    });
+    const page = await initOptionsPage(document, {
+      ...fakeDeps(client, SAVED, kept),
+      now: () => t,
+    });
+    expect(rows().map((r) => r[0])).toEqual(['Before', 'Latest']);
+    await page.speedTest();
+
+    [...$('speed-results').querySelectorAll<HTMLButtonElement>('button')]
+      .find((b) => b.textContent === 'Use this model')!
+      .click();
+
+    await vi.waitFor(() => expect($<HTMLSelectElement>('model').value).toBe('qwen2.5-coder:3b'));
+    expect(rows().map((r) => [r[0], r[2]])).toEqual([['Measured', '3.0 s']]);
+    expect(text('measure-compare')).toBe('');
+  });
+
   it('saves nothing when the model fails, and says why', async () => {
     const chat = vi.fn(async () => {
       throw new LlmError('http', 'model requires more system memory');
